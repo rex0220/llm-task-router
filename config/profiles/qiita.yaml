@@ -1,0 +1,13 @@
+# 記事プロファイル: Qiita
+# platform: プロンプトに使うプラットフォーム名（ラベル）
+# language: 想定言語（任意・メモ用途）
+# style:    draft/final/revise の本文生成に注入する作法
+
+platform: Qiita
+language: ja
+criteria_file: config/criteria/default.md
+style: |
+  Qiita の作法に従う。本文は Markdown。
+  - コードブロックは言語指定つきのフェンスを使う。
+  - 補足や注意は `:::note info` / `:::note warn` の記法を使ってよい。
+  - 記事先頭の front-matter は本文に含めない。

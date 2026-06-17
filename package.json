@@ -1,0 +1,65 @@
+{
+  "name": "llm-task-router",
+  "version": "0.1.0",
+  "description": "Thin, file-based CLI that routes a multi-step article workflow (brief → outline → draft → review → final) across OpenAI and Anthropic with fallback, schema validation, judge-model evaluation, and platform profiles (Qiita/Zenn/blog/note).",
+  "keywords": [
+    "cli",
+    "llm",
+    "openai",
+    "anthropic",
+    "claude",
+    "gpt",
+    "article",
+    "writing",
+    "content-generation",
+    "model-router",
+    "fallback",
+    "qiita",
+    "zenn"
+  ],
+  "license": "MIT",
+  "author": "rex0220 <rex0220@gmail.com>",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "llm-task-router": "dist/llm-task-router.js"
+  },
+  "files": [
+    "dist",
+    "config",
+    "docs",
+    ".env.example",
+    "README.md",
+    "README.ja.md"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json && tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepack": "npm run build",
+    "test": "npm run build && vitest run",
+    "test:unit": "vitest run",
+    "article:create": "tsx src/index.ts article:create",
+    "article:resume": "tsx src/index.ts article:resume",
+    "article:review": "tsx src/index.ts article:review",
+    "article:revise": "tsx src/index.ts article:revise",
+    "article:evaluate": "tsx src/index.ts article:evaluate",
+    "article:export": "tsx src/index.ts article:export"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.56.0",
+    "commander": "^14.0.0",
+    "dotenv": "^16.4.7",
+    "openai": "^5.6.0",
+    "yaml": "^2.8.0",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.32",
+    "tsup": "^8.5.1",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

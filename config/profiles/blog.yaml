@@ -1,0 +1,9 @@
+# 記事プロファイル: 一般的な技術ブログ
+platform: ブログ
+language: ja
+criteria_file: config/criteria/default.md
+style: |
+  一般的な技術ブログの作法に従う。本文は標準的な Markdown。
+  - プラットフォーム独自の記法（:::note など）は使わず、標準 Markdown のみで書く。
+  - コードブロックは言語指定つきのフェンスを使う。
+  - 見出しレベルは h2 から始め、文書全体を 1 つの h1 で始める。

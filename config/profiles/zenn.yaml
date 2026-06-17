@@ -1,0 +1,9 @@
+# 記事プロファイル: Zenn
+platform: Zenn
+language: ja
+criteria_file: config/criteria/default.md
+style: |
+  Zenn の作法に従う。本文は Markdown。
+  - 補足や注意は `:::message` / `:::details` の記法を使ってよい。
+  - 記事先頭の front-matter（title / emoji / type / topics / published）は本文に含めない。
+  - コードブロックは言語指定つきのフェンスを使う。
