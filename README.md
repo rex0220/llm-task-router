@@ -9,12 +9,12 @@ TypeScript CLI for a thin ModelRouter that drives a multi-step article workflow 
 Global install builds a single bundled CLI (`dist/llm-task-router.js`) exposed as the `llm-task-router` command:
 
 ```bash
-# from a published package (once distributed)
-npm install -g llm-task-router
+# from npm (the package is scoped; the installed command is still `llm-task-router`)
+npm install -g @rex0220/llm-task-router
 
 # or from a packed tarball
 npm run build && npm pack
-npm install -g ./llm-task-router-<version>.tgz
+npm install -g ./rex0220-llm-task-router-<version>.tgz
 ```
 
 The CLI reads `config/models.yaml`, `config/profiles/`, `config/criteria/`, and `.env`, and writes `runs/`, all **relative to your current directory**. Scaffold the config templates into your working directory with `init`:

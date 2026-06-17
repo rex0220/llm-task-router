@@ -9,12 +9,12 @@
 グローバルインストールすると、単一バンドルの CLI（`dist/llm-task-router.js`）が `llm-task-router` コマンドとして使えます。
 
 ```bash
-# 公開済みパッケージから（配布後）
-npm install -g llm-task-router
+# npm から（パッケージは scoped。インストール後のコマンド名は `llm-task-router` のまま）
+npm install -g @rex0220/llm-task-router
 
 # またはパックした tarball から
 npm run build && npm pack
-npm install -g ./llm-task-router-<version>.tgz
+npm install -g ./rex0220-llm-task-router-<version>.tgz
 ```
 
 CLI は `config/models.yaml`・`config/profiles/`・`config/criteria/`・`.env` を読み、`runs/` を書き出します。これらはすべて**カレントディレクトリ相対**です。作業ディレクトリに設定テンプレを展開するには `init` を使います。
