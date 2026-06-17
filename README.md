@@ -102,7 +102,7 @@ npm rm -g llm-task-router   # unlink when done
 - `style` — platform conventions (admonition syntax, front-matter rules, etc.) injected into the body-producing prompts (draft / final / revise)
 - `language` — informational
 
-Bundled profiles: `qiita`, `zenn`, `blog`. Copy one to add your own (e.g. `config/profiles/devto.yaml`). `--platform <name>` overrides just the label from the profile. The resolved `platform` and `style` are stored in `meta.json`, so `resume` / `review` / `revise` / `evaluate` reuse them automatically. Pair a profile with a matching `--criteria-file` for platform-specific evaluation.
+Bundled profiles: `qiita`, `zenn`, `blog`, `note`. Copy one to add your own (e.g. `config/profiles/devto.yaml`). `--platform <name>` overrides just the label from the profile. The resolved `platform` and `style` are stored in `meta.json`, so `resume` / `review` / `revise` / `evaluate` reuse them automatically. Pair a profile with a matching `--criteria-file` for platform-specific evaluation.
 
 `article:revise` rewrites `final.md` from your instruction and the current `final.md`, backing up the previous version to `final.bak.md`. (`article:review` instead re-runs the automatic review→rewrite from `draft.md` and ignores custom instructions.)
 
