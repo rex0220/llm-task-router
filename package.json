@@ -19,6 +19,12 @@
   ],
   "license": "MIT",
   "author": "rex0220 <rex0220@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rex0220/llm-task-router.git"
+  },
+  "homepage": "https://github.com/rex0220/llm-task-router#readme",
+  "bugs": "https://github.com/rex0220/llm-task-router/issues",
   "type": "module",
   "engines": {
     "node": ">=18"
