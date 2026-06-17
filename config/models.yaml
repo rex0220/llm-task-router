@@ -48,7 +48,9 @@ tasks:
       - provider: openai
         model: gpt-5.4
     temperature: 0.4
-    max_tokens: 4000
+    # 比較記事など節数が多いテーマでは構成JSONが4000では打ち切られ、
+    # 途中で切れたJSONがArticleOutline検証に失敗する。余裕を持たせる。
+    max_tokens: 8000
 
   draft_markdown:
     primary:

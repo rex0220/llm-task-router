@@ -97,6 +97,43 @@ describe("ModelRouter", () => {
     expect(JSON.parse(result.text).title).toBe("T");
   });
 
+  it("surfaces a truncation hint when validation keeps failing on truncated output", async () => {
+    // {} はJSONとしては有効だが必須フィールドを欠く。truncated=true で打ち切り由来を示す。
+    const truncatedInvalid: ProviderResponse = { text: "{}", truncated: true };
+    const primary = new QueueProvider([truncatedInvalid, truncatedInvalid]);
+    const fallback = new QueueProvider([truncatedInvalid, truncatedInvalid]);
+    const router = new ModelRouter(
+      { primary, fallback },
+      testConfig(),
+      new RunLogger(tmpLogPath())
+    );
+
+    await expect(
+      router.run({ task: "article_brief", input: "topic", schemaName: "ArticleBrief" })
+    ).rejects.toThrow(/truncated at max_tokens/);
+    // 各候補で initial + repair の2回ずつ呼ばれる。
+    expect(primary.calls).toHaveLength(2);
+    expect(fallback.calls).toHaveLength(2);
+  });
+
+  it("names the failing field when validation fails without truncation", async () => {
+    const invalid: ProviderResponse = { text: JSON.stringify({ title: "T" }) };
+    const primary = new QueueProvider([invalid, invalid]);
+    const router = new ModelRouter(
+      { primary },
+      testConfig(),
+      new RunLogger(tmpLogPath())
+    );
+
+    const error = await router
+      .run({ task: "outline", input: "topic", schemaName: "ArticleOutline" })
+      .catch((e: unknown) => e as RouterError);
+
+    expect(error).toBeInstanceOf(RouterError);
+    expect((error as RouterError).message).toContain("sections");
+    expect((error as RouterError).message).not.toContain("truncated at max_tokens");
+  });
+
   it("does not call providers for an invalid schemaName", async () => {
     const primary = new QueueProvider([{ text: "should not run" }]);
     const router = new ModelRouter(

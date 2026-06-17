@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import type { ModelProvider, ProviderRequest, ProviderResponse } from "../providers/ModelProvider";
 import { RunLogger } from "../logger/RunLogger";
 import { schemaHints, schemaRegistry } from "../schemas";
@@ -126,8 +127,17 @@ export class ModelRouter {
 
     try {
       return this.validateResponse(repairedResponse, schemaName);
-    } catch {
-      throw new RouterError(`Model output failed ${schemaName} validation after one repair attempt`, "schema_validation");
+    } catch (repairError) {
+      const reason = normalizeProviderError(repairError).message;
+      // 打ち切りが原因なら、修復を何度試しても直らない。実際の対処（max_tokens増）へ誘導する。
+      const truncated = response.truncated || repairedResponse.truncated;
+      const hint = truncated
+        ? " — output was truncated at max_tokens; raise max_tokens for this task and rerun"
+        : "";
+      throw new RouterError(
+        `Model output failed ${schemaName} validation after one repair attempt: ${reason}${hint}`,
+        "schema_validation"
+      );
     }
   }
 
@@ -140,7 +150,10 @@ export class ModelRouter {
     const parsed = parseJsonObject(response.text);
     const validated = schema.safeParse(parsed);
     if (!validated.success) {
-      throw new RouterError(`Model output did not match schema ${schemaName}`, "schema_validation");
+      throw new RouterError(
+        `Model output did not match schema ${schemaName}: ${formatZodIssues(validated.error)}`,
+        "schema_validation"
+      );
     }
 
     return {
@@ -160,6 +173,17 @@ function withSchemaInstruction(input: string, schemaName: SchemaName): string {
     "JSONスキーマ:",
     schemaHints[schemaName],
   ].join("\n");
+}
+
+// zodの検証エラーを「フィールドパス: メッセージ」の短い列にまとめる。
+// 打ち切りで途中欠落したのか、キー名が違うのかを一目で切り分けられるようにする。
+function formatZodIssues(error: z.ZodError): string {
+  const issues = error.issues.slice(0, 3).map((issue) => {
+    const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+    return `${path}: ${issue.message}`;
+  });
+  const extra = error.issues.length > 3 ? ` (+${error.issues.length - 3} more)` : "";
+  return `${issues.join("; ")}${extra}`;
 }
 
 function buildRepairPrompt(schemaName: SchemaName, invalidOutput: string): string {
