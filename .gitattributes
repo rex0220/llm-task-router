@@ -1,0 +1,2 @@
+# 改行は LF に統一する（Windows でのコミット時 CRLF 警告を防ぐ）。
+* text=auto eol=lf
