@@ -4,6 +4,10 @@
 
 TypeScript CLI for a thin ModelRouter that drives a multi-step article workflow (Qiita, Zenn, blog, …).
 
+## Requirements
+
+- **Node.js >= 20** (the CLI and its dependencies use the `node:` import scheme and modern APIs; older Node such as 14/16 will fail to load).
+
 ## Install
 
 Global install builds a single bundled CLI (`dist/llm-task-router.js`) exposed as the `llm-task-router` command:

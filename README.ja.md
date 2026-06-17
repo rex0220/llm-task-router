@@ -4,6 +4,10 @@
 
 複数ステップの記事作成ワークフロー（Qiita / Zenn / ブログ / note …）を駆動する、薄い ModelRouter の TypeScript 製 CLI です。
 
+## 必要環境
+
+- **Node.js >= 20**（CLI と依存パッケージが `node:` インポートや新しめの API を使うため、Node 14/16 などの古い版では読み込みに失敗します）。
+
 ## インストール
 
 グローバルインストールすると、単一バンドルの CLI（`dist/llm-task-router.js`）が `llm-task-router` コマンドとして使えます。
