@@ -24,3 +24,12 @@ model: opus
 4. ファクトチェック（article-factchecker）と実機ビルド検証（article-build-verifier）を別系統で発注。コードを含む記事では build-verifier を必ず回す（論理レビューだけでは tsconfig 依存の不通や型の絞り込み失敗がすり抜ける）。
 5. 両者の指摘を統合し優先順位づけした修正指示を作る → `llm-task-router article:revise --instruction-file` で適用。
 6. 完成度を評価し GO/NO-GO を推奨。**GO でもユーザー承認を得てから** `llm-task-router article:export` を実行する（公開相当の操作を自走で進めない）。
+
+コマンド早見（毎回 --help を引かない。これで仕様は足りる。`--config` は既定 config/models.yaml）:
+- create:   `llm-task-router article:create (--topic <text> | --topic-file <path>) --profile <name>`
+- refine:   `llm-task-router article:refine --run <id> [--max-rounds <n=3>] [--min-severity <major>] [--until <clean|approved>]`
+- evaluate: `llm-task-router article:evaluate --run <id> [--min-severity <suggestion>] [--criteria-file <path>]`
+- revise:   `llm-task-router article:revise --run <id> (--instruction <text> | --instruction-file <path>)`
+- export:   `llm-task-router article:export --run <id> --out <path> [--force]`
+  - --run と --out は必須。出力されるのは final.md のみ。
+  - `.env*` 等の秘密ファイル名は拒否。ワークスペース外への書き出しは警告。既存ファイルは --force なしでは上書きしない。
