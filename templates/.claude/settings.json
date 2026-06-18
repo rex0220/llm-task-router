@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(llm-task-router article:create:*)",
+      "Bash(llm-task-router article:refine:*)",
+      "Bash(llm-task-router article:evaluate:*)",
+      "Bash(llm-task-router article:revise:*)",
+      "Bash(llm-task-router article:resume:*)",
+      "Bash(llm-task-router article:review:*)",
+      "Bash(llm-task-router --help)",
+      "Bash(llm-task-router -v)"
+    ]
+  }
+}

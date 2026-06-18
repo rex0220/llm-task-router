@@ -31,6 +31,8 @@ describe("initConfig", () => {
 
     // templates/CLAUDE.md → CLAUDE.md（接頭辞が剥がれる）
     expect(result.created).toContain("CLAUDE.md");
+    // permission allowlist（pipeline 事前許可・export は除外）
+    expect(result.created.some((f) => f.includes(join(".claude", "settings.json")))).toBe(true);
     expect(
       result.created.some((f) => f.includes(join(".claude", "agents")) && f.includes("editor-in-chief"))
     ).toBe(true);

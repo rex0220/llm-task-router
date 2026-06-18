@@ -238,6 +238,19 @@ llm-task-router article:export --run 2026-06-18-ai-ir \
 
 ---
 
+## 承認回数を減らす（Claude Code の permission）
+
+Claude Code で回すと Bash 実行のたびに承認を求められ、数が多いと中身を見ずに承認しがちになる。`init` は `.claude/settings.json` に **pipeline 系コマンドだけの allowlist** を入れて配るので、`create / refine / evaluate / revise / resume / review` は事前許可済み（プロンプトが出ない）。
+
+意図的に**プロンプトを残している**のは次の2つ — ここは毎回中身を見て承認する：
+
+- `article:export`（公開相当の操作）
+- `article-build-verifier` の `npm install` / `tsc` / `node`（記事内の**未知コードを実行**する部分）
+
+許可を足したい/外したい場合は `.claude/settings.json` の `permissions.allow` を編集する。設定変更は次回セッション開始時に反映される。
+
+---
+
 ## 付録：典型的な1記事のフロー
 
 ```bash
