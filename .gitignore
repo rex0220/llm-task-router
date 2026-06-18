@@ -8,4 +8,6 @@ runs/*
 work/*
 !work/.gitkeep
 
-.claude/
+# Ignore only the repo-root Claude Code config (local dev), not templates/.claude/
+# which is distributed scaffold copied by `init`.
+/.claude/

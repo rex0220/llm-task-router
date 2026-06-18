@@ -25,7 +25,7 @@ CLI は `config/models.yaml`・`config/profiles/`・`config/criteria/`・`.env` 
 
 ```bash
 cd my-articles
-llm-task-router init          # config/ と .env.example をここへコピー（既存は上書きしない。--force で上書き）
+llm-task-router init          # config/・.env.example・編集長セット（.claude/・CLAUDE.md）をここへコピー（既存は上書きしない。--force で上書き）
 cp .env.example .env          # APIキーを設定する
 # config/models.yaml の model を実在するモデルIDに直す
 ```

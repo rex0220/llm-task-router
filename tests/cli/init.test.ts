@@ -25,6 +25,28 @@ describe("initConfig", () => {
     expect(await readFile(join(target, "config", "models.yaml"), "utf8")).toContain("providers");
   });
 
+  it("scaffolds the editor-in-chief set (templates/) at the target root, prefix stripped", async () => {
+    const target = await tmpTarget();
+    const result = await initConfig(target, sourceDir);
+
+    // templates/CLAUDE.md → CLAUDE.md（接頭辞が剥がれる）
+    expect(result.created).toContain("CLAUDE.md");
+    expect(
+      result.created.some((f) => f.includes(join(".claude", "agents")) && f.includes("editor-in-chief"))
+    ).toBe(true);
+    expect(
+      result.created.some((f) => f.includes(join(".claude", "agents")) && f.includes("factchecker"))
+    ).toBe(true);
+
+    // templates/ 接頭辞を含む形では作られない
+    expect(result.created.some((f) => f.startsWith("templates"))).toBe(false);
+
+    expect(await readFile(join(target, "CLAUDE.md"), "utf8")).toContain("article-editor-in-chief");
+    expect(
+      await readFile(join(target, ".claude", "agents", "article-editor-in-chief.md"), "utf8")
+    ).toContain("name: article-editor-in-chief");
+  });
+
   it("never creates a .env file", async () => {
     const target = await tmpTarget();
     const result = await initConfig(target, sourceDir);

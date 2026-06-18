@@ -40,7 +40,7 @@ program
 
 program
   .command("init")
-  .description("Scaffold config/ and .env.example into the current directory")
+  .description("Scaffold config/, .env.example, and the editor-in-chief set (.claude/, CLAUDE.md) into the current directory")
   .option("--force", "Overwrite existing files")
   .action(async (options: { force?: boolean }) => {
     const sourceDir = fileURLToPath(new URL("..", import.meta.url));

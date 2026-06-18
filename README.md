@@ -25,7 +25,7 @@ The CLI reads `config/models.yaml`, `config/profiles/`, `config/criteria/`, and 
 
 ```bash
 cd my-articles
-llm-task-router init          # copies config/ and .env.example here (won't overwrite; use --force)
+llm-task-router init          # copies config/, .env.example, and the editor-in-chief set (.claude/, CLAUDE.md) here (won't overwrite; use --force)
 cp .env.example .env          # then set your API keys
 # edit config/models.yaml to set real model IDs
 ```
