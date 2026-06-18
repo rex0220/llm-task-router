@@ -63,6 +63,9 @@ llm-task-router article:revise --run 2026-06-16-example --instruction "導入を
 # 別系統の審査役モデルで final.md を評価し、修正指示の草案を生成
 llm-task-router article:evaluate --run 2026-06-16-example --min-severity major --criteria "正確性とコード例の動作を重視"
 
+# 合格（または max-rounds 到達）まで evaluate→revise を自動で回す。evaluate+revise の自動版。
+llm-task-router article:refine --run 2026-06-16-example --max-rounds 3 --min-severity major --until clean
+
 # 完成記事を任意のパスへ書き出す（例: Zenn リポジトリ）。--force で上書き。
 llm-task-router article:export --run 2026-06-16-example --out ../zenn-content/articles/my-article.md
 ```
@@ -117,6 +120,14 @@ llm-task-router article:evaluate --run <runId> --min-severity minor
 ```
 
 解決順: `--criteria`（インライン）> `--criteria-file`（明示上書き）> run の profile の `criteria_file` > なし。同梱: `config/criteria/default.md`（汎用の技術ルーブリック。`qiita`/`zenn`/`blog` が使用）と `config/criteria/note.md`（読みやすさ重視。`note` が使用）。一回だけ別観点で見たいときは `--criteria-file <path>` で上書きします。LLM-as-judge は実行ごとに揺れるため、対象ごとに観点を固定すると評価が一貫し比較しやすくなります。
+
+`article:refine` は evaluate→revise を**自動**で回すループです（`article:evaluate` + `article:revise` を繰り返し実行する自動版）。各ラウンドで `final_review` モデルが `final.md` を採点し、停止条件を満たさなければ生成された修正指示を `rewrite` モデルで適用します。観点の解決順は `article:evaluate` と同じです。
+
+- `--max-rounds <n>`（既定 `3`）: evaluate の最大回数。`revise` は最大 `n-1` 回なので、総モデルコールは最大 `2n-1`。暴走防止の必須安全弁です。
+- `--min-severity <level>`（既定 `major`）: `--until clean` のとき、この深刻度以上の指摘が残る限りループを継続します。
+- `--until <clean|approved>`（既定 `clean`）: `min-severity` 以上の指摘が 0 になったら（`clean`）、または judge が `approved` を出したら（`approved`）停止します。
+
+停止理由は次のいずれかです: `clean` / `approved` / `max-rounds` / `stalled`（品質スコアが改善しなくなった）/ `regressed`（スコアが有意に悪化。スパイラル防止のダメージ制御で停止）/ `no-instruction`（judge が非承認だが具体的な指摘を返さない）。成功条件（`clean`/`approved`）は `stalled`/`regressed` より優先されます。各ラウンドの評価・適用した指示・修正前スナップショットはフラットな成果物として `runs/<runId>/` に残ります（`refine-r<N>-review.json` / `refine-r<N>-review.md` / `refine-r<N>-instruction.md` / `refine-r<N>-before.md`、加えて推移をまとめた `refine-summary.md`。最終ラウンドの評価は `final-review.{json,md}` にも複製）。ループは巻き戻しをしません（`final.md` は常に最新の適用版）。`regressed` 停止時は掘り進めず停止し、悪化を検出したラウンドの 1 つ前の修正前スナップショット（`refine-r<N>-before.md`。`<N>` は検出ラウンドより 1 小さい番号）の方が良い可能性を警告するので、人が手で良い版を選べます。進捗とラウンド履歴は `meta.json` の `refine` フィールドに記録されます。
 
 ## 実行推移の表示
 

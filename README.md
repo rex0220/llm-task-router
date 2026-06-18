@@ -63,6 +63,9 @@ llm-task-router article:revise --run 2026-06-16-example --instruction "Make the 
 # Evaluate final.md with a separate judge model and generate a revision-instruction draft
 llm-task-router article:evaluate --run 2026-06-16-example --min-severity major --criteria "Focus on accuracy and working code examples"
 
+# Auto-loop evaluate→revise until the article passes (or max-rounds). The automated version of evaluate+revise.
+llm-task-router article:refine --run 2026-06-16-example --max-rounds 3 --min-severity major --until clean
+
 # Export the final article to a chosen path (e.g. a Zenn repo). --force to overwrite.
 llm-task-router article:export --run 2026-06-16-example --out ../zenn-content/articles/my-article.md
 ```
@@ -117,6 +120,14 @@ llm-task-router article:evaluate --run <runId> --min-severity minor
 ```
 
 Resolution order: `--criteria` (inline) > `--criteria-file` (explicit override) > the run profile's `criteria_file` > none. Bundled: `config/criteria/default.md` (general technical rubric, used by `qiita`/`zenn`/`blog`) and `config/criteria/note.md` (readability-focused, used by `note`). To use a different rubric for one run, pass `--criteria-file <path>`. Because LLM-as-judge results vary run to run, a fixed per-profile criteria file makes evaluations consistent and comparable.
+
+`article:refine` is the **automated** evaluate→revise loop (`article:evaluate` + `article:revise` run repeatedly for you). Each round it judges `final.md` with the `final_review` model and, if the stop condition is not met, applies the generated instruction with the `rewrite` model. It uses the same criteria resolution as `article:evaluate`.
+
+- `--max-rounds <n>` (default `3`): the maximum number of evaluate passes. `revise` runs at most `n-1` times, so a run costs at most `2n-1` model calls. This is the required safety valve.
+- `--min-severity <level>` (default `major`): in `--until clean` mode the loop continues while issues at or above this severity remain.
+- `--until <clean|approved>` (default `clean`): stop when no `min-severity` issues remain (`clean`), or when the judge marks the article `approved` (`approved`).
+
+It stops with one of: `clean`, `approved`, `max-rounds`, `stalled` (quality score stopped improving), `regressed` (score got significantly worse — damage control to avoid spiraling), or `no-instruction` (the judge withholds approval but lists nothing actionable). Success conditions (`clean`/`approved`) take priority over `stalled`/`regressed`. Every round's evaluation, applied instruction, and pre-revise snapshot are kept as flat artifacts in `runs/<runId>/`: `refine-r<N>-review.json` / `refine-r<N>-review.md` / `refine-r<N>-instruction.md` / `refine-r<N>-before.md`, plus a `refine-summary.md` overview, and the final round is also copied to `final-review.{json,md}`. The loop never rolls back (`final.md` is always the latest applied version); on `regressed` it stops and points you to the specific pre-revise snapshot from the round before the regression (`refine-r<N>-before.md`, where `<N>` is one less than the round that detected it) so you can pick a better version by hand. Progress and the full round history are recorded under `meta.json`'s `refine` field.
 
 ## Progress Output
 
