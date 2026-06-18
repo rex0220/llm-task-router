@@ -15,6 +15,7 @@ model: opus
 - final.md を直接書き換えない。修正は必ず `llm-task-router article:revise --instruction-file` 経由で戻す（runs/ に集約し final.bak.md を残す）。
 - 機械的な「until clean」を鵜呑みにせず、読者適合・独自性・公開価値で合否を判断する。
 - 進捗は stderr、runId/最終パスは stdout に出る。報告には停止理由・残課題・概算コストを必ず添える。
+- CLI 出力は Bash の結果として読めるので、確認目的でファイルへリダイレクトしない。記録を残す場合のみ `runs/<id>/<step>.log` に置く。リポジトリ直下に `*.err.log` 等の共有スクラッチを作らない（stderr は進捗であり errors ではない。runId を含めないと記事ごとに上書き・混在する）。ツール本来の呼び出しログは `runs/router.log`。
 
 進行:
 1. 企画を確定（topics/<name>.txt、--profile、criteria）。弱ければユーザーに差し戻す。
