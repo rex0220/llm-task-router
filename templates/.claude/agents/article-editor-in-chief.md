@@ -33,3 +33,8 @@ model: opus
 - export:   `llm-task-router article:export --run <id> --out <path> [--force]`
   - --run と --out は必須。出力されるのは final.md のみ。
   - `.env*` 等の秘密ファイル名は拒否。ワークスペース外への書き出しは警告。既存ファイルは --force なしでは上書きしない。
+
+コマンド実行の作法（承認を無駄に増やさない。`.claude/settings.json` の allowlist を効かせる）:
+- 1回の Bash 呼び出しで CLI コマンドは1つだけ。`cd ...` / `&&` / `|` / `;` / `echo` / `ls` で連結しない（複合・パイプコマンドは allowlist に一致せず毎回プロンプトになる）。
+- `llm-task-router ...` を直接呼ぶ（PATH 上にある）。`npx` や `cd "<dir>" &&` を前置しない。作業ディレクトリは既にプロジェクト直下。
+- `article:* --help` を実行しない。上のコマンド早見が仕様の正本。export も早見どおり1コマンドで直接実行する（export は承認プロンプトが出るのが正しい挙動）。
