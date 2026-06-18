@@ -280,6 +280,33 @@ llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/
 llm-task-router article:export   --run 2026-06-18-ai-ir --out ../qiita-content/ai-ir.md
 ```
 
+## 既存記事を取り込んでブラッシュアップする（article:import）
+
+このパイプライン外で書いた既存記事（手書き・公開済み・他ツール製）を、本文を手書き編集せずに評価/修正フローへ乗せられる。`create` の代わりの入口で、`export`（run → 外）の対（外 → run）。
+
+```bash
+# 既存 md を run として取り込む（meta は profile から正しく生成される）
+llm-task-router article:import --from ../old/kintone.md --profile qiita \
+  --criteria-file ./brushup-criteria.md   # ブラッシュアップ観点（任意・推奨）
+```
+
+- runId はファイル名から導出（`kintone.md` → `2026-06-18-kintone`）。`--run` で明示も可。
+- `topic` は本文先頭の H1 → 無ければ runId。`platform`/`style` は profile から解決。
+- `--criteria-file` は `runs/<runId>/brushup-criteria.md` に保存され、**以後の `evaluate`/`refine` が自動で採用**する（評価は topic を見ず criteria が主舵。消えた指示プロンプトの代替になる）。
+- front-matter らしきブロックは**警告のみ**（自動除去しない。Qiita は本文に含めない方針）。
+- 既存 run があるときは `--force` で **import run として置き換え**（旧 review/refine 成果物を掃除）。
+
+取り込み後は通常フローと同じ。ただし import run は生成系工程を持たないため **`evaluate` / `refine` / `revise` のみ**対応（`resume` / `review` は拒否される）。既存・公開済み記事は意図を壊さないよう、まず `evaluate`（読み取り）→ 納得した指摘だけ `revise`、`refine` は控えめ（`--max-rounds 2`）に。
+
+```bash
+# 取り込み → 評価（criteria 自動採用）→ 修正
+llm-task-router article:import   --from ../old/kintone.md --criteria-file ./brushup-criteria.md
+llm-task-router article:evaluate --run 2026-06-18-kintone --min-severity minor
+llm-task-router article:revise   --run 2026-06-18-kintone --instruction-file runs/2026-06-18-kintone/revise-instruction.md
+```
+
+詳細仕様は [article-import-proposal.md](article-import-proposal.md) を参照。
+
 ## 使うAIの目安
 
 | 工程 | 担当AI | 補足 |
