@@ -55,7 +55,19 @@ export async function resumeQiitaArticle(
   runId: string,
   onEvent: WorkflowReporter = noop
 ): Promise<QiitaWorkflowResult> {
+  await assertNotImported(store, runId, "resume");
   return runQiitaArticle(router, store, runId, undefined, onEvent);
+}
+
+// import run は brief〜review の生成系成果物を持たないため、resume/review を実行すると
+// import 元と無関係な中間成果物を作る/draft.md 不在で失敗する。明示的に拒否して誘導する。
+async function assertNotImported(store: RunStore, runId: string, command: string): Promise<void> {
+  const meta = await store.readMeta(runId);
+  if (meta.imported) {
+    throw new Error(
+      `Run ${runId} は import run です（${command} は使えません）。article:evaluate / article:refine / article:revise を使ってください。`
+    );
+  }
 }
 
 export type ReviseResult = QiitaWorkflowResult & {
@@ -638,6 +650,7 @@ export async function rerunQiitaReview(
   runId: string,
   onEvent: WorkflowReporter = noop
 ): Promise<QiitaWorkflowResult> {
+  await assertNotImported(store, runId, "review");
   const meta = await store.readMeta(runId);
   meta.steps.review = { status: "pending" };
   meta.steps.final = { status: "pending" };

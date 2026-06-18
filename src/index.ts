@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { assertSafeInputPath, resolveText } from "./cli/inputs";
 import { exportFinalArticle } from "./cli/export";
+import { importArticle } from "./cli/import";
 import { initConfig } from "./cli/init";
 import { loadProfile } from "./workflows/profile";
 import { RunLogger } from "./logger/RunLogger";
@@ -142,6 +143,59 @@ program
     console.log(`runId: ${result.runId}`);
     console.log(`final: runs/${result.runId}/final.md (previous: runs/${result.runId}/final.bak.md)`);
   });
+
+program
+  .command("article:import")
+  .description("Import an existing Markdown article into a run so evaluate/refine/revise can brush it up")
+  .requiredOption("--from <path>", "Path to the existing Markdown article (becomes final.md)")
+  .option("--run <runId>", "Run id (default: derived from the file name)")
+  .option("--topic <topic>", "Article topic recorded in meta (default: first H1, else runId)")
+  .option("--topic-file <path>", "Path to a text file containing the topic")
+  .option("--profile <name>", "Article profile under config/profiles/ (platform + style + criteria)", "qiita")
+  .option("--platform <name>", "Override the platform label from the profile")
+  .option("--criteria-file <path>", "Brush-up brief saved as runs/<runId>/brushup-criteria.md (auto-used by evaluate)")
+  .option("--force", "Replace an existing run with the same id as an import run")
+  .action(
+    async (options: {
+      from: string;
+      run?: string;
+      topic?: string;
+      topicFile?: string;
+      profile: string;
+      platform?: string;
+      criteriaFile?: string;
+      force?: boolean;
+    }) => {
+      const topic =
+        options.topic !== undefined || options.topicFile !== undefined
+          ? await resolveText(options.topic, options.topicFile, "topic", "--topic", "--topic-file")
+          : undefined;
+      const criteria =
+        options.criteriaFile !== undefined
+          ? await resolveText(undefined, options.criteriaFile, "criteria", "--criteria", "--criteria-file")
+          : undefined;
+
+      const store = new RunStore();
+      const result = await importArticle(store, {
+        from: options.from,
+        runId: options.run,
+        topic,
+        profile: options.profile,
+        platform: options.platform,
+        criteria,
+        force: options.force,
+      });
+
+      console.log(`imported: runs/${result.runId}/final.md (from ${options.from}${result.replacedRun ? ", replaced" : ""})`);
+      console.log(`runId: ${result.runId}`);
+      if (result.frontMatterWarning) {
+        process.stderr.write(
+          "Warning: front-matter らしきブロックを検出しました。Qiita は本文に front-matter を含めない方針です（自動除去はしていません）。\n"
+        );
+      }
+      console.log(`next: llm-task-router article:evaluate --run ${result.runId} --min-severity minor`);
+    }
+  );
 
 program
   .command("article:export")
@@ -356,13 +410,23 @@ function createRefineReporter(runId: string): { report: (event: RefineEvent) => 
   return { report };
 }
 
-// 評価観点の解決順: 明示指定（--criteria / --criteria-file）> run の profile の criteria_file > なし。
+// 評価観点の解決順: 明示指定（--criteria / --criteria-file）> run の brushup-criteria.md > run の profile の criteria_file > なし。
 async function resolveEvaluationCriteria(
   store: RunStore,
   options: { run: string; criteria?: string; criteriaFile?: string }
 ): Promise<string | undefined> {
   if (options.criteria !== undefined || options.criteriaFile !== undefined) {
     return resolveText(options.criteria, options.criteriaFile, "criteria", "--criteria", "--criteria-file");
+  }
+
+  // import 時に同梱したブラッシュアップ・ブリーフがあれば profile criteria より優先で採用する。
+  const brushup = await store.read(options.run, "brushup-criteria.md").then(
+    (content) => content.trim(),
+    () => ""
+  );
+  if (brushup) {
+    process.stderr.write(`criteria: run の brushup-criteria.md を使用\n`);
+    return brushup;
   }
 
   const meta = await store.readMeta(options.run);

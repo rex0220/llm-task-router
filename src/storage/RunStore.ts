@@ -62,6 +62,8 @@ export type RunMeta = {
   platform?: string;
   style?: string;
   profile?: string;
+  // 既存記事を取り込んだ run の印。生成系工程を経ていないため resume/review を拒否する判定に使う。
+  imported?: boolean;
   createdAt: string;
   updatedAt: string;
   steps: Record<string, { status: RunStepStatus; file?: string }>;

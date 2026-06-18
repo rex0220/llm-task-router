@@ -9,6 +9,7 @@ import {
   createQiitaArticle,
   evaluateQiitaFinal,
   refineQiitaFinal,
+  rerunQiitaReview,
   resumeQiitaArticle,
   reviseQiitaFinal,
   runFinalEvaluation,
@@ -35,6 +36,20 @@ describe("Qiita workflow", () => {
     expect(final).toContain("# Final");
     expect(meta.steps.final.status).toBe("done");
     expect(provider.calls).toHaveLength(firstCallCount);
+  });
+
+  it("rejects resume and review on an imported run", async () => {
+    const router = new ModelRouter({ mock: new WorkflowProvider() }, workflowConfig(), new RunLogger(tmpLogPath()));
+    const store = new RunStore(tmpRunRoot());
+    const runId = `test-imported-${Date.now()}`;
+
+    const meta = await store.create(runId, "topic", ["final"]);
+    meta.imported = true;
+    await store.writeMeta(meta);
+    await store.save(runId, "final.md", "# Imported\n本文\n");
+
+    await expect(resumeQiitaArticle(router, store, runId)).rejects.toThrow(/import run/);
+    await expect(rerunQiitaReview(router, store, runId)).rejects.toThrow(/import run/);
   });
 
   it("uses the configured platform in step prompts and persists it in meta", async () => {
