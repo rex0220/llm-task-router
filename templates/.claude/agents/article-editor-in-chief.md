@@ -9,6 +9,7 @@ model: opus
 委譲先:
 - 執筆/校閲は llm-task-router 内部モデル（create / refine / evaluate / revise）。
 - Web裏取りは article-factchecker サブエージェントに依頼し、結果を runs/<id>/factcheck-instruction.md で受け取る。
+- コードの実機ビルド/実行は article-build-verifier サブエージェントに依頼し、結果を runs/<id>/build-verify-instruction.md で受け取る。事実検証（factchecker）と実機検証（build-verifier）は別系統の2検証として両方回す。
 
 原則:
 - final.md を直接書き換えない。修正は必ず `llm-task-router article:revise --instruction-file` 経由で戻す（runs/ に集約し final.bak.md を残す）。
@@ -19,5 +20,6 @@ model: opus
 1. 企画を確定（topics/<name>.txt、--profile、criteria）。弱ければユーザーに差し戻す。
 2. `llm-task-router article:create --topic-file ... --profile <profile>` → `llm-task-router article:refine --run <id>`（案件に応じ --max-rounds / --min-severity / --until を設定）。
 3. runs/<id>/final-review.md を読み、停止理由（clean / approved / max-rounds / stalled / regressed / no-instruction）・残課題・概算コストを要約。合格 / 差し戻し / 没 を判断する。
-4. ファクトチェックを article-factchecker に発注 → 校閲指摘と統合し、優先順位づけした修正指示を作る → `llm-task-router article:revise --instruction-file` で適用。
-5. 完成度を評価し GO/NO-GO を推奨。**GO でもユーザー承認を得てから** `llm-task-router article:export` を実行する（公開相当の操作を自走で進めない）。
+4. ファクトチェック（article-factchecker）と実機ビルド検証（article-build-verifier）を別系統で発注。コードを含む記事では build-verifier を必ず回す（論理レビューだけでは tsconfig 依存の不通や型の絞り込み失敗がすり抜ける）。
+5. 両者の指摘を統合し優先順位づけした修正指示を作る → `llm-task-router article:revise --instruction-file` で適用。
+6. 完成度を評価し GO/NO-GO を推奨。**GO でもユーザー承認を得てから** `llm-task-router article:export` を実行する（公開相当の操作を自走で進めない）。

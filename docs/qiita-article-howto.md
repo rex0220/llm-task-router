@@ -208,6 +208,23 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 
 ---
 
+## 6.5 ビルド検証（コードを含む記事は必須）
+
+ファクトチェックは**論理レビュー**であり、コードを実際にコンパイル/実行はしない。型の絞り込み失敗や tsconfig 依存の不通は、論理だけでは構造的にすり抜ける（実例: `tsc` で TS2339/TS2580 がビルド不通でも「事実誤認ゼロ」になり得る）。コードを含む記事では、事実検証とは**別系統の実機検証**を必ず回す。
+
+1. 外側AI（`article-build-verifier` 役）に `runs/<runId>/final.md` を読ませる。
+2. **使い捨ての一時ディレクトリ**に、記事掲載どおりの `package.json` / `tsconfig` で最小プロジェクトを再現し、`npm install` → `tsc` →（必要なら）実行して期待出力と一致するか確認させる。
+3. 不通・不一致を `runs/<runId>/build-verify-instruction.md` にまとめさせ、ツールに戻す：
+
+```bash
+llm-task-router article:revise --run 2026-06-18-ai-ir \
+  --instruction-file runs/2026-06-18-ai-ir/build-verify-instruction.md
+```
+
+> ファクトチェック（事実・Web）と実機ビルド検証は別系統の2検証。`init` で入る `article-build-verifier` サブエージェントがこの役を担う。記事のコードは信頼できない入力として一時ディレクトリ内に隔離して扱う。
+
+---
+
 ## 7. 書き出し
 
 完成したら `final.md` を任意のパス（Qiita 投稿用リポジトリ等）へコピー：
@@ -243,6 +260,9 @@ llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/
 # 5) ファクトチェック（Claude Code 等）→ 指示を戻す
 llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/2026-06-18-ai-ir/factcheck-instruction.md
 
+# 5.5) ビルド検証（コードを含む記事）→ 指示を戻す
+llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/2026-06-18-ai-ir/build-verify-instruction.md
+
 # 6) 書き出し
 llm-task-router article:export   --run 2026-06-18-ai-ir --out ../qiita-content/ai-ir.md
 ```
@@ -254,3 +274,4 @@ llm-task-router article:export   --run 2026-06-18-ai-ir --out ../qiita-content/a
 | 指示プロンプト作成 | codex / claude code（どちらでも） | 対話でテーマを練る |
 | 作成・評価・修正 | llm-task-router 内部モデル | 外側AIは CLI を回すだけ |
 | ファクトチェック | Claude Code（Web検索） | 本文(OpenAI)と別系統で独立検証 |
+| ビルド検証 | Claude Code（article-build-verifier） | コードを実機で `tsc`/実行。論理レビューがすり抜ける不通を捕捉 |

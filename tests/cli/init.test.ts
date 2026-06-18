@@ -37,6 +37,9 @@ describe("initConfig", () => {
     expect(
       result.created.some((f) => f.includes(join(".claude", "agents")) && f.includes("factchecker"))
     ).toBe(true);
+    expect(
+      result.created.some((f) => f.includes(join(".claude", "agents")) && f.includes("build-verifier"))
+    ).toBe(true);
 
     // templates/ 接頭辞を含む形では作られない
     expect(result.created.some((f) => f.startsWith("templates"))).toBe(false);
