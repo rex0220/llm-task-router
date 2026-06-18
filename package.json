@@ -1,6 +1,6 @@
 {
   "name": "@rex0220/llm-task-router",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Thin, file-based CLI that routes a multi-step article workflow (brief → outline → draft → review → final) across OpenAI and Anthropic with fallback, schema validation, judge-model evaluation, and platform profiles (Qiita/Zenn/blog/note).",
   "keywords": [
     "cli",
@@ -54,6 +54,7 @@
     "article:review": "tsx src/index.ts article:review",
     "article:revise": "tsx src/index.ts article:revise",
     "article:evaluate": "tsx src/index.ts article:evaluate",
+    "article:refine": "tsx src/index.ts article:refine",
     "article:export": "tsx src/index.ts article:export"
   },
   "dependencies": {

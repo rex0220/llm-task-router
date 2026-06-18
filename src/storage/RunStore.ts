@@ -3,6 +3,59 @@ import { join, resolve, sep } from "node:path";
 
 export type RunStepStatus = "pending" | "done";
 
+// refine ループの severity（schema の enum と一致。storage→workflow の依存を作らないため inline 定義）。
+export type RefineSeverity = "critical" | "major" | "minor" | "suggestion";
+
+export type RefineStoppedReason =
+  | "clean"
+  | "approved"
+  | "max-rounds"
+  | "stalled"
+  | "regressed"
+  | "no-instruction";
+
+export type RefineRoundEval = {
+  provider: string;
+  model: string;
+  elapsedMs: number;
+  costUsd?: number;
+  truncated?: boolean;
+  issueCount: number; // minSeverity 以上
+  score: number; // 重み付きスコア（全指摘）
+  approved?: boolean;
+};
+
+export type RefineRoundRevision = {
+  provider: string;
+  model: string;
+  elapsedMs: number;
+  costUsd?: number;
+  truncated?: boolean;
+  warnings?: string[];
+  beforeFile: string; // refine-r<N>-before.md
+};
+
+export type RefineRoundMeta = {
+  round: number;
+  evaluation: RefineRoundEval;
+  revision: RefineRoundRevision | null; // 停止ラウンドは null
+  costUsdTotal: number; // (evaluation.costUsd ?? 0) + (revision?.costUsd ?? 0)
+};
+
+export type RefineMeta = {
+  // 開始時に確定（in-progress でも成立）
+  rounds: RefineRoundMeta[];
+  minSeverity: RefineSeverity;
+  until: "clean" | "approved";
+  maxRoundsAtRun: number;
+  // 終了処理（finalize）で確定する optional フィールド（実行中・中断時は未設定）
+  stoppedReason?: RefineStoppedReason;
+  finalIssueCount?: number;
+  finalScore?: number;
+  finalApproved?: boolean;
+  costUsdTotal?: number;
+};
+
 export type RunMeta = {
   runId: string;
   topic: string;
@@ -12,6 +65,7 @@ export type RunMeta = {
   createdAt: string;
   updatedAt: string;
   steps: Record<string, { status: RunStepStatus; file?: string }>;
+  refine?: RefineMeta;
 };
 
 export class RunStore {

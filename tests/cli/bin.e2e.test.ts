@@ -28,6 +28,16 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
     });
   }
 
+  function runFail(args: string[]): { status: number; stderr: string } {
+    try {
+      execFileSync(process.execPath, [bin, ...args], { cwd: root, encoding: "utf8", timeout: E2E_TIMEOUT });
+      throw new Error("expected a non-zero exit");
+    } catch (error) {
+      const e = error as { status?: number; stderr?: string };
+      return { status: e.status ?? -1, stderr: String(e.stderr ?? "") };
+    }
+  }
+
   it(
     "--help lists commands including article:create",
     () => {
@@ -52,6 +62,36 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
       const out = run(["article:create", "--help"]);
       expect(out).toContain("--topic");
       expect(out).toContain("--profile");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:refine --help succeeds and shows options",
+    () => {
+      const out = run(["article:refine", "--help"]);
+      expect(out).toContain("--max-rounds");
+      expect(out).toContain("--until");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:refine rejects --max-rounds 0",
+    () => {
+      const { status, stderr } = runFail(["article:refine", "--run", "x", "--max-rounds", "0"]);
+      expect(status).toBe(1);
+      expect(stderr).toContain("Invalid --max-rounds");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:refine rejects an invalid --until",
+    () => {
+      const { status, stderr } = runFail(["article:refine", "--run", "x", "--until", "bad"]);
+      expect(status).toBe(1);
+      expect(stderr).toContain("Invalid --until");
     },
     E2E_TIMEOUT
   );

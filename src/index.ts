@@ -17,9 +17,11 @@ import {
   createQiitaArticle,
   createRunId,
   evaluateQiitaFinal,
+  refineQiitaFinal,
   rerunQiitaReview,
   resumeQiitaArticle,
   reviseQiitaFinal,
+  type RefineEvent,
   type Severity,
   type WorkflowEvent,
 } from "./workflows/createQiitaArticle";
@@ -232,6 +234,127 @@ program
       }
     }
   );
+
+program
+  .command("article:refine")
+  .description("Auto-loop evaluate→revise until the article passes (or max-rounds)")
+  .requiredOption("--run <runId>", "Run id")
+  .option("--max-rounds <n>", "Maximum number of evaluate rounds (>=1)", "3")
+  .option("--min-severity <level>", "Severity that keeps the loop going (critical|major|minor|suggestion)", "major")
+  .option("--until <mode>", "Stop condition: clean | approved", "clean")
+  .option("--criteria <text>", "Evaluation focus / points (inline text)")
+  .option("--criteria-file <path>", "Path to a text file with evaluation focus")
+  .option("--config <path>", "Path to models.yaml", "config/models.yaml")
+  .action(
+    async (options: {
+      run: string;
+      maxRounds: string;
+      minSeverity: string;
+      until: string;
+      criteria?: string;
+      criteriaFile?: string;
+      config: string;
+    }) => {
+      const maxRounds = parseMaxRounds(options.maxRounds);
+      const minSeverity = parseSeverity(options.minSeverity);
+      const until = parseUntil(options.until);
+      const { router, store } = await createRuntime(options.config);
+      const criteria = await resolveEvaluationCriteria(store, options);
+
+      const reporter = createRefineReporter(options.run);
+      const result = await refineQiitaFinal(
+        router,
+        store,
+        options.run,
+        { maxRounds, minSeverity, until, criteria },
+        reporter.report
+      );
+
+      console.log(`runId: ${result.runId}`);
+      console.log(`stopped: ${result.stoppedReason} (${result.rounds} rounds)`);
+      console.log(`final: runs/${result.runId}/final.md`);
+    }
+  );
+
+function parseMaxRounds(value: string): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`Invalid --max-rounds: ${value} (use an integer >= 1)`);
+  }
+  return n;
+}
+
+function parseUntil(value: string): "clean" | "approved" {
+  if (value !== "clean" && value !== "approved") {
+    throw new Error(`Invalid --until: ${value} (use clean|approved)`);
+  }
+  return value;
+}
+
+// refine 専用の進捗表示。round 境界・評価/改稿の各行・打ち切り/wrap-text 警告・停止理由を stderr に出す。
+// 合計コスト表示は実額のみ（cost が取れた分だけ加算）。
+function createRefineReporter(runId: string): { report: (event: RefineEvent) => void } {
+  let total = 0;
+  let hasCost = false;
+
+  const accrue = (costUsd?: number): string => {
+    if (costUsd !== undefined) {
+      total += costUsd;
+      hasCost = true;
+      return `, ~$${costUsd.toFixed(4)}`;
+    }
+    return "";
+  };
+
+  const report = (event: RefineEvent): void => {
+    switch (event.type) {
+      case "round:start":
+        process.stderr.write(`[refine] round ${event.round}/${event.maxRounds}\n`);
+        break;
+      case "eval:done": {
+        const cost = accrue(event.costUsd);
+        process.stderr.write(
+          `  evaluate - done via ${event.provider}/${event.model} (${event.elapsedMs}ms${cost}) — issues>=${event.minSeverity}: ${event.issueCount}, score: ${event.score}\n`
+        );
+        if (event.truncated) {
+          process.stderr.write(
+            `  ⚠ evaluate: 出力が max_tokens で打ち切られた可能性があります。models.yaml の max_tokens を増やして再実行してください。\n`
+          );
+        }
+        break;
+      }
+      case "revise:done": {
+        const cost = accrue(event.costUsd);
+        process.stderr.write(
+          `  revise - done via ${event.provider}/${event.model} (${event.elapsedMs}ms${cost})\n`
+        );
+        if (event.truncated) {
+          process.stderr.write(
+            `  ⚠ revise: 出力が max_tokens で打ち切られた可能性があります。models.yaml の max_tokens を増やして再実行してください。\n`
+          );
+        }
+        for (const warning of event.warnings ?? []) {
+          process.stderr.write(`  ⚠ revise: ${warning}\n`);
+        }
+        break;
+      }
+      case "stopped": {
+        const cost = hasCost ? `, ~$${total.toFixed(4)} estimate` : "";
+        process.stderr.write(`[refine] stopped: ${event.reason} (${event.rounds} rounds${cost})\n`);
+        if (event.reason === "regressed") {
+          // 悪化は評価ラウンド R で検出され、final.md は R-1 の revise 結果。悪化前の版は R-1 の before。
+          const best = `runs/${runId}/refine-r${Math.max(event.rounds - 1, 1)}-before.md`;
+          process.stderr.write(
+            `  ⚠ スコアが悪化したため停止しました。${best} の方が良い可能性があります。\n`
+          );
+        }
+        break;
+      }
+    }
+  };
+
+  return { report };
+}
 
 // 評価観点の解決順: 明示指定（--criteria / --criteria-file）> run の profile の criteria_file > なし。
 async function resolveEvaluationCriteria(

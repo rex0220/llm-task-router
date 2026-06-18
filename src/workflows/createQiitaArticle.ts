@@ -1,5 +1,6 @@
 import { ModelRouter } from "../router/ModelRouter";
 import { RunStore } from "../storage/RunStore";
+import type { RefineMeta, RefineRoundMeta, RefineStoppedReason } from "../storage/RunStore";
 import type { ModelTask } from "../router/types";
 import { detectWrapText, stripWrappingCodeFence } from "../utils/text";
 import { DEFAULT_PLATFORM, qiitaSteps, toModelRequest, type QiitaStepName } from "./qiitaSteps";
@@ -57,17 +58,31 @@ export async function resumeQiitaArticle(
   return runQiitaArticle(router, store, runId, undefined, onEvent);
 }
 
+export type ReviseResult = QiitaWorkflowResult & {
+  provider: string;
+  model: string;
+  elapsedMs: number;
+  costUsd?: number;
+  truncated?: boolean;
+  warnings?: string[];
+};
+
 export async function reviseQiitaFinal(
   router: ModelRouter,
   store: RunStore,
   runId: string,
   instruction: string,
-  onEvent: WorkflowReporter = noop
-): Promise<QiitaWorkflowResult> {
+  onEvent: WorkflowReporter = noop,
+  options: { backupTo?: string | null } = {}
+): Promise<ReviseResult> {
   const meta = await store.readMeta(runId);
   const platform = meta.platform ?? DEFAULT_PLATFORM;
   const current = await store.read(runId, "final.md");
-  await store.save(runId, "final.bak.md", current);
+  // backupTo: 既定は final.bak.md。null を渡すと退避をスキップ（refine は事前に before スナップショットを取る）。
+  const backupTo = options.backupTo === undefined ? "final.bak.md" : options.backupTo;
+  if (backupTo !== null) {
+    await store.save(runId, backupTo, current);
+  }
 
   const input = [
     `次の${platform}記事を、以下の修正指示に従って改善してください。`,
@@ -86,6 +101,7 @@ export async function reviseQiitaFinal(
   const text = stripWrappingCodeFence(response.text);
   await store.save(runId, "final.md", text);
   await store.markDone(runId, "final", "final.md");
+  const warnings = detectWrapText(text);
   onEvent({
     type: "step:done",
     index: 1,
@@ -96,9 +112,18 @@ export async function reviseQiitaFinal(
     elapsedMs: response.elapsedMs,
     costUsd: response.usage?.costUsd,
     truncated: response.truncated,
-    warnings: detectWrapText(text),
+    warnings,
   });
-  return { runId, finalText: text };
+  return {
+    runId,
+    finalText: text,
+    provider: response.provider,
+    model: response.model,
+    elapsedMs: response.elapsedMs,
+    costUsd: response.usage?.costUsd,
+    truncated: response.truncated,
+    warnings,
+  };
 }
 
 export type Severity = "critical" | "major" | "minor" | "suggestion";
@@ -132,14 +157,47 @@ const severityRank: Record<Severity, number> = {
   critical: 3,
 };
 
-export async function evaluateQiitaFinal(
+// refine の品質スコア用 severity 重み（2 ** severityRank: suggestion=1, minor=2, major=4, critical=8）。
+const severityWeight: Record<Severity, number> = {
+  suggestion: 1,
+  minor: 2,
+  major: 4,
+  critical: 8,
+};
+
+// refine ループのヒステリシス定数（CLI フラグにはしない。実運用ログを見て調整）。
+const REFINE_IMPROVE_REL = 0.05; // 改善とみなす相対しきい値
+const REFINE_IMPROVE_ABS = 1; // 改善とみなす絶対しきい値
+const REFINE_REGRESS_REL = 0.25; // 悪化（regressed）とみなす相対しきい値
+const REFINE_REGRESS_ABS = 2; // 悪化（regressed）とみなす絶対しきい値
+const REFINE_STALL_STREAK = 2; // 改善なしが連続したら stalled
+
+// レビュー結果の severity 重み付きスコア（低いほど良い）。§5.1。
+export function scoreReview(review: ReviewResultJson): number {
+  return review.issues.reduce((sum, issue) => sum + (severityWeight[issue.severity] ?? 0), 0);
+}
+
+// 副作用なしの評価コア。モデル呼び出し＋parse＋score のみを行い、ファイルは一切書かない。
+// article:evaluate（下のラッパ）と refine の両方から使う。
+export type FinalEvaluation = {
+  provider: string;
+  model: string;
+  elapsedMs: number;
+  costUsd?: number;
+  truncated?: boolean;
+  rawReviewJson: string; // response.text（生）。保存はそのまま store.save する
+  review: ReviewResultJson; // parse 済み
+  score: number; // 重み付きスコア（全指摘）
+  approved?: boolean;
+  issueCount: number; // minSeverity 以上
+};
+
+export async function runFinalEvaluation(
   router: ModelRouter,
   store: RunStore,
   runId: string,
-  options: { minSeverity?: Severity; criteria?: string } = {},
-  onEvent: WorkflowReporter = noop
-): Promise<EvaluationResult> {
-  const minSeverity = options.minSeverity ?? "suggestion";
+  options: { minSeverity: Severity; criteria?: string }
+): Promise<FinalEvaluation> {
   const meta = await store.readMeta(runId);
   const platform = meta.platform ?? DEFAULT_PLATFORM;
   const final = await store.read(runId, "final.md");
@@ -153,26 +211,57 @@ export async function evaluateQiitaFinal(
     final,
   ].join("\n");
 
-  onEvent({ type: "step:start", index: 1, total: 1, name: "evaluate", task: "final_review" });
   const response = await router.run({ task: "final_review", input, schemaName: "ReviewResult" });
-  await store.save(runId, "final-review.json", response.text);
-  onEvent({
-    type: "step:done",
-    index: 1,
-    total: 1,
-    name: "evaluate",
+  const review = JSON.parse(response.text) as ReviewResultJson;
+  const issueCount = review.issues.filter(
+    (issue) => severityRank[issue.severity] >= severityRank[options.minSeverity]
+  ).length;
+
+  return {
     provider: response.provider,
     model: response.model,
     elapsedMs: response.elapsedMs,
     costUsd: response.usage?.costUsd,
     truncated: response.truncated,
+    rawReviewJson: response.text,
+    review,
+    score: scoreReview(review),
+    approved: review.approved,
+    issueCount,
+  };
+}
+
+export async function evaluateQiitaFinal(
+  router: ModelRouter,
+  store: RunStore,
+  runId: string,
+  options: { minSeverity?: Severity; criteria?: string } = {},
+  onEvent: WorkflowReporter = noop
+): Promise<EvaluationResult> {
+  const minSeverity = options.minSeverity ?? "suggestion";
+
+  onEvent({ type: "step:start", index: 1, total: 1, name: "evaluate", task: "final_review" });
+  const evaluation = await runFinalEvaluation(router, store, runId, { minSeverity, criteria: options.criteria });
+  // 生テキストをそのまま保存（parse→再 stringify しない。store.save の末尾改行正規化は従来どおり）。
+  await store.save(runId, "final-review.json", evaluation.rawReviewJson);
+  onEvent({
+    type: "step:done",
+    index: 1,
+    total: 1,
+    name: "evaluate",
+    provider: evaluation.provider,
+    model: evaluation.model,
+    elapsedMs: evaluation.elapsedMs,
+    costUsd: evaluation.costUsd,
+    truncated: evaluation.truncated,
   });
 
-  const review = JSON.parse(response.text) as ReviewResultJson;
+  const review = evaluation.review;
 
   // 人が読むための全指摘サマリ（severityフィルタなし）。
   await store.save(runId, "final-review.md", buildReviewSummary(review));
 
+  // フィルタは呼び出し側（このラッパ）の責務。buildRevisionInstruction はフィルタ済み配列を整形するだけ。
   const filtered = review.issues.filter((issue) => severityRank[issue.severity] >= severityRank[minSeverity]);
 
   let instructionFile: string | undefined;
@@ -192,6 +281,295 @@ export async function evaluateQiitaFinal(
     reviewSummaryFile: "final-review.md",
     instructionFile,
   };
+}
+
+export type RefineEvent =
+  | { type: "round:start"; round: number; maxRounds: number }
+  | {
+      type: "eval:done";
+      round: number;
+      provider: string;
+      model: string;
+      elapsedMs: number;
+      costUsd?: number;
+      truncated?: boolean;
+      issueCount: number;
+      score: number;
+      minSeverity: Severity;
+    }
+  | {
+      type: "revise:done";
+      round: number;
+      provider: string;
+      model: string;
+      elapsedMs: number;
+      costUsd?: number;
+      truncated?: boolean;
+      warnings?: string[];
+    }
+  | { type: "stopped"; reason: RefineStoppedReason; rounds: number; costUsdTotal: number };
+
+export type RefineReporter = (event: RefineEvent) => void;
+
+const noopRefine: RefineReporter = () => undefined;
+
+export type RefineOptions = {
+  maxRounds?: number;
+  minSeverity?: Severity;
+  until?: "clean" | "approved";
+  criteria?: string;
+};
+
+export type RefineResult = {
+  runId: string;
+  finalText?: string;
+  stoppedReason: RefineStoppedReason;
+  rounds: number;
+  costUsdTotal: number;
+};
+
+// score が「改善」とみなせるか（直前比で相対 5% かつ絶対 1 以上 下がった）。
+function isRefineImprovement(prev: number, cur: number): boolean {
+  const drop = prev - cur;
+  if (drop < REFINE_IMPROVE_ABS) {
+    return false;
+  }
+  return prev === 0 ? drop > 0 : drop / prev >= REFINE_IMPROVE_REL;
+}
+
+// score が「有意に悪化」したか（直前比で相対 25% かつ絶対 2 以上 上がった）。
+function isRefineRegression(prev: number, cur: number): boolean {
+  const rise = cur - prev;
+  if (rise < REFINE_REGRESS_ABS) {
+    return false;
+  }
+  return prev === 0 ? rise > 0 : rise / prev >= REFINE_REGRESS_REL;
+}
+
+export async function refineQiitaFinal(
+  router: ModelRouter,
+  store: RunStore,
+  runId: string,
+  options: RefineOptions = {},
+  onEvent: RefineReporter = noopRefine
+): Promise<RefineResult> {
+  const maxRounds = options.maxRounds ?? 3;
+  const minSeverity = options.minSeverity ?? "major";
+  const until = options.until ?? "clean";
+
+  // refine 状態を保持し、毎回 fresh な meta に貼り直して永続化する。
+  // （reviseQiitaFinal が markDone で meta を別途更新するため、古い meta を上書きしないよう fresh read する。）
+  const refineState: RefineMeta = { rounds: [], minSeverity, until, maxRoundsAtRun: maxRounds };
+  const persist = async (state: RefineMeta): Promise<void> => {
+    const meta = await store.readMeta(runId);
+    meta.refine = state;
+    await store.writeMeta(meta);
+  };
+
+  // 開始処理: 旧 refine 成果物の掃除（既知 suffix を列挙。中断耐性のため上限を広めに取る）。
+  const oldMeta = await store.readMeta(runId);
+  const cleanupTo = Math.max(
+    oldMeta.refine?.maxRoundsAtRun ?? 0,
+    oldMeta.refine?.rounds.length ?? 0,
+    maxRounds
+  );
+  for (let n = 1; n <= cleanupTo; n++) {
+    await store.remove(runId, `refine-r${n}-review.json`);
+    await store.remove(runId, `refine-r${n}-review.md`);
+    await store.remove(runId, `refine-r${n}-instruction.md`);
+    await store.remove(runId, `refine-r${n}-before.md`);
+  }
+  await store.remove(runId, "refine-summary.md");
+  await store.remove(runId, "revise-instruction.md");
+  await persist(refineState);
+
+  let stoppedReason: RefineStoppedReason | undefined;
+
+  // 停止時の確定処理: ローカル算出 → 成果物生成 → 完了 meta(派生)を最後に write。
+  const finalize = async (reason: RefineStoppedReason): Promise<void> => {
+    const lastRound = refineState.rounds.length;
+    const lastEval = refineState.rounds[lastRound - 1]?.evaluation;
+    const costUsdTotal = refineState.rounds.reduce((sum, r) => sum + r.costUsdTotal, 0);
+
+    // 成果物を先に生成（最終ラウンドの評価をトップレベルへ複製）。
+    if (lastRound > 0) {
+      const rawJson = await store.read(runId, `refine-r${lastRound}-review.json`);
+      await store.save(runId, "final-review.json", rawJson);
+      const reviewMd = await store.read(runId, `refine-r${lastRound}-review.md`);
+      await store.save(runId, "final-review.md", reviewMd);
+    }
+    await store.save(runId, "refine-summary.md", buildRefineSummary(refineState, reason));
+
+    // 完了 meta は派生オブジェクトを最後に write（生きている refineState には stoppedReason を付けない）。
+    const completed: RefineMeta = {
+      ...refineState,
+      stoppedReason: reason,
+      finalIssueCount: lastEval?.issueCount,
+      finalScore: lastEval?.score,
+      finalApproved: lastEval?.approved,
+      costUsdTotal,
+    };
+    await persist(completed);
+    stoppedReason = reason;
+    onEvent({ type: "stopped", reason, rounds: lastRound, costUsdTotal });
+  };
+
+  let noImproveStreak = 0;
+
+  for (let round = 1; round <= maxRounds; round++) {
+    onEvent({ type: "round:start", round, maxRounds });
+
+    const ev = await runFinalEvaluation(router, store, runId, { minSeverity, criteria: options.criteria });
+    await store.save(runId, `refine-r${round}-review.json`, ev.rawReviewJson);
+    await store.save(runId, `refine-r${round}-review.md`, buildReviewSummary(ev.review));
+
+    const roundMeta: RefineRoundMeta = {
+      round,
+      evaluation: {
+        provider: ev.provider,
+        model: ev.model,
+        elapsedMs: ev.elapsedMs,
+        costUsd: ev.costUsd,
+        truncated: ev.truncated,
+        issueCount: ev.issueCount,
+        score: ev.score,
+        approved: ev.approved,
+      },
+      revision: null,
+      costUsdTotal: ev.costUsd ?? 0,
+    };
+    refineState.rounds.push(roundMeta);
+    await persist(refineState);
+    onEvent({
+      type: "eval:done",
+      round,
+      provider: ev.provider,
+      model: ev.model,
+      elapsedMs: ev.elapsedMs,
+      costUsd: ev.costUsd,
+      truncated: ev.truncated,
+      issueCount: ev.issueCount,
+      score: ev.score,
+      minSeverity,
+    });
+
+    // 停止判定（順序厳守: 成功条件 > regressed > stalled > max-rounds）。
+    if (until === "clean" && ev.issueCount === 0) {
+      await finalize("clean");
+      break;
+    }
+    if (until === "approved" && ev.approved === true) {
+      await finalize("approved");
+      break;
+    }
+    if (round >= 2) {
+      const prevScore = refineState.rounds[round - 2].evaluation.score;
+      if (isRefineRegression(prevScore, ev.score)) {
+        await finalize("regressed");
+        break;
+      }
+      if (isRefineImprovement(prevScore, ev.score)) {
+        noImproveStreak = 0;
+      } else {
+        noImproveStreak += 1;
+        if (noImproveStreak >= REFINE_STALL_STREAK) {
+          await finalize("stalled");
+          break;
+        }
+      }
+    }
+    if (round === maxRounds) {
+      await finalize("max-rounds");
+      break;
+    }
+
+    // 次ラウンドの instruction を生成（approved モードは全指摘、clean モードは minSeverity）。
+    const sev: Severity = until === "approved" ? "suggestion" : minSeverity;
+    const filtered = ev.review.issues.filter((issue) => severityRank[issue.severity] >= severityRank[sev]);
+    if (filtered.length === 0) {
+      await finalize("no-instruction");
+      break;
+    }
+    const instruction = buildRevisionInstruction(filtered);
+    await store.save(runId, `refine-r${round}-instruction.md`, instruction);
+
+    // 修正前スナップショットを退避してから revise（revise 側の final.bak.md 退避はスキップ）。
+    const beforeFile = `refine-r${round}-before.md`;
+    await store.save(runId, beforeFile, await store.read(runId, "final.md"));
+    const rev = await reviseQiitaFinal(router, store, runId, instruction, noop, { backupTo: null });
+
+    roundMeta.revision = {
+      provider: rev.provider,
+      model: rev.model,
+      elapsedMs: rev.elapsedMs,
+      costUsd: rev.costUsd,
+      truncated: rev.truncated,
+      warnings: rev.warnings,
+      beforeFile,
+    };
+    roundMeta.costUsdTotal = (ev.costUsd ?? 0) + (rev.costUsd ?? 0);
+    await persist(refineState);
+    onEvent({
+      type: "revise:done",
+      round,
+      provider: rev.provider,
+      model: rev.model,
+      elapsedMs: rev.elapsedMs,
+      costUsd: rev.costUsd,
+      truncated: rev.truncated,
+      warnings: rev.warnings,
+    });
+  }
+
+  let finalText: string | undefined;
+  try {
+    finalText = await store.read(runId, "final.md");
+  } catch {
+    finalText = undefined;
+  }
+
+  return {
+    runId,
+    finalText,
+    // ループは必ず finalize を通って break するため stoppedReason は確定している。
+    stoppedReason: stoppedReason ?? "max-rounds",
+    rounds: refineState.rounds.length,
+    costUsdTotal: refineState.rounds.reduce((sum, r) => sum + r.costUsdTotal, 0),
+  };
+}
+
+// 価格が取れた分（costUsd が定義された evaluation/revision）のみ合算する。
+// meta の costUsdTotal は 0 寄せ数値だが、ユーザー向け summary は実額のみ表示し、不明なら n/a（CLI stderr と同方針）。
+function knownCost(parts: Array<number | undefined>): { value: number; known: boolean } {
+  const defined = parts.filter((c): c is number => c !== undefined);
+  return { value: defined.reduce((sum, c) => sum + c, 0), known: defined.length > 0 };
+}
+
+function buildRefineSummary(refine: RefineMeta, reason: RefineStoppedReason): string {
+  const totalCost = knownCost(refine.rounds.flatMap((r) => [r.evaluation.costUsd, r.revision?.costUsd]));
+  const lines = [
+    "# refine サマリ",
+    "",
+    `- 停止理由: ${reason}`,
+    `- ラウンド数: ${refine.rounds.length}`,
+    `- min-severity: ${refine.minSeverity} / until: ${refine.until}`,
+    `- 概算コスト合計（実額のみ）: ${totalCost.known ? `~$${totalCost.value.toFixed(4)}` : "n/a"}`,
+    "",
+    "## ラウンド推移",
+    "",
+    "| round | score | issues>=min | approved | revised | cost |",
+    "| --- | --- | --- | --- | --- | --- |",
+  ];
+  for (const r of refine.rounds) {
+    const approved = r.evaluation.approved === undefined ? "n/a" : String(r.evaluation.approved);
+    const revised = r.revision ? "yes" : "no";
+    const cost = knownCost([r.evaluation.costUsd, r.revision?.costUsd]);
+    lines.push(
+      `| ${r.round} | ${r.evaluation.score} | ${r.evaluation.issueCount} | ${approved} | ${revised} | ${cost.known ? `~$${cost.value.toFixed(4)}` : "n/a"} |`
+    );
+  }
+  lines.push("");
+  return lines.join("\n");
 }
 
 function buildReviewSummary(review: ReviewResultJson): string {
