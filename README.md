@@ -68,6 +68,17 @@ llm-task-router article:refine --run 2026-06-16-example --max-rounds 3 --min-sev
 
 # Export the final article to a chosen path (e.g. a Zenn repo). --force to overwrite.
 llm-task-router article:export --run 2026-06-16-example --out ../zenn-content/articles/my-article.md
+
+# --- Importing / updating an already-written or published article (separate from create) ---
+# Import an existing Markdown article into a run so evaluate/refine/revise can brush it up
+llm-task-router article:import --from ../old/my-article.md --profile qiita
+
+# Generate the update diff (update-base.md → final.md) for focused fact/build re-checking
+llm-task-router article:update-diff --run 2026-06-16-my-article
+
+# Record a publication: update meta.published and export/index.json (a separate step from export)
+llm-task-router article:record-publication --run 2026-06-16-my-article \
+  --slug my-article --url https://qiita.com/.../items/xxxx --article-id xxxx --article-version 2
 ```
 
 With `--topic-file`, the `runId` is derived from the file name (e.g. `ai-ir.txt` → `2026-06-16-ai-ir`). Use `--run <runId>` to set it explicitly. Outputs are saved under `runs/<runId>/`.
@@ -128,6 +139,16 @@ Resolution order: `--criteria` (inline) > `--criteria-file` (explicit override) 
 - `--until <clean|approved>` (default `clean`): stop when no `min-severity` issues remain (`clean`), or when the judge marks the article `approved` (`approved`).
 
 It stops with one of: `clean`, `approved`, `max-rounds`, `stalled` (quality score stopped improving), `regressed` (score got significantly worse — damage control to avoid spiraling), or `no-instruction` (the judge withholds approval but lists nothing actionable). Success conditions (`clean`/`approved`) take priority over `stalled`/`regressed`. Every round's evaluation, applied instruction, and pre-revise snapshot are kept as flat artifacts in `runs/<runId>/`: `refine-r<N>-review.json` / `refine-r<N>-review.md` / `refine-r<N>-instruction.md` / `refine-r<N>-before.md`, plus a `refine-summary.md` overview, and the final round is also copied to `final-review.{json,md}`. The loop never rolls back (`final.md` is always the latest applied version); on `regressed` it stops and points you to the specific pre-revise snapshot from the round before the regression (`refine-r<N>-before.md`, where `<N>` is one less than the round that detected it) so you can pick a better version by hand. Progress and the full round history are recorded under `meta.json`'s `refine` field.
+
+### Importing and updating existing articles
+
+`article:import --from <path>` is the opposite entry point to `export` (outside → run): it loads an existing/published Markdown file as `final.md` of a fresh run so `evaluate` / `refine` / `revise` can brush it up. The run is flagged `imported: true` in `meta.json`; because import runs have no generation-stage artifacts, `resume` / `review` are rejected (use `evaluate` / `refine` / `revise`). Pair it with `--criteria-file` to set the brush-up rubric. See [docs/article-import-proposal.md](docs/article-import-proposal.md).
+
+For **re-publishing an already-public article** (keeping the same URL and skeleton, changing only what went stale), import is also the starting point of a dedicated update flow driven by the `/update-article` skill. It pins **three sources of truth**: the version baseline (`update-base.md`, the body fixed at import time), the publication target (`meta.published`), and the run lineage (`meta.lineage`).
+
+- `article:import --from export/<slug>.md --supersedes <prev-run> --root <root-run>` saves `update-base.md` and records `lineage` in `meta.json`.
+- `article:update-diff --run <id>` diffs `update-base.md` against the current `final.md` and writes `update-diff.md` (a unified-style diff) and `changed-sections.json` (per-heading add/remove counts), so the fact-checker / build-verifier can review **only the changed sections** instead of the whole article.
+- `article:record-publication --run <id> --slug <slug> --url <url> --article-id <id> --article-version <n>` updates `meta.published` and the `export/index.json` ledger (slug → latest run / URL) **together**. This is deliberately separate from `export` (which only copies `final.md`): export does a local write, `record-publication` records the publication. It guards against version regressions for the same slug (an identical re-run is a no-op; an intentional correction needs `--force`). The flag is `--article-version` (not `--version`, which is the CLI's own version flag). Like `export`, it is a publish-equivalent step and is **not** added to the editor-in-chief allowlist, so it always prompts.
 
 ## Progress Output
 

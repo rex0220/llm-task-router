@@ -1,6 +1,8 @@
 import { access, readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type { RunStore } from "../storage/RunStore";
+import type { LineageMeta } from "../storage/RunStore";
+import { validateSafeId } from "../storage/meta";
 import { loadProfile } from "../workflows/profile";
 import { createRunId } from "../workflows/createQiitaArticle";
 import { DEFAULT_PLATFORM, qiitaSteps } from "../workflows/qiitaSteps";
@@ -14,6 +16,11 @@ export type ImportArticleOptions = {
   platform?: string;
   criteria?: string; // ブラッシュアップ・ブリーフ（解決済みテキスト）
   force?: boolean;
+  // 更新リライト運用の系譜（§5.2）。/update-article が台帳から解決して渡す。
+  supersedesRunId?: string;
+  rootRunId?: string;
+  // 投稿用タグ。未指定なら supersedes 元 run の tags を継承する。
+  tags?: string[];
 };
 
 export type ImportArticleResult = {
@@ -37,6 +44,8 @@ function staleArtifacts(maxRefineRounds: number): string[] {
     "final-review.md",
     "revise-instruction.md",
     "refine-summary.md",
+    // 版の正本（§5.3）。--force 再 import では作り直す（古い版を回帰起点に残さない）。
+    "update-base.md",
   ];
   for (let n = 1; n <= maxRefineRounds; n++) {
     files.push(`refine-r${n}-review.json`, `refine-r${n}-review.md`, `refine-r${n}-instruction.md`, `refine-r${n}-before.md`);
@@ -105,9 +114,39 @@ export async function importArticle(store: RunStore, options: ImportArticleOptio
   for (const step of qiitaSteps) {
     meta.steps[step.name] = { status: "done", file: step.name === finalStep.name ? finalStep.file : undefined };
   }
+  // 系譜（§5.2）。import 元は常に記録し、起点/根 run は与えられた分だけ記録する。
+  const lineage: LineageMeta = { sourceExportPath: options.from };
+  if (options.supersedesRunId) {
+    lineage.supersedesRunId = validateSafeId(options.supersedesRunId, "supersedes run id");
+  }
+  if (options.rootRunId) {
+    lineage.rootRunId = validateSafeId(options.rootRunId, "root run id");
+  }
+  meta.lineage = lineage;
+  // 投稿用メタ: タイトルは本文 H1 / topic を流用、タグは指定 > supersedes 継承。
+  meta.articleTitle = deriveTopic(body) ?? topic;
+  const inheritedTags = options.supersedesRunId
+    ? await store.readMeta(options.supersedesRunId).then(
+        (prev) => prev.tags,
+        () => {
+          // supersedes が見つからない等で継承できなかったことを黙らせない（タグ消失の footgun 防止）。
+          process.stderr.write(
+            `Warning: supersedes run ${options.supersedesRunId} のメタを読めずタグを継承できませんでした。--tags で明示してください。\n`
+          );
+          return undefined;
+        }
+      )
+    : undefined;
+  const resolvedTags = options.tags ?? inheritedTags;
+  if (resolvedTags && resolvedTags.length > 0) {
+    meta.tags = resolvedTags;
+  }
   await store.writeMeta(meta);
 
   await store.save(runId, "final.md", body);
+  // 版の正本（§5.3）。import 直後の本文を固定保存し、差分監査・回帰確認の起点にする。
+  // final.bak.md は revise のたびに上書きされるため、ここで別ファイルに固定する。
+  await store.save(runId, "update-base.md", body);
 
   if (options.criteria?.trim()) {
     await store.save(runId, "brushup-criteria.md", options.criteria.trim());

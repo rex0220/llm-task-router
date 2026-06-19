@@ -9,5 +9,8 @@ criteria_file: config/criteria/default.md
 style: |
   Qiita の作法に従う。本文は Markdown。
   - コードブロックは言語指定つきのフェンスを使う。
+  - 表は Markdown のテーブル記法（`| 列 | 列 |` と区切り行）で書く。表を ```text などのコードフェンスに入れた ASCII 表にしない。
+  - 図解は Mermaid（` ```mermaid ` フェンス）で描く。フローや関係・構造・順序は `flowchart` / `graph` / `sequenceDiagram` 等を使い、ASCII アートの図は使わない。
+    Mermaid で素直に表現できない空間的・物理的な図は、無理に ASCII で描かず簡潔な箇条書きや説明に置き換える。
   - 補足や注意は `:::note info` / `:::note warn` の記法を使ってよい。
   - 記事先頭の front-matter は本文に含めない。

@@ -7,3 +7,5 @@ style: |
   - 補足や注意は `:::message` / `:::details` の記法を使ってよい。
   - 記事先頭の front-matter（title / emoji / type / topics / published）は本文に含めない。
   - コードブロックは言語指定つきのフェンスを使う。
+  - 表は Markdown のテーブル記法（`| 列 | 列 |` と区切り行）で書く。表を ```text などのコードフェンスに入れた ASCII 表にしない。
+  - 図解は Mermaid（` ```mermaid ` フェンス）で描き、ASCII アートの図は使わない。Mermaid で素直に表現できない図は、無理に ASCII で描かず簡潔な箇条書きや説明に置き換える。

@@ -75,6 +75,7 @@ describe("ModelRouter", () => {
       {
         text: JSON.stringify({
           title: "T",
+          tags: ["TypeScript"],
           targetReaders: ["engineer"],
           goal: ["learn"],
           mainClaim: "claim",

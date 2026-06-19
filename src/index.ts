@@ -7,7 +7,10 @@ import { Command } from "commander";
 import { assertSafeInputPath, resolveText } from "./cli/inputs";
 import { exportFinalArticle } from "./cli/export";
 import { importArticle } from "./cli/import";
+import { recordPublication } from "./cli/record-publication";
+import { writeUpdateDiff } from "./cli/updateDiff";
 import { initConfig } from "./cli/init";
+import { ExportIndex } from "./storage/ExportIndex";
 import { loadProfile } from "./workflows/profile";
 import { RunLogger } from "./logger/RunLogger";
 import { createProviders } from "./providers";
@@ -154,6 +157,9 @@ program
   .option("--profile <name>", "Article profile under config/profiles/ (platform + style + criteria)", "qiita")
   .option("--platform <name>", "Override the platform label from the profile")
   .option("--criteria-file <path>", "Brush-up brief saved as runs/<runId>/brushup-criteria.md (auto-used by evaluate)")
+  .option("--supersedes <runId>", "Previous run this update supersedes (recorded in meta.lineage)")
+  .option("--root <runId>", "Root run of the lineage (first version, recorded in meta.lineage)")
+  .option("--tags <list>", "Comma-separated publish tags (else inherited from --supersedes run)")
   .option("--force", "Replace an existing run with the same id as an import run")
   .action(
     async (options: {
@@ -164,6 +170,9 @@ program
       profile: string;
       platform?: string;
       criteriaFile?: string;
+      supersedes?: string;
+      root?: string;
+      tags?: string;
       force?: boolean;
     }) => {
       const topic =
@@ -176,6 +185,10 @@ program
           : undefined;
 
       const store = new RunStore();
+      const tags = options.tags
+        ?.split(",")
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
       const result = await importArticle(store, {
         from: options.from,
         runId: options.run,
@@ -183,6 +196,9 @@ program
         profile: options.profile,
         platform: options.platform,
         criteria,
+        supersedesRunId: options.supersedes,
+        rootRunId: options.root,
+        tags,
         force: options.force,
       });
 
@@ -202,10 +218,55 @@ program
   .requiredOption("--run <runId>", "Run id")
   .requiredOption("--out <path>", "Destination path for the final article")
   .option("--force", "Overwrite the destination if it already exists")
-  .action(async (options: { run: string; out: string; force?: boolean }) => {
+  .option("--front-matter", "Prepend publish front-matter (title/tags) for Qiita/Zenn and move the body H1 into it")
+  .action(async (options: { run: string; out: string; force?: boolean; frontMatter?: boolean }) => {
     const store = new RunStore();
-    const dest = await exportFinalArticle(store, options.run, options.out, { force: options.force });
-    console.log(`exported: ${dest}`);
+    const dest = await exportFinalArticle(store, options.run, options.out, {
+      force: options.force,
+      frontMatter: options.frontMatter,
+    });
+    console.log(`exported: ${dest}${options.frontMatter ? " (with front-matter)" : ""}`);
+  });
+
+program
+  .command("article:update-diff")
+  .description("Generate update-diff.md / changed-sections.json from update-base.md vs final.md")
+  .requiredOption("--run <runId>", "Run id")
+  .action(async (options: { run: string }) => {
+    const store = new RunStore();
+    const result = await writeUpdateDiff(store, options.run);
+    console.log(`runId: ${options.run}`);
+    console.log(`diff: runs/${options.run}/update-diff.md (+${result.added} / -${result.removed} lines)`);
+    console.log(`sections: runs/${options.run}/changed-sections.json (${result.changedSections.length} changed)`);
+  });
+
+program
+  .command("article:record-publication")
+  .description("Record a publication: update meta.published and export/index.json (separate from export)")
+  .requiredOption("--run <runId>", "Run id")
+  .requiredOption("--slug <slug>", "Article slug (key in export/index.json)")
+  .requiredOption("--url <url>", "Published article URL")
+  .requiredOption("--article-id <id>", "Published article id")
+  // --version は CLI 全体の version フラグ（-v/--version）と衝突するため --article-version にする。
+  .requiredOption("--article-version <n>", "Published article version (integer >= 1)")
+  .option("--force", "Allow a non-increasing version for the same slug (intentional correction)")
+  .action(async (options: { run: string; slug: string; url: string; articleId: string; articleVersion: string; force?: boolean }) => {
+    const version = Number(options.articleVersion);
+    const store = new RunStore();
+    const index = new ExportIndex();
+    const result = await recordPublication(store, index, {
+      runId: options.run,
+      slug: options.slug,
+      url: options.url,
+      articleId: options.articleId,
+      version,
+      force: options.force,
+    });
+    console.log(`runId: ${result.runId}`);
+    console.log(
+      `published: ${result.slug} v${result.version} -> ${result.url}${result.noop ? " (no-op, already recorded)" : ""}`
+    );
+    console.log(`index: export/index.json (slug: ${result.slug})`);
   });
 
 // 進捗は stderr に出す（stdout は runId / final パスのみに保ち、スクリプトでパースしやすくする）。

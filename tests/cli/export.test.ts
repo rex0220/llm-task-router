@@ -74,4 +74,88 @@ describe("exportFinalArticle", () => {
 
     await expect(exportFinalArticle(store, "empty", join(outDir, "a.md"))).rejects.toThrow();
   });
+
+  async function makeRun(
+    platform: string,
+    body: string,
+    meta: { articleTitle?: string; tags?: string[] } = {}
+  ): Promise<{ store: RunStore; runId: string }> {
+    const store = new RunStore(await mkdtemp(join(tmpdir(), "exp-runs-")));
+    const runId = "run-fm";
+    await store.create(runId, "topic", ["final"], platform);
+    await store.save(runId, "final.md", body);
+    const m = await store.readMeta(runId);
+    m.articleTitle = meta.articleTitle;
+    m.tags = meta.tags;
+    await store.writeMeta(m);
+    return { store, runId };
+  }
+
+  it("prepends qiita-cli front-matter and moves the body H1 into title (Qiita)", async () => {
+    const { store, runId } = await makeRun("Qiita", "# 月編\n\n本文\n", {
+      articleTitle: "月編",
+      tags: ["生成AI", "天文学"],
+    });
+    const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+
+    await exportFinalArticle(store, runId, out, { frontMatter: true });
+    const written = await readFile(out, "utf8");
+    expect(written.startsWith("---\n")).toBe(true);
+    expect(written).toContain('title: "月編"');
+    expect(written).toContain("tags:");
+    expect(written).toContain('  - "生成AI"');
+    expect(written).toContain('  - "天文学"');
+    expect(written).toContain("private: false");
+    // 本文先頭の H1 は除去され、重複しない
+    expect(written).not.toMatch(/^#\s+月編/m);
+    expect(written).toContain("本文");
+  });
+
+  it("falls back to the body H1 for the title when meta has none", async () => {
+    const { store, runId } = await makeRun("Qiita", "# 本文タイトル\n\nbody\n", { tags: ["Tag"] });
+    const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+    await exportFinalArticle(store, runId, out, { frontMatter: true });
+    expect(await readFile(out, "utf8")).toContain('title: "本文タイトル"');
+  });
+
+  it("does not mistake a '#' comment inside a leading code fence for the title", async () => {
+    // 本文に H1 タイトルが無く、先頭がコードフェンス（中に '# ...'）のケース。
+    const { store, runId } = await makeRun("Qiita", "```bash\n# install deps\nnpm i\n```\n\nbody\n", { tags: ["Tag"] });
+    const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+    await exportFinalArticle(store, runId, out, { frontMatter: true });
+    const written = await readFile(out, "utf8");
+    // フェンス内コメントをタイトルに採らず、runId にフォールバックする
+    expect(written).toContain(`title: "${runId}"`);
+    expect(written).not.toContain('title: "install deps"');
+    // コードフェンスは壊さない
+    expect(written).toContain("```bash");
+    expect(written).toContain("# install deps");
+  });
+
+  it("warns and writes a clean body when frontMatter is requested for a non-supported platform", async () => {
+    const { store, runId } = await makeRun("ブログ", "# T\n\nbody\n", { tags: ["Tag"] });
+    const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+    await exportFinalArticle(store, runId, out, { frontMatter: true });
+    const written = await readFile(out, "utf8");
+    expect(written.startsWith("---")).toBe(false);
+    expect(written).toContain("# T"); // clean body, H1 retained
+  });
+
+  it("emits Zenn front-matter with topics", async () => {
+    const { store, runId } = await makeRun("Zenn", "# Z\n\nbody\n", { articleTitle: "Z", tags: ["TypeScript"] });
+    const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+    await exportFinalArticle(store, runId, out, { frontMatter: true });
+    const written = await readFile(out, "utf8");
+    expect(written).toContain('topics: ["TypeScript"]');
+    expect(written).toContain('type: "tech"');
+  });
+
+  it("leaves the body clean by default (no front-matter)", async () => {
+    const { store, runId } = await makeRun("Qiita", "# T\n\nbody\n", { tags: ["Tag"] });
+    const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+    await exportFinalArticle(store, runId, out);
+    const written = await readFile(out, "utf8");
+    expect(written.startsWith("---")).toBe(false);
+    expect(written).toContain("# T");
+  });
 });

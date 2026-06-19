@@ -106,4 +106,51 @@ describe("importArticle", () => {
     const { runId } = await importArticle(store, { from, profile: "qiita" });
     expect(runId).toMatch(/-kintone-plugin$/);
   });
+
+  it("saves update-base.md identical to the imported final.md (version baseline)", async () => {
+    const store = await newStore();
+    const from = await writeArticle("# 既存タイトル\n\n本文\n");
+
+    const { runId } = await importArticle(store, { from, profile: "qiita" });
+    const base = await store.read(runId, "update-base.md");
+    const final = await store.read(runId, "final.md");
+    expect(base).toBe(final);
+    expect(base).toContain("# 既存タイトル");
+  });
+
+  it("records lineage: sourceExportPath always, supersedes/root when provided", async () => {
+    const store = await newStore();
+    const from = await writeArticle("# T\n本文\n");
+
+    const { runId } = await importArticle(store, {
+      from,
+      profile: "qiita",
+      supersedesRunId: "2026-06-18-prev",
+      rootRunId: "2026-06-01-root",
+    });
+    const meta = await store.readMeta(runId);
+    expect(meta.lineage?.sourceExportPath).toBe(from);
+    expect(meta.lineage?.supersedesRunId).toBe("2026-06-18-prev");
+    expect(meta.lineage?.rootRunId).toBe("2026-06-01-root");
+  });
+
+  it("rejects an unsafe supersedes run id", async () => {
+    const store = await newStore();
+    const from = await writeArticle("# T\n本文\n");
+    await expect(
+      importArticle(store, { from, profile: "qiita", supersedesRunId: "../escape" })
+    ).rejects.toThrow(/Invalid/);
+  });
+
+  it("force re-import regenerates update-base.md from the new source", async () => {
+    const store = await newStore();
+    const from = await writeArticle("# T\n旧本文\n");
+    const { runId } = await importArticle(store, { from, profile: "qiita" });
+    expect(await store.read(runId, "update-base.md")).toContain("旧本文");
+
+    const from2 = await writeArticle("# T\n新本文\n");
+    await importArticle(store, { from: from2, runId, profile: "qiita", force: true });
+    expect(await store.read(runId, "update-base.md")).toContain("新本文");
+    expect(await store.read(runId, "update-base.md")).not.toContain("旧本文");
+  });
 });

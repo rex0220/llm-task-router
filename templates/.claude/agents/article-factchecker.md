@@ -11,6 +11,11 @@ model: opus
 2. 事実・数値・API/バージョン前提・固有名詞・出典を Web で検証する。
 3. 誤り箇所と要出典箇所を「修正指示」として runs/<id>/factcheck-instruction.md に書き出す。
 
+更新リライト時（差分集中）:
+- runs/<id>/update-diff.md と runs/<id>/changed-sections.json があれば、それが「今回変わった箇所」。**全文を再検証せず、変更箇所と周辺文脈に集中**する。
+- 入力は update-diff.md（＋必要に応じ final.md の該当セクション）。changed-sections.json の見出しを検証対象の地図に使う。
+- 変更で陳腐化した事実（価格・モデルID・バージョン・仕様）が現行と一致するかを優先的に裏取りする。
+
 原則:
 - 本文そのものは書き換えない（適用は編集長が `llm-task-router article:revise` で行う）。
 - 各指摘には根拠 URL を添え、重大度（critical / major / minor / suggestion）を付ける。

@@ -1,5 +1,6 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
+import { validateSafeId } from "./meta";
 
 export type RunStepStatus = "pending" | "done";
 
@@ -56,6 +57,21 @@ export type RefineMeta = {
   costUsdTotal?: number;
 };
 
+// 公開先の正本（§5.1）。公開記事としての所在と版のみ。run 系譜は混ぜない。
+export type PublishedMeta = {
+  url: string;
+  articleId: string;
+  version: number; // 公開記事としての版番号（>=1）
+  updatedAt: string; // 公開更新時刻（meta.updatedAt = ファイル更新時刻 とは別物）
+};
+
+// run 系譜の正本（§5.2）。どの run がどの run の更新か。公開情報とは別軸。
+export type LineageMeta = {
+  supersedesRunId?: string; // 直前の起点 run
+  rootRunId?: string; // 系譜の根（初版 run）
+  sourceExportPath?: string; // import 元
+};
+
 export type RunMeta = {
   runId: string;
   topic: string;
@@ -68,6 +84,12 @@ export type RunMeta = {
   updatedAt: string;
   steps: Record<string, { status: RunStepStatus; file?: string }>;
   refine?: RefineMeta;
+  // 投稿用メタ（export の front-matter 生成に使う）。brief から populate、import は継承/指定。
+  articleTitle?: string;
+  tags?: string[];
+  // 更新リライト運用の拡張（§5）。既存 run との後方互換のため optional。
+  published?: PublishedMeta;
+  lineage?: LineageMeta;
 };
 
 export class RunStore {
@@ -153,10 +175,8 @@ export class RunStore {
   }
 
   private validateRunId(runId: string): string {
-    if (!/^[A-Za-z0-9._-]+$/.test(runId) || runId === "." || runId === ".." || runId.includes("..")) {
-      throw new Error(`Invalid run id: ${runId}`);
-    }
-    return runId;
+    // slug/articleId と同一の安全文字種ガードを共有（meta.ts）。二重定義のドリフトを避ける。
+    return validateSafeId(runId, "run id");
   }
 }
 

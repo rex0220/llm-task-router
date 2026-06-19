@@ -32,6 +32,7 @@ export const qiitaSteps: QiitaStep[] = [
 テーマ:
 ${topic}
 
+tags は${platform}向けの投稿タグを3〜5個。各タグはスペースを含まない短い語にする（例: TypeScript, Node.js, 生成AI）。
 出力はJSON形式。
 `.trim(),
   },
@@ -57,7 +58,8 @@ ${brief}
       const outline = await store.read(runId, "outline.json");
       return `
 次の構成から${platform}向けMarkdown本文を書いてください。
-記事本文のみを出力してください。前置き・後書き・改稿の説明・追加提案や選択肢の提示は含めないでください。
+記事はタイトルを最初の見出し（レベル1の "# "）として置き、続けて本文を書いてください。タイトルは構成(outline)の title を使ってください。
+タイトル見出しと本文のみを出力してください。前置き・後書き・改稿の説明・追加提案や選択肢の提示は含めないでください。
 ${styleBlock(style)}
 ${outline}
 `.trim();
@@ -87,7 +89,8 @@ ${draft}
       const review = await store.read(runId, "review.json");
       return `
 次のレビューを反映して、${platform}記事を改善してください。
-記事本文のみを出力してください。前置き・後書き・改稿の説明・追加提案や選択肢の提示は含めないでください。
+記事はタイトルの見出し（レベル1の "# "）から始めます。タイトル見出しは保持してください。
+タイトル見出しと本文のみを出力してください。前置き・後書き・改稿の説明・追加提案や選択肢の提示は含めないでください。
 ${styleBlock(style)}
 記事:
 ${draft}
