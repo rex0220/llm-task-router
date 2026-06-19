@@ -1,5 +1,6 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
+import { validateSafeId } from "./meta";
 
 export type RunStepStatus = "pending" | "done";
 
@@ -174,10 +175,8 @@ export class RunStore {
   }
 
   private validateRunId(runId: string): string {
-    if (!/^[A-Za-z0-9._-]+$/.test(runId) || runId === "." || runId === ".." || runId.includes("..")) {
-      throw new Error(`Invalid run id: ${runId}`);
-    }
-    return runId;
+    // slug/articleId と同一の安全文字種ガードを共有（meta.ts）。二重定義のドリフトを避ける。
+    return validateSafeId(runId, "run id");
   }
 }
 

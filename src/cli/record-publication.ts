@@ -103,7 +103,17 @@ export async function recordPublication(
   const prev = meta.published;
   const contentMatchesMeta =
     prev !== undefined && prev.url === url && prev.articleId === articleId && prev.version === version;
-  const timestamp = contentMatchesMeta && prev?.updatedAt ? prev.updatedAt : new Date().toISOString();
+  // meta が失われ index だけ無傷な修復でも時刻をブレさせないため、index 側の一致でも再利用する。
+  const contentMatchesIndex =
+    existingEntry !== undefined &&
+    existingEntry.runId === options.runId &&
+    existingEntry.url === url &&
+    existingEntry.articleId === articleId &&
+    existingEntry.version === version;
+  const timestamp =
+    (contentMatchesMeta && prev?.updatedAt) ||
+    (contentMatchesIndex && existingEntry?.updatedAt) ||
+    new Date().toISOString();
 
   const nextPublished: PublishedMeta = { url, articleId, version, updatedAt: timestamp };
   const nextEntry: ExportIndexEntry = { runId: options.runId, url, articleId, version, updatedAt: timestamp };

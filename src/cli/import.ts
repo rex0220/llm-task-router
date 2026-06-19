@@ -126,10 +126,16 @@ export async function importArticle(store: RunStore, options: ImportArticleOptio
   // 投稿用メタ: タイトルは本文 H1 / topic を流用、タグは指定 > supersedes 継承。
   meta.articleTitle = deriveTopic(body) ?? topic;
   const inheritedTags = options.supersedesRunId
-    ? await store
-        .readMeta(options.supersedesRunId)
-        .then((prev) => prev.tags)
-        .catch(() => undefined)
+    ? await store.readMeta(options.supersedesRunId).then(
+        (prev) => prev.tags,
+        () => {
+          // supersedes が見つからない等で継承できなかったことを黙らせない（タグ消失の footgun 防止）。
+          process.stderr.write(
+            `Warning: supersedes run ${options.supersedesRunId} のメタを読めずタグを継承できませんでした。--tags で明示してください。\n`
+          );
+          return undefined;
+        }
+      )
     : undefined;
   const resolvedTags = options.tags ?? inheritedTags;
   if (resolvedTags && resolvedTags.length > 0) {

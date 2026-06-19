@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -64,6 +64,22 @@ describe("ExportIndex", () => {
     const index = await newIndex();
     await expect(index.resolve("../escape")).rejects.toThrow(/Invalid/);
     await expect(index.write("a b", entry())).rejects.toThrow(/Invalid/);
+  });
+
+  it("throws a clear error on a corrupt (invalid JSON) index instead of crashing cryptically", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "idx-"));
+    const path = join(dir, "index.json");
+    await writeFile(path, "{ not json", "utf8");
+    const index = new ExportIndex(path);
+    await expect(index.read()).rejects.toThrow(/Corrupt export index/);
+  });
+
+  it("throws a clear error when the index JSON is not an object", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "idx-"));
+    const path = join(dir, "index.json");
+    await writeFile(path, "null", "utf8");
+    const index = new ExportIndex(path);
+    await expect(index.read()).rejects.toThrow(/expected a JSON object/);
   });
 });
 

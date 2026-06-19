@@ -24,8 +24,9 @@ export function validateSlug(slug: string): string {
 }
 
 export function validateUrl(url: string): string {
-  if (!/^https?:\/\/\S+$/.test(url)) {
-    throw new Error(`Invalid url: ${url} (must start with http:// or https://)`);
+  // スキームの後にホストらしき文字を1つ以上要求する（"http://" だけ等を弾く）。
+  if (!/^https?:\/\/[^\s/]+/.test(url)) {
+    throw new Error(`Invalid url: ${url} (must be http(s)://<host>...)`);
   }
   return url;
 }

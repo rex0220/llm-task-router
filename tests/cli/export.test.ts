@@ -118,6 +118,20 @@ describe("exportFinalArticle", () => {
     expect(await readFile(out, "utf8")).toContain('title: "本文タイトル"');
   });
 
+  it("does not mistake a '#' comment inside a leading code fence for the title", async () => {
+    // 本文に H1 タイトルが無く、先頭がコードフェンス（中に '# ...'）のケース。
+    const { store, runId } = await makeRun("Qiita", "```bash\n# install deps\nnpm i\n```\n\nbody\n", { tags: ["Tag"] });
+    const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+    await exportFinalArticle(store, runId, out, { frontMatter: true });
+    const written = await readFile(out, "utf8");
+    // フェンス内コメントをタイトルに採らず、runId にフォールバックする
+    expect(written).toContain(`title: "${runId}"`);
+    expect(written).not.toContain('title: "install deps"');
+    // コードフェンスは壊さない
+    expect(written).toContain("```bash");
+    expect(written).toContain("# install deps");
+  });
+
   it("warns and writes a clean body when frontMatter is requested for a non-supported platform", async () => {
     const { store, runId } = await makeRun("ブログ", "# T\n\nbody\n", { tags: ["Tag"] });
     const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");

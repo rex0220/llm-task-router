@@ -39,14 +39,15 @@ export async function exportFinalArticle(
 }
 
 // 本文先頭の H1（タイトル）を取り出す。先頭の空行は許容する。
+// 「最初の非空行が H1 のとき」だけタイトルとみなす（stripLeadingH1 と同じ判定）。
+// 本文全体を走査する fallback は持たない（コードフェンス内の "# コメント" を
+// 誤ってタイトルに採るのを防ぎ、除去対象行と一致させるため）。
 function firstH1(body: string): string | undefined {
-  const match = body.match(/^\s*#\s+(.+?)\s*$/m);
-  // 先頭ブロックの H1 のみをタイトルとみなす（最初の非空行が H1 の場合）。
   const firstNonEmpty = body.split(/\r?\n/).find((line) => line.trim() !== "");
   if (firstNonEmpty && /^#\s+/.test(firstNonEmpty.trim())) {
     return firstNonEmpty.trim().replace(/^#\s+/, "").trim();
   }
-  return match?.[1]?.trim();
+  return undefined;
 }
 
 // 本文先頭の H1 行（と直後の空行）を1つだけ取り除く。
@@ -67,7 +68,8 @@ function stripLeadingH1(body: string): string {
 }
 
 function yamlString(value: string): string {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  // 二重引用符スカラとして安全化。改行は front-matter を壊すのでスペースに畳む。
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, " ")}"`;
 }
 
 function resolveTitle(body: string, meta: RunMeta): string {

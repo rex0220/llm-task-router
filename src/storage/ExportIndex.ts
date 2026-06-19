@@ -78,7 +78,17 @@ export class ExportIndex {
     if (raw === null) {
       return { version: INDEX_FORMAT_VERSION, articles: Object.create(null) as Record<string, ExportIndexEntry> };
     }
-    const parsed = JSON.parse(raw) as ExportIndexData;
+    // 破損（不正JSON・非オブジェクト）は黙って空扱いにしない（他 slug を失わせない）。
+    // 明確なエラーで知らせ、空台帳で上書きする事故を防ぐ。
+    let parsed: ExportIndexData;
+    try {
+      parsed = JSON.parse(raw) as ExportIndexData;
+    } catch {
+      throw new Error(`Corrupt export index (invalid JSON): ${this.path} — fix or remove the file.`);
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`Corrupt export index (expected a JSON object): ${this.path} — fix or remove the file.`);
+    }
     // 継承キーの混入を防ぐため、読み込んだ articles を null プロトタイプへ移し替える。
     const articles = Object.assign(Object.create(null) as Record<string, ExportIndexEntry>, parsed.articles ?? {});
     return { version: parsed.version ?? INDEX_FORMAT_VERSION, articles };
