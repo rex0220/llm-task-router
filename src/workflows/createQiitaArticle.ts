@@ -99,6 +99,7 @@ export async function reviseQiitaFinal(
   const input = [
     `次の${platform}記事を、以下の修正指示に従って改善してください。`,
     "Markdown本文だけを返してください。説明やコードフェンスで全体を囲まないでください。",
+    "記事の先頭にタイトルの見出し（レベル1の \"# \"）がある場合は、修正指示で明示されない限り保持してください。",
     ...(meta.style ? ["", "作法:", meta.style] : []),
     "",
     "修正指示:",
@@ -693,6 +694,22 @@ export async function runQiitaArticle(
     const text = isProse ? stripWrappingCodeFence(response.text) : response.text;
     await store.save(runId, step.file, text);
     await store.markDone(runId, step.name, step.file);
+    // brief から投稿用メタ（タイトル・タグ）を meta へ写し、export の front-matter 生成に使う。
+    if (step.name === "brief") {
+      try {
+        const brief = JSON.parse(text) as { title?: string; tags?: string[] };
+        const briefMeta = await store.readMeta(runId);
+        if (brief.title) {
+          briefMeta.articleTitle = brief.title;
+        }
+        if (Array.isArray(brief.tags)) {
+          briefMeta.tags = brief.tags;
+        }
+        await store.writeMeta(briefMeta);
+      } catch {
+        // schema 検証済みなので通常は到達しない。失敗しても本体フローは止めない。
+      }
+    }
     onEvent({
       type: "step:done",
       index: position,

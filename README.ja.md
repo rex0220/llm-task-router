@@ -68,6 +68,17 @@ llm-task-router article:refine --run 2026-06-16-example --max-rounds 3 --min-sev
 
 # 完成記事を任意のパスへ書き出す（例: Zenn リポジトリ）。--force で上書き。
 llm-task-router article:export --run 2026-06-16-example --out ../zenn-content/articles/my-article.md
+
+# --- 既存・公開済み記事の取り込み／更新（create とは別系統）---
+# 既存 Markdown 記事を run として取り込み、evaluate/refine/revise でブラッシュアップする
+llm-task-router article:import --from ../old/my-article.md --profile qiita
+
+# 更新差分（update-base.md → final.md）を生成し、差分集中の再検証に使う
+llm-task-router article:update-diff --run 2026-06-16-my-article
+
+# 公開を記録する: meta.published と export/index.json を更新（export とは別ステップ）
+llm-task-router article:record-publication --run 2026-06-16-my-article \
+  --slug my-article --url https://qiita.com/.../items/xxxx --article-id xxxx --article-version 2
 ```
 
 `--topic-file` のとき `runId` はファイル名から生成されます（例: `ai-ir.txt` → `2026-06-16-ai-ir`）。`--run <runId>` で明示固定もできます。成果物は `runs/<runId>/` に保存されます。
@@ -128,6 +139,16 @@ llm-task-router article:evaluate --run <runId> --min-severity minor
 - `--until <clean|approved>`（既定 `clean`）: `min-severity` 以上の指摘が 0 になったら（`clean`）、または judge が `approved` を出したら（`approved`）停止します。
 
 停止理由は次のいずれかです: `clean` / `approved` / `max-rounds` / `stalled`（品質スコアが改善しなくなった）/ `regressed`（スコアが有意に悪化。スパイラル防止のダメージ制御で停止）/ `no-instruction`（judge が非承認だが具体的な指摘を返さない）。成功条件（`clean`/`approved`）は `stalled`/`regressed` より優先されます。各ラウンドの評価・適用した指示・修正前スナップショットはフラットな成果物として `runs/<runId>/` に残ります（`refine-r<N>-review.json` / `refine-r<N>-review.md` / `refine-r<N>-instruction.md` / `refine-r<N>-before.md`、加えて推移をまとめた `refine-summary.md`。最終ラウンドの評価は `final-review.{json,md}` にも複製）。ループは巻き戻しをしません（`final.md` は常に最新の適用版）。`regressed` 停止時は掘り進めず停止し、悪化を検出したラウンドの 1 つ前の修正前スナップショット（`refine-r<N>-before.md`。`<N>` は検出ラウンドより 1 小さい番号）の方が良い可能性を警告するので、人が手で良い版を選べます。進捗とラウンド履歴は `meta.json` の `refine` フィールドに記録されます。
+
+### 既存記事の取り込みと更新
+
+`article:import --from <path>` は `export` の対（外 → run）で、既存・公開済みの Markdown を新しい run の `final.md` として取り込み、`evaluate` / `refine` / `revise` でブラッシュアップできるようにします。取り込んだ run は `meta.json` で `imported: true` になり、生成系工程を持たないため `resume` / `review` は拒否されます（`evaluate` / `refine` / `revise` を使う）。`--criteria-file` でブラッシュアップ観点を渡せます。詳細は [docs/article-import-proposal.md](docs/article-import-proposal.md)。
+
+**公開済み記事の更新リライト**（同一 URL・骨格を保ち、陳腐化した差分だけ直す）では、import を起点に `/update-article` スキルが専用フローを駆動します。**正本を3つ固定**するのが肝です: 版＝`update-base.md`（import 直後に固定する本文）/ 公開先＝`meta.published` / 系譜＝`meta.lineage`。
+
+- `article:import --from export/<slug>.md --supersedes <前の run> --root <根 run>` で `update-base.md` を固定保存し、`lineage` を `meta.json` に記録します。
+- `article:update-diff --run <id>` は `update-base.md` と現 `final.md` を比較し、`update-diff.md`（unified 風の差分）と `changed-sections.json`（見出しごとの追加/削除行数）を書き出します。ファクトチェック／ビルド検証が**変更セクションだけ**を見られるようになります。
+- `article:record-publication --run <id> --slug <slug> --url <url> --article-id <id> --article-version <n>` は `meta.published` と `export/index.json` 台帳（slug → 最新 run / URL）を**同時に**更新します。`export`（`final.md` をコピーするだけ）とは意図的に別ステップで、export はローカル書き出し、`record-publication` は公開の記録です。同一 slug の version 退行を防ぎます（完全一致の再実行は no-op、意図的な訂正は `--force`）。フラグは `--article-version`（CLI 全体の version フラグ `--version` との衝突を避けるため）。`export` と同様に公開相当の操作なので編集長 allowlist に**入れず**、毎回プロンプトが出ます。
 
 ## 実行推移の表示
 

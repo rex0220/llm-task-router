@@ -555,6 +555,7 @@ function responseForTask(task: ModelTask): string {
     case "article_brief":
       return JSON.stringify({
         title: "Brief",
+        tags: ["TypeScript", "Node.js"],
         targetReaders: ["reader"],
         goal: ["goal"],
         mainClaim: "claim",

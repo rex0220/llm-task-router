@@ -7,6 +7,8 @@
       "Bash(llm-task-router article:revise:*)",
       "Bash(llm-task-router article:resume:*)",
       "Bash(llm-task-router article:review:*)",
+      "Bash(llm-task-router article:import:*)",
+      "Bash(llm-task-router article:update-diff:*)",
       "Bash(llm-task-router --help)",
       "Bash(llm-task-router -v)"
     ]

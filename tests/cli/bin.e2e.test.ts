@@ -95,4 +95,51 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
     },
     E2E_TIMEOUT
   );
+
+  it(
+    "article:update-diff --help succeeds and shows --run",
+    () => {
+      const out = run(["article:update-diff", "--help"]);
+      expect(out).toContain("--run");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:record-publication --help shows --article-version (not the reserved --version)",
+    () => {
+      const out = run(["article:record-publication", "--help"]);
+      expect(out).toContain("--slug");
+      expect(out).toContain("--article-id");
+      // 公開版番号は --article-version（CLI 全体の -v/--version との衝突回避）。
+      expect(out).toContain("--article-version");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:record-publication --article-version is parsed as the flag, not the CLI version",
+    () => {
+      // --article-version を渡しても CLI の version（package.json の値）が出力されないこと。
+      // run 不在で失敗する経路だが、stdout に version 文字列が混ざらないことを固定する。
+      const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string };
+      const { stderr } = runFail([
+        "article:record-publication",
+        "--run",
+        "no-such-run",
+        "--slug",
+        "x",
+        "--url",
+        "https://example.com/items/abc",
+        "--article-id",
+        "abc",
+        "--article-version",
+        "2",
+      ]);
+      // version 表示で早期 exit していたら stderr は空でこの assertion が壊れる。
+      expect(stderr).not.toBe(pkg.version);
+      expect(stderr.length).toBeGreaterThan(0);
+    },
+    E2E_TIMEOUT
+  );
 });

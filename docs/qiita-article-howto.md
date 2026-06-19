@@ -307,6 +307,39 @@ llm-task-router article:revise   --run 2026-06-18-kintone --instruction-file run
 
 詳細仕様は [article-import-proposal.md](article-import-proposal.md) を参照。
 
+## 公開済み記事を更新リライトする（/update-article）
+
+一度公開した記事を「同一性（URL・骨格）を保ったまま、陳腐化した差分だけ」更新する運用。新規作成（`/write-article`）とは別系統で、import を起点にする。`/update-article <slug>` が編集長を介して下記を駆動する。詳細は [update-article-plan.md](update-article-plan.md)（仕様 [update-article-spec.md](update-article-spec.md)）。
+
+正本を3つ固定するのが肝: **版＝`update-base.md`** / **公開先＝`meta.published`** / **系譜＝`meta.lineage`**。
+
+```bash
+# 1) 起点化: 公開済み md を新 run として import（update-base.md と lineage が記録される）
+llm-task-router article:import --from export/<slug>.md --run 2026-06-19-<slug>-v2 \
+  --supersedes 2026-06-18-<slug> --root 2026-06-01-<slug> --profile qiita
+
+# 2) 変更点だけを指示ファイルに列挙して revise（全面リライトしない）
+#    runs/2026-06-19-<slug>-v2/update-instruction.md を作成（一次情報を根拠に）
+llm-task-router article:revise --run 2026-06-19-<slug>-v2 \
+  --instruction-file runs/2026-06-19-<slug>-v2/update-instruction.md
+
+# 3) 差分の正本を生成（update-base.md → final.md）
+llm-task-router article:update-diff --run 2026-06-19-<slug>-v2
+#  → runs/.../update-diff.md, changed-sections.json
+
+# 4) 差分集中の2検証（factchecker / build-verifier に update-diff.md だけ渡す）→ revise で適用
+
+# 5) 編集長 GO → ユーザー承認後にローカル export（コピーのみ）
+llm-task-router article:export --run 2026-06-19-<slug>-v2 --out ../qiita-content/<slug>.md
+
+# 6) 公開台帳の記録（export とは別ステップ。同一 URL の更新。meta.published と export/index.json を更新）
+llm-task-router article:record-publication --run 2026-06-19-<slug>-v2 \
+  --slug <slug> --url https://qiita.com/.../items/xxxx --article-id xxxx --article-version 2
+```
+
+- `article:export` は **コピーのみ**で meta を更新しない。公開先 URL/版の記録は `article:record-publication` の責務（責務分離）。
+- `record-publication` は同一 slug の version 退行を拒否（完全一致は no-op、訂正は `--force`）。`export` と同様に**承認操作**なので allowlist に入れず、毎回 URL を確認する。
+
 ## 使うAIの目安
 
 | 工程 | 担当AI | 補足 |
