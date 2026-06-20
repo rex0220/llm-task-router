@@ -134,6 +134,18 @@ function applyTracked(ledger: EditorialLedger, tracked: TrackedWeakness[], round
   }
 }
 
+// 独立フル読みは authoritative。今回再検出されなかった既存 open/partial は resolved にする
+// （定期的に独立読みを挟む運用で、修正済みの古い指摘が候補に残り続けないように）。spec §5.5。
+function closeMissing(ledger: EditorialLedger, foundHashes: Set<string>, round: number): void {
+  for (const w of ledger.weaknesses) {
+    if ((w.status === "open" || w.status === "partial") && !foundHashes.has(w.hash)) {
+      w.status = "resolved";
+      w.evidence = "independent full read で再検出されず";
+      w.lastRound = round;
+    }
+  }
+}
+
 // 新規 weakness を台帳へマージ（同内容 hash の再出現は既存 id を再利用し、新規だけ採番）。
 function mergeFound(ledger: EditorialLedger, found: RawWeakness[], round: number): void {
   for (const fw of found) {
@@ -330,7 +342,9 @@ export async function runEditorialReview(
       assertIndependentResponse(finalAuthor, reviewerModel, options);
     }
     const raw = JSON.parse(response.text) as RawEditorialReview;
+    const foundHashes = new Set(raw.weaknesses.map(weaknessHash));
     mergeFound(ledger, raw.weaknesses, round);
+    closeMissing(ledger, foundHashes, round); // 独立フル読みで再検出されなかった既存 open/partial を閉じる
     head = { round, verdict: raw.verdict, scores: raw.scores, strengths: raw.strengths, summary: raw.summary };
     return finalize(store, runId, mode, ledger, round, head, reviewerModel);
   }

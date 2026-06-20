@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type { RunStore } from "../storage/RunStore";
 import type { LineageMeta } from "../storage/RunStore";
@@ -29,11 +29,11 @@ export type ImportArticleResult = {
   replacedRun: boolean; // 既存 run を --force で置き換えたか
 };
 
-// force 置き換え時に掃除する成果物。run 全体を import run として作り直すため、
-// 旧 brushup-criteria（古い改善方針の silent 再利用を防ぐ）・生成系成果物・評価/refine 系を消す。
-// brushup-criteria.md はこの後 criteria 指定時のみ再生成される。
-function staleArtifacts(maxRefineRounds: number): string[] {
-  const files = [
+// force 置き換え時に掃除する固定名の成果物。run 全体を import run として作り直すため、
+// 旧 brushup-criteria（古い改善方針の silent 再利用を防ぐ）・生成系成果物・評価/refine/editorial 系を消す。
+// ラウンド別成果物（refine-r<N>-* / editorial-r<N>-*）は数が不定なので removeRoundArtifacts で dir 走査して消す。
+function staleArtifacts(): string[] {
+  return [
     "brushup-criteria.md",
     "brief.json",
     "outline.json",
@@ -53,13 +53,16 @@ function staleArtifacts(maxRefineRounds: number): string[] {
     "editorial-instruction.md",
     "editorial-ledger.json",
   ];
-  // refine と editorial のラウンド別成果物を掃除（実ラウンド数は不定なので広めの上限で削る。remove は冪等）。
-  const rounds = Math.max(maxRefineRounds, 20);
-  for (let n = 1; n <= rounds; n++) {
-    files.push(`refine-r${n}-review.json`, `refine-r${n}-review.md`, `refine-r${n}-instruction.md`, `refine-r${n}-before.md`);
-    files.push(`editorial-r${n}-review.json`, `editorial-r${n}-review.md`, `editorial-r${n}-before.md`);
+}
+
+// ラウンド別成果物（refine-r<N>-* / editorial-r<N>-*）を run dir 走査で全て消す（N の上限を仮定しない）。
+async function removeRoundArtifacts(store: RunStore, runId: string): Promise<void> {
+  const entries = await readdir(store.runPath(runId)).catch(() => [] as string[]);
+  for (const name of entries) {
+    if (/^(refine|editorial)-r\d+-/.test(name)) {
+      await store.remove(runId, name);
+    }
   }
-  return files;
 }
 
 // 本文先頭の最初の H1 をテーマ種に使う（評価には不使用。履歴・人の参照用）。
@@ -102,10 +105,10 @@ export async function importArticle(store: RunStore, options: ImportArticleOptio
 
   // force 置き換え時は旧成果物を掃除（run 全体を import run として作り直す）。
   if (dirExists && options.force) {
-    const maxRounds = Math.max(existing?.refine?.maxRoundsAtRun ?? 0, existing?.refine?.rounds.length ?? 0, 0);
-    for (const file of staleArtifacts(maxRounds)) {
+    for (const file of staleArtifacts()) {
       await store.remove(runId, file);
     }
+    await removeRoundArtifacts(store, runId); // refine-r<N>-* / editorial-r<N>-* を上限仮定なしで掃除
   }
 
   // meta を create と同経路で生成 → 全 step done ＋ imported を立てる（手書き meta を避ける核心）。

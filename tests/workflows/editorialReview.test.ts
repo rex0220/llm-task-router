@@ -129,6 +129,34 @@ describe("runEditorialReview (independent mode)", () => {
     const { store, runId } = await makeRun(undefined);
     await expect(runEditorialReview(routerReturning(REVIEW_JSON), store, runId)).rejects.toThrow(/finalAuthorModel/);
   });
+
+  it("a later independent full read closes prior open weaknesses it no longer reports", async () => {
+    const { store, runId } = await makeRun({ provider: "openai", model: "gpt" });
+    await runEditorialReview(routerReturning(REVIEW_JSON), store, runId); // round1: major+minor+pref open
+    const ledger1 = JSON.parse(await store.read(runId, "editorial-ledger.json")) as LedgerView;
+    const minorId = ledger1.weaknesses.find((w) => w.severity === "minor")!.id;
+    const prefId = ledger1.weaknesses.find((w) => w.severity === "preference")!.id;
+
+    // round2 独立: major と同内容だけを報告（minor/pref は出さない）
+    const onlyMajor = JSON.stringify({
+      verdict: "publication-candidate",
+      scores: [{ axis: "構成", score: 9.5 }],
+      strengths: ["改善"],
+      weaknesses: [{ severity: "major", location: "導入", problem: "前提が不明", recommendation: "前提を1文足す" }],
+      summary: "ほぼ",
+    });
+    const result = await runEditorialReview(routerReturning(onlyMajor), store, runId);
+    expect(result.round).toBe(2);
+
+    const ledger2 = JSON.parse(await store.read(runId, "editorial-ledger.json")) as LedgerView;
+    // 再検出されなかった minor/pref は resolved に閉じられる
+    expect(ledger2.weaknesses.find((w) => w.id === minorId)?.status).toBe("resolved");
+    expect(ledger2.weaknesses.find((w) => w.id === prefId)?.status).toBe("resolved");
+    // 候補は major のみ（古い minor は残らない）
+    expect(result.candidateCount).toBe(1);
+    const candidates = await store.read(runId, "editorial-instruction.candidates.md");
+    expect(candidates).not.toContain("用語揺れ");
+  });
 });
 
 describe("runEditorialReview (continuation mode)", () => {
