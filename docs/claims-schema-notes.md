@@ -108,10 +108,10 @@ present（今回の raw に同一 anchorHash の claim が在る） / removed（
 
 `src/schemas/` の流儀（editorial 系と同じ）で固定する:
 
-- `claims.json`: `id` は `/^C\d{3}-[0-9a-f]{8}$/`、`type` enum、`status` enum（unverified/verified/needs-source/incorrect）、`lifecycle` enum（present/removed）、`severity` enum、`sourceIds: string[]`（`/^S\d{3}$/` の sources id 参照）。`location` は `{ heading: string; anchorHash: string }`。
+- `claims.json`: `id` は `/^C\d{3}-[0-9a-f]{8}$/`、`type` enum、`status` enum（unverified/verified/needs-source/incorrect）、`lifecycle` enum（present/removed）、`severity` enum、`sourceIds: string[]`（`/^S\d{3}$/` の sources id 参照）。`location` は `{ heading: string; anchorHash: string }`。**`status="verified"` は `sourceIds` 非空を `.refine()`**（実装済み。base object を `.extend()` で台帳へ継承するため refine 前の `ClaimFieldsSchema` を分離）。
 - `claims.raw.json`（factchecker 出力）: 上記から `id`・`anchorHash`・`lifecycle`・`sourceIds` を除き、代わりに `sourceRefs: string[]`（URL か raw source の `key`）を持つ idless 形。
 - `sources.json`: `id`（`/^S\d{3}$/`）、`url` は `z.string().url()`、`retrievedAt` は日付、`sourceType` enum。台帳側は `urlHash`（正規化 URL hash＝SNNN の安定主キー）も持つ。`sources.raw.json` は `id` の代わりに `key`（raw 内結合ラベル）。
-- **build-verify-report.json も同時に zod 固定**（前回レビューの残リスク反映）: `skipReason` は `status:"skipped"` のとき非空を `.refine()`／`discriminatedUnion` で条件付き必須、`checkedBlocks[].result` enum、`unverified` の形を固定。verify-artifacts はこの zod を検証器として使う。
+- **build-verify-report.json も zod 固定**（実装済み）: `skipReason` は `status:"skipped"` のとき非空を `.refine()` で条件付き必須、`checkedBlocks[].result` は `passed|failed|partial` enum、`unverified` は `{ id: string, reason: string, location?: string }[]`、`status="passed"` は `unverified` 空を `.refine()`。verify-artifacts はこの zod を検証器に使い、加えて status=failed/partial・空の passed・宣言不整合・claims↔sources の参照 integrity を判定する。
 
 ## 未決事項（P5 設計時に潰す）
 

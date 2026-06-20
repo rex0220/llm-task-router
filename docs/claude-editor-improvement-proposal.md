@@ -157,11 +157,11 @@ runs/<runId>/build-verify-report.json
       "notes": "掲載どおりに typecheck 通過"
     }
   ],
-  "unverified": []
+  "unverified": [{ "id": "B002", "reason": "外部API依存で未検証", "location": "## 該当見出し" }]
 }
 ```
 
-> `skipReason` は `status: "skipped"`（`checkedBlocks: []`）で理由が消えないようトップレベルに置く（実装時のレビュー反映）。
+> 実装時のレビュー反映: `skipReason` は `status: "skipped"`（`checkedBlocks: []`）で理由が消えないようトップレベルに置く。`unverified` は `{ id, reason, location? }[]`。`status: "passed"` は全ブロック検証済みで通った状態で、未検証が残るなら `partial`（passed に混ぜない）。
 
 ### 5. `article:verify-artifacts` を追加する
 
@@ -174,15 +174,14 @@ runs/<runId>/build-verify-report.json
 llm-task-router article:verify-artifacts --run <runId>
 ```
 
-チェック例:
+チェック例（実装済みの確定仕様は [claude-editor-improvement-spec.md](claude-editor-improvement-spec.md) #5 が正本）:
 
-- `final.md` が存在する。
-- `final-review.md` が存在する。
+- `final.md` / `final-review.md` が存在する。
 - `publication-check.md` が存在し、GO/NO-GO が記載されている。
-- `factcheck-instruction.md` または factcheck skip 理由がある。
-- `build-verify-report.json` が存在しスキーマ適合（`status: "skipped"` の場合は `skipReason` 非空）。コードを含む記事で `status: "skipped"` は警告。
-- `editorial-review.md` または editorial-review skip 理由がある。
-- `claims.json` に blocking な claim が残っていない（blocking = `lifecycle=present` かつ `severity∈{critical,major}` かつ `status∈{unverified,needs-source,incorrect}`）。
+- 各ゲート（factcheck / build-verify / editorial-review）を `publication-check.md` で `done|skipped` 宣言（no silent skip。skipped は `<gate> summary` の理由必須）。
+- `factcheck=done` なら `claims.json` / `sources.json` 必須・スキーマ適合・source integrity・blocking ゼロ。
+- `build-verify=done` なら `build-verify-report.json` が `status=passed`（failed/partial や未検証混入は error、宣言と status の整合も検査）。
+- `editorial-review=done` なら `editorial-review.md` 必須。
 
 このコマンドは外部通信を行わないため、安全方針と相性が良い。
 

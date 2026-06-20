@@ -174,12 +174,13 @@ runs/<runId>/build-verify-report.json
       "notes": "掲載どおりに typecheck 通過"
     }
   ],
-  "unverified": []
+  "unverified": [{ "id": "B002", "reason": "外部API依存で未検証", "location": "## 該当見出し" }]
 }
 ```
 
 - `skipReason`: `status: "skipped"` のとき必須（コード無し・環境再現不能など、`checkedBlocks: []` で理由が消えないようトップレベルに置く）。それ以外は空文字。
-- `verify-artifacts`（#5）はこの `skipReason` を「build-verify skip 理由」として参照する。
+- `checkedBlocks[].result` は `passed|failed|partial`。`unverified` は検証できなかったブロックを `{ id, reason, location? }` で持つ。
+- **`status: "passed"` は全ブロック検証済みで通った状態**。未検証が残る（`unverified` が空でない）なら `partial` にする。`verify-artifacts`（#5）が passed＋未検証・空の passed・status=failed/partial・宣言不整合を弾く。
 
 ### 変更箇所
 - `.claude/agents/article-build-verifier.md` の出力規約に `build-verify-report.json` を追加。`build-verify-instruction.md` は併存。
@@ -200,19 +201,34 @@ llm-task-router article:claims-normalize --run <runId> [--scope full|diff]   # r
 llm-task-router article:verify-artifacts --run <runId>   # 揃い・スキーマ・blocking をチェック
 ```
 
-### チェック項目（verify-artifacts）
-- `final.md` が存在する。
-- `final-review.md` が存在する。
-- `publication-check.md` が存在し、GO/NO-GO が記載されている。
-- `factcheck-instruction.md` または factcheck skip 理由がある。
-- `build-verify-report.json` が存在しスキーマ適合（`status: "skipped"` の場合は `skipReason` 非空）。コードを含む記事で `status: "skipped"` は警告。
-- `editorial-review.md` または editorial-review skip 理由がある。
-- `claims.json` が**スキーマに適合**し、**blocking な claim が残っていない**（blocking = `lifecycle=present` かつ `severity∈{critical,major}` かつ `status∈{unverified,needs-source,incorrect}`）。
+### チェック項目（verify-artifacts。実装準拠）
+基本:
+- `final.md` / `final-review.md` が存在する。
+- `publication-check.md` が存在し、`GO/NO-GO:` に値がある。
+
+ゲート宣言（no silent skip）— 各ゲートは `publication-check.md` で `done|skipped` を必ず宣言する:
+- 宣言が無い（missing）ゲートは error。
+- `skipped` のゲートは `<gate> summary:`（スキップ理由）が非空であること（P4 の skipReason と統一）。
+
+`factcheck: done` のとき:
+- `claims.json` が必須・スキーマ適合（`status="verified"` は `sourceIds` 非空）。
+- `blocking` な claim が残っていない（blocking = `lifecycle=present` かつ `severity∈{critical,major}` かつ `status∈{unverified,needs-source,incorrect}`）。
+- `sources.json` が必須・スキーマ適合で、`claims[].sourceIds` がすべて `sources.json[].id` に実在する（dangling 参照は error）。
+
+`build-verify: done` のとき（report がある場合は宣言と独立に検証）:
+- `build-verify-report.json` が必須・スキーマ適合。
+- `status=failed|partial`、`checkedBlocks[].result` に `failed|partial` が残る、は error。
+- `status=passed` かつ `checkedBlocks` が空、は error（実際に検証していない passed を防ぐ）。
+- `status=passed` で `unverified` が非空、は schema error（partial にする）。
+- 宣言と report status の整合: `done`＋`status=skipped`、`skipped`＋`status≠skipped` は不整合 error。`status=skipped`（整合時）は warning。
+
+`editorial-review: done` のとき:
+- `editorial-review.md` が必須。
 
 ### 仕様メモ
-- 採番・台帳は `claims-normalize`、スキーマ検証と blocking 判定は `verify-artifacts`（#3 の「検証は CLI が持つ」を実装する箇所）。
-- `verify-artifacts` は normalize 済み `claims.json` を前提とする（raw のみの run はエラーで normalize を促す）。
-- 終了コードで合否を返し、欠落・スキーマ違反・blocking claim を列挙する。
+- 採番・台帳は `claims-normalize`、スキーマ検証・blocking・integrity・status 整合性は `verify-artifacts`（#3 の「検証は CLI が持つ」を実装する箇所）。
+- `verify-artifacts` は normalize 済み `claims.json` を前提とする（raw のみの run は factcheck=done で claims.json 不在として error → normalize を促す）。
+- 終了コード（`process.exitCode=1`）で合否を返し、欠落・スキーマ違反・blocking・integrity・status 不整合を列挙する。
 - 外部通信なし＝安全方針と無衝突。
 
 ### 完了条件
