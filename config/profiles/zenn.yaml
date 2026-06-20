@@ -2,6 +2,7 @@
 platform: Zenn
 language: ja
 criteria_file: config/criteria/default.md
+editorial_criteria_file: config/criteria/editorial.md
 style: |
   Zenn の作法に従う。本文は Markdown。
   - 補足や注意は `:::message` / `:::details` の記法を使ってよい。

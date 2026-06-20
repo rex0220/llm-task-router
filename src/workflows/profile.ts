@@ -9,6 +9,8 @@ export type ArticleProfile = {
   language?: string;
   style?: string;
   criteriaFile?: string;
+  // 編集レビュー専用の固定 rubric（criteria_file とは別系統。brushup-criteria に上書きされない）。
+  editorialCriteriaFile?: string;
 };
 
 const profileSchema = z.object({
@@ -16,6 +18,7 @@ const profileSchema = z.object({
   language: z.string().optional(),
   style: z.string().optional(),
   criteria_file: z.string().optional(),
+  editorial_criteria_file: z.string().optional(),
 });
 
 // プロファイル名から config/profiles/<name>.yaml を読み込む。
@@ -43,5 +46,6 @@ export async function loadProfile(name: string, dir = "config/profiles"): Promis
     language: parsed.data.language,
     style: parsed.data.style?.trim() || undefined,
     criteriaFile: parsed.data.criteria_file?.trim() || undefined,
+    editorialCriteriaFile: parsed.data.editorial_criteria_file?.trim() || undefined,
   };
 }

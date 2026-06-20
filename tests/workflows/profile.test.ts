@@ -10,6 +10,7 @@ describe("loadProfile", () => {
     expect(profile.platform).toBe("Qiita");
     expect(profile.style).toContain(":::note");
     expect(profile.criteriaFile).toBe("config/criteria/default.md");
+    expect(profile.editorialCriteriaFile).toBe("config/criteria/editorial.md");
   });
 
   it("loads the bundled zenn profile", async () => {

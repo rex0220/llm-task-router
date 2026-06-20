@@ -98,6 +98,20 @@ tasks:
     temperature: 0.2
     max_tokens: 6000
 
+  # 編集レビュー（読者・編集視点の批評）。本文(rewrite)の書き手と独立させるため、
+  # candidate set は両 provider をまたぐ（実行時に finalAuthorModel.provider を除外しても
+  # 別 provider が残る）。通常は Anthropic が担当し、rewrite が Anthropic fallback した場合は
+  # runtime filter で Anthropic を落として OpenAI に回る。
+  editorial_review:
+    primary:
+      provider: anthropic
+      model: claude-opus-4-8
+    fallback:
+      - provider: openai
+        model: gpt-5.4
+    temperature: 0.2
+    max_tokens: 6000
+
   markdown_format:
     primary:
       provider: openai

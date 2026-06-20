@@ -2,6 +2,7 @@
 platform: note
 language: ja
 criteria_file: config/criteria/note.md
+editorial_criteria_file: config/criteria/editorial.md
 style: |
   note（note.com）の作法に従う。本文は素朴な Markdown。
   - note のエディタは独自記法（:::note など）や凝った Markdown 装飾に対応しないため、標準的な見出し・段落・箇条書き・引用・太字のみを使う。

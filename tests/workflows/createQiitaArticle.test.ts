@@ -36,6 +36,8 @@ describe("Qiita workflow", () => {
     expect(final).toContain("# Final");
     expect(meta.steps.final.status).toBe("done");
     expect(provider.calls).toHaveLength(firstCallCount);
+    // final step（rewrite）のモデルが finalAuthorModel に記録される（markDone で消えない）。
+    expect(meta.finalAuthorModel).toEqual({ provider: "mock", model: "m" });
   });
 
   it("rejects resume and review on an imported run", async () => {

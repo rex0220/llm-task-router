@@ -123,6 +123,8 @@ export async function importArticle(store: RunStore, options: ImportArticleOptio
     lineage.rootRunId = validateSafeId(options.rootRunId, "root run id");
   }
   meta.lineage = lineage;
+  // import 由来の本文は外部/人間作。編集レビューの独立性チェックは免除（external）。
+  meta.finalAuthorModel = "external";
   // 投稿用メタ: タイトルは本文 H1 / topic を流用、タグは指定 > supersedes 継承。
   meta.articleTitle = deriveTopic(body) ?? topic;
   const inheritedTags = options.supersedesRunId

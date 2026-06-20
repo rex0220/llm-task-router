@@ -39,6 +39,8 @@ describe("importArticle", () => {
     expect(meta.profile).toBe("qiita");
     expect(Object.values(meta.steps).every((s) => s.status === "done")).toBe(true);
     expect(meta.steps.final.file).toBe("final.md");
+    // import 由来は外部/人間作 → finalAuthorModel は "external"（編集レビューの独立性チェック免除）。
+    expect(meta.finalAuthorModel).toBe("external");
   });
 
   it("saves the brush-up brief as brushup-criteria.md", async () => {

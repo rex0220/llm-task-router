@@ -9,6 +9,7 @@ import { exportFinalArticle } from "./cli/export";
 import { importArticle } from "./cli/import";
 import { recordPublication } from "./cli/record-publication";
 import { writeUpdateDiff } from "./cli/updateDiff";
+import { runEditorialReview } from "./workflows/editorialReview";
 import { initConfig } from "./cli/init";
 import { ExportIndex } from "./storage/ExportIndex";
 import { loadProfile } from "./workflows/profile";
@@ -390,6 +391,67 @@ program
       console.log(`final: runs/${result.runId}/final.md`);
     }
   );
+
+program
+  .command("article:review-editorial")
+  .description("Independent editorial review (reader/editor critique) by a model different from the body writer")
+  .requiredOption("--run <runId>", "Run id")
+  .option("--mode <mode>", "Review mode (independent; continuation は第2段)", "independent")
+  .option("--allow-same-provider", "finalAuthor と同一 provider の別 model を許可")
+  .option("--allow-same-model", "完全同一モデルまで許可（same-provider を含む）")
+  .option("--config <path>", "Path to models.yaml", "config/models.yaml")
+  .action(
+    async (options: {
+      run: string;
+      mode: string;
+      allowSameProvider?: boolean;
+      allowSameModel?: boolean;
+      config: string;
+    }) => {
+      if (options.mode !== "independent") {
+        throw new Error(`Invalid --mode: ${options.mode}（現状 independent のみ。continuation は第2段）`);
+      }
+      const { router, store } = await createRuntime(options.config);
+      const criteria = await resolveEditorialCriteria(store, options.run);
+      const result = await runEditorialReview(router, store, options.run, {
+        allowSameProvider: options.allowSameProvider,
+        allowSameModel: options.allowSameModel,
+        criteria,
+      });
+      console.log(`runId: ${result.runId}`);
+      console.log(`reviewer: ${result.reviewerModel.provider}/${result.reviewerModel.model}`);
+      console.log(`verdict: ${result.verdict}`);
+      console.log(`review: runs/${result.runId}/editorial-review.md`);
+      console.log(
+        `candidates: runs/${result.runId}/editorial-instruction.candidates.md (${result.candidateCount} 件・未確定)`
+      );
+      console.log(
+        `next: 編集長が候補を取捨して runs/${result.runId}/editorial-instruction.md を確定 → article:revise --instruction-file で適用`
+      );
+    }
+  );
+
+// 編集レビュー用 criteria の合成（spec §5.3）。
+// 固定 rubric（profile の editorial_criteria_file、上書き不可）＋ 追加コンテキスト（brushup-criteria.md があれば末尾連結）。
+async function resolveEditorialCriteria(store: RunStore, runId: string): Promise<string | undefined> {
+  const meta = await store.readMeta(runId);
+  let rubric = "";
+  if (meta.profile) {
+    const profile = await loadProfile(meta.profile);
+    if (profile.editorialCriteriaFile) {
+      assertSafeInputPath(profile.editorialCriteriaFile);
+      rubric = (await readFile(profile.editorialCriteriaFile, "utf8")).trim();
+    }
+  }
+  const brushup = await store.read(runId, "brushup-criteria.md").then(
+    (content) => content.trim(),
+    () => ""
+  );
+  if (brushup) {
+    rubric = rubric ? `${rubric}\n\n## 追加観点（記事固有・補足）\n${brushup}` : brushup;
+  }
+  return rubric || undefined;
+}
 
 function parseMaxRounds(value: string): number {
   const n = Number(value);

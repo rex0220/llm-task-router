@@ -72,6 +72,11 @@ export type LineageMeta = {
   sourceExportPath?: string; // import 元
 };
 
+// 編集レビューの独立性に使うモデル印（editorial-review-spec §5.1）。
+export type ModelStamp = { provider: string; model: string };
+// 現在の final.md を最後に生成・改稿したモデル。import 由来は "external"。
+export type FinalAuthorModel = ModelStamp | "external";
+
 export type RunMeta = {
   runId: string;
   topic: string;
@@ -90,6 +95,9 @@ export type RunMeta = {
   // 更新リライト運用の拡張（§5）。既存 run との後方互換のため optional。
   published?: PublishedMeta;
   lineage?: LineageMeta;
+  // 編集レビューの独立性用（editorial-review-spec §5.1）。
+  finalAuthorModel?: FinalAuthorModel; // 現 final.md を最後に書いたモデル（import は "external"）
+  reviewerModel?: ModelStamp; // 直近の editorial_review 実応答モデル
 };
 
 export class RunStore {
@@ -151,6 +159,20 @@ export class RunStore {
     meta.steps[step] = { status: "done", file: fileName };
     await this.writeMeta(meta);
     return meta;
+  }
+
+  // final.md を最後に書いたモデルを記録する。markDone が meta を再読込・上書きするため、
+  // 記録は markDone の「後」に呼ぶこと（前に書くと markDone に消される）。
+  async setFinalAuthorModel(runId: string, model: FinalAuthorModel): Promise<void> {
+    const meta = await this.readMeta(runId);
+    meta.finalAuthorModel = model;
+    await this.writeMeta(meta);
+  }
+
+  async setReviewerModel(runId: string, model: ModelStamp): Promise<void> {
+    const meta = await this.readMeta(runId);
+    meta.reviewerModel = model;
+    await this.writeMeta(meta);
   }
 
   runPath(runId: string): string {
