@@ -25,9 +25,10 @@ const REVIEW_JSON = JSON.stringify({
 
 class FakeProvider implements ModelProvider {
   readonly calls: ProviderRequest[] = [];
+  constructor(private readonly json: string) {}
   async generate(request: ProviderRequest): Promise<ProviderResponse> {
     this.calls.push(request);
-    return { text: REVIEW_JSON };
+    return { text: this.json };
   }
 }
 
@@ -46,7 +47,6 @@ function editorialConfig(): RouterConfig {
       rewrite: t,
       markdown_format: t,
       title_suggestions: t,
-      // anthropic 2 + openai 1（両 provider をまたぐ）。
       editorial_review: {
         primary: { provider: "anthropic", model: "opus" },
         fallback: [
@@ -58,15 +58,19 @@ function editorialConfig(): RouterConfig {
   };
 }
 
-async function makeRun(finalAuthor?: ModelStamp | "external", opts: { imported?: boolean } = {}): Promise<{
-  store: RunStore;
-  router: ModelRouter;
-  runId: string;
-}> {
+function routerReturning(json: string): ModelRouter {
+  const fake = new FakeProvider(json);
+  return new ModelRouter({ anthropic: fake, openai: fake }, editorialConfig(), new RunLogger(tmpLogPath()));
+}
+
+async function makeRun(
+  finalAuthor?: ModelStamp | "external",
+  opts: { imported?: boolean; final?: string } = {}
+): Promise<{ store: RunStore; runId: string }> {
   const store = new RunStore(await mkdtemp(join(tmpdir(), "er-runs-")));
   const runId = "2026-06-20-er";
   await store.create(runId, "T", ["final"], "Qiita");
-  await store.save(runId, "final.md", "# T\n\n本文\n");
+  await store.save(runId, "final.md", opts.final ?? "# T\n\n本文\n");
   const meta = await store.readMeta(runId);
   if (finalAuthor !== undefined) {
     meta.finalAuthorModel = finalAuthor;
@@ -75,26 +79,26 @@ async function makeRun(finalAuthor?: ModelStamp | "external", opts: { imported?:
     meta.imported = true;
   }
   await store.writeMeta(meta);
-  const fake = new FakeProvider();
-  const router = new ModelRouter({ anthropic: fake, openai: fake }, editorialConfig(), new RunLogger(tmpLogPath()));
-  return { store, router, runId };
+  return { store, runId };
 }
+
+type LedgerView = { round: number; lastSeq: number; weaknesses: { id: string; status: string; severity: string }[] };
 
 describe("runEditorialReview (independent mode)", () => {
   it("excludes the final author's provider and reviews with a different provider", async () => {
-    const { store, router, runId } = await makeRun({ provider: "openai", model: "gpt" });
-    const result = await runEditorialReview(router, store, runId);
+    const { store, runId } = await makeRun({ provider: "openai", model: "gpt" });
+    const result = await runEditorialReview(routerReturning(REVIEW_JSON), store, runId);
 
-    expect(result.reviewerModel.provider).toBe("anthropic"); // openai を除外 → anthropic
+    expect(result.reviewerModel.provider).toBe("anthropic");
+    expect(result.round).toBe(1);
     expect(result.candidateCount).toBe(2); // major + minor（preference 除外）
     expect(result.verdict).toBe("needs-revision");
 
-    const meta = await store.readMeta(runId);
-    expect(meta.reviewerModel?.provider).toBe("anthropic");
-
     const normalized = JSON.parse(await store.read(runId, "editorial-review.json")) as {
-      weaknesses: { id: string; status: string; severity: string }[];
+      round: number;
+      weaknesses: { id: string; status: string }[];
     };
+    expect(normalized.round).toBe(1);
     expect(normalized.weaknesses).toHaveLength(3);
     expect(normalized.weaknesses.every((w) => w.status === "open")).toBe(true);
     expect(normalized.weaknesses[0].id).toMatch(/^W001-[0-9a-f]{8}$/);
@@ -102,30 +106,81 @@ describe("runEditorialReview (independent mode)", () => {
     const candidates = await store.read(runId, "editorial-instruction.candidates.md");
     expect(candidates).toContain("## major");
     expect(candidates).toContain("## minor");
-    // preference 弱みの内容は候補に含まれない（ヘッダ説明文に "preference" 語は出るので内容で判定）。
-    expect(candidates).not.toContain("節タイトルが硬い");
-  });
+    expect(candidates).not.toContain("節タイトルが硬い"); // preference 内容は候補に含まれない
 
-  it("falls through to openai when the final author is anthropic", async () => {
-    const { store, router, runId } = await makeRun({ provider: "anthropic", model: "opus" });
-    const result = await runEditorialReview(router, store, runId);
-    expect(result.reviewerModel.provider).toBe("openai");
+    // ラウンド成果物（継続の起点）
+    await expect(store.read(runId, "editorial-r1-before.md")).resolves.toContain("本文");
+    await expect(store.read(runId, "editorial-ledger.json")).resolves.toContain("W001");
   });
 
   it("--allow-same-provider drops only the exact model and uses another model of the same provider", async () => {
-    const { store, router, runId } = await makeRun({ provider: "anthropic", model: "opus" });
-    const result = await runEditorialReview(router, store, runId, { allowSameProvider: true });
-    expect(result.reviewerModel).toEqual({ provider: "anthropic", model: "sonnet" }); // opus は除外、sonnet へ
+    const { store, runId } = await makeRun({ provider: "anthropic", model: "opus" });
+    const result = await runEditorialReview(routerReturning(REVIEW_JSON), store, runId, { allowSameProvider: true });
+    expect(result.reviewerModel).toEqual({ provider: "anthropic", model: "sonnet" });
   });
 
-  it("exempts imported/external runs from the independence check", async () => {
-    const { store, router, runId } = await makeRun("external", { imported: true });
-    const result = await runEditorialReview(router, store, runId);
-    expect(result.reviewerModel).toEqual({ provider: "anthropic", model: "opus" }); // 除外なし → primary
+  it("exempts imported/external runs", async () => {
+    const { store, runId } = await makeRun("external", { imported: true });
+    const result = await runEditorialReview(routerReturning(REVIEW_JSON), store, runId);
+    expect(result.reviewerModel).toEqual({ provider: "anthropic", model: "opus" });
   });
 
   it("fails on a generated run with no recorded finalAuthorModel", async () => {
-    const { store, router, runId } = await makeRun(undefined); // 未記録・非 imported
-    await expect(runEditorialReview(router, store, runId)).rejects.toThrow(/finalAuthorModel/);
+    const { store, runId } = await makeRun(undefined);
+    await expect(runEditorialReview(routerReturning(REVIEW_JSON), store, runId)).rejects.toThrow(/finalAuthorModel/);
+  });
+});
+
+describe("runEditorialReview (continuation mode)", () => {
+  it("tracks resolution, keeps forgotten ids open, adds new weaknesses, and overwrites the latest alias", async () => {
+    const { store, runId } = await makeRun({ provider: "openai", model: "gpt" });
+    // round 1（独立）で台帳を作る
+    await runEditorialReview(routerReturning(REVIEW_JSON), store, runId);
+    const ledger1 = JSON.parse(await store.read(runId, "editorial-ledger.json")) as LedgerView;
+    const major = ledger1.weaknesses.find((w) => w.severity === "major")!;
+
+    // 本文を改稿（since-last 差分が出るように）
+    await store.save(runId, "final.md", "# T\n\n改稿後の本文\n");
+
+    // 継続 round 2: major(W001) を resolved に、minor(W002) は返さない（open のまま）、新規を1件
+    const contJson = JSON.stringify({
+      verdict: "publication-candidate",
+      scores: [{ axis: "構成", score: 9.5 }],
+      strengths: ["改善された"],
+      trackedWeaknesses: [{ id: major.id, status: "resolved", evidence: "前提を追記済み" }],
+      newWeaknesses: [{ severity: "minor", problem: "新しい用語ミス", recommendation: "直す" }],
+      summary: "ほぼ完成",
+    });
+
+    const result = await runEditorialReview(routerReturning(contJson), store, runId, { mode: "continuation" });
+    expect(result.round).toBe(2);
+    expect(result.mode).toBe("continuation");
+
+    const ledger2 = JSON.parse(await store.read(runId, "editorial-ledger.json")) as LedgerView;
+    expect(ledger2.round).toBe(2);
+    // W001(major) は resolved
+    expect(ledger2.weaknesses.find((w) => w.id === major.id)?.status).toBe("resolved");
+    // minor(用語揺れ) は trackedに無いので open のまま
+    const minorOrig = ledger1.weaknesses.find((w) => w.severity === "minor")!;
+    expect(ledger2.weaknesses.find((w) => w.id === minorOrig.id)?.status).toBe("open");
+    // 新規 weakness が採番されている（lastSeq 4 → W004）
+    expect(ledger2.lastSeq).toBe(4);
+    expect(ledger2.weaknesses.some((w) => w.id.startsWith("W004-"))).toBe(true);
+
+    // 候補は open|partial の major|minor のみ（resolved 除外）→ 元 minor + 新 minor = 2
+    expect(result.candidateCount).toBe(2);
+
+    // 最新 alias が round2 で上書き、ラウンド成果物も残る
+    const latest = JSON.parse(await store.read(runId, "editorial-review.json")) as { round: number };
+    expect(latest.round).toBe(2);
+    await expect(store.read(runId, "editorial-r2-review.json")).resolves.toContain("W004");
+    await expect(store.read(runId, "editorial-r2-before.md")).resolves.toContain("改稿後");
+  });
+
+  it("fails when continuation is requested without a prior ledger", async () => {
+    const { store, runId } = await makeRun({ provider: "openai", model: "gpt" });
+    await expect(runEditorialReview(routerReturning(REVIEW_JSON), store, runId, { mode: "continuation" })).rejects.toThrow(
+      /台帳/
+    );
   });
 });

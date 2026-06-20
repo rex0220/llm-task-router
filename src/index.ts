@@ -396,7 +396,7 @@ program
   .command("article:review-editorial")
   .description("Independent editorial review (reader/editor critique) by a model different from the body writer")
   .requiredOption("--run <runId>", "Run id")
-  .option("--mode <mode>", "Review mode (independent; continuation は第2段)", "independent")
+  .option("--mode <mode>", "Review mode: independent | continuation", "independent")
   .option("--allow-same-provider", "finalAuthor と同一 provider の別 model を許可")
   .option("--allow-same-model", "完全同一モデルまで許可（same-provider を含む）")
   .option("--config <path>", "Path to models.yaml", "config/models.yaml")
@@ -408,17 +408,18 @@ program
       allowSameModel?: boolean;
       config: string;
     }) => {
-      if (options.mode !== "independent") {
-        throw new Error(`Invalid --mode: ${options.mode}（現状 independent のみ。continuation は第2段）`);
+      if (options.mode !== "independent" && options.mode !== "continuation") {
+        throw new Error(`Invalid --mode: ${options.mode}（independent | continuation）`);
       }
       const { router, store } = await createRuntime(options.config);
       const criteria = await resolveEditorialCriteria(store, options.run);
       const result = await runEditorialReview(router, store, options.run, {
+        mode: options.mode as "independent" | "continuation",
         allowSameProvider: options.allowSameProvider,
         allowSameModel: options.allowSameModel,
         criteria,
       });
-      console.log(`runId: ${result.runId}`);
+      console.log(`runId: ${result.runId} (${result.mode}, round ${result.round})`);
       console.log(`reviewer: ${result.reviewerModel.provider}/${result.reviewerModel.model}`);
       console.log(`verdict: ${result.verdict}`);
       console.log(`review: runs/${result.runId}/editorial-review.md`);

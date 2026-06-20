@@ -11,7 +11,12 @@ export type ModelTask =
   | "title_suggestions"
   | "editorial_review";
 
-export type SchemaName = "ArticleBrief" | "ArticleOutline" | "ReviewResult" | "EditorialReview";
+export type SchemaName =
+  | "ArticleBrief"
+  | "ArticleOutline"
+  | "ReviewResult"
+  | "EditorialReview"
+  | "EditorialReviewContinuation";
 
 export type ModelRequest = {
   task: ModelTask;

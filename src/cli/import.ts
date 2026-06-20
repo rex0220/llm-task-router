@@ -46,14 +46,18 @@ function staleArtifacts(maxRefineRounds: number): string[] {
     "refine-summary.md",
     // 版の正本（§5.3）。--force 再 import では作り直す（古い版を回帰起点に残さない）。
     "update-base.md",
-    // 編集レビュー成果物。別本文向けの候補・確定指示を残すと編集長が stale を読む/revise する事故になる。
+    // 編集レビュー成果物。別本文向けの候補・確定指示・台帳を残すと編集長が stale を読む/revise する事故になる。
     "editorial-review.json",
     "editorial-review.md",
     "editorial-instruction.candidates.md",
     "editorial-instruction.md",
+    "editorial-ledger.json",
   ];
-  for (let n = 1; n <= maxRefineRounds; n++) {
+  // refine と editorial のラウンド別成果物を掃除（実ラウンド数は不定なので広めの上限で削る。remove は冪等）。
+  const rounds = Math.max(maxRefineRounds, 20);
+  for (let n = 1; n <= rounds; n++) {
     files.push(`refine-r${n}-review.json`, `refine-r${n}-review.md`, `refine-r${n}-instruction.md`, `refine-r${n}-before.md`);
+    files.push(`editorial-r${n}-review.json`, `editorial-r${n}-review.md`, `editorial-r${n}-before.md`);
   }
   return files;
 }

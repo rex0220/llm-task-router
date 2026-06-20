@@ -2,6 +2,7 @@ import type { SchemaName, SchemaRegistry } from "../router/types";
 import { ArticleBriefSchema } from "./ArticleBriefSchema";
 import { ArticleOutlineSchema } from "./ArticleOutlineSchema";
 import { EditorialReviewSchema } from "./EditorialReviewSchema";
+import { EditorialReviewContinuationSchema } from "./EditorialReviewContinuationSchema";
 import { ReviewResultSchema } from "./ReviewResultSchema";
 
 export const schemaRegistry: SchemaRegistry = {
@@ -9,6 +10,7 @@ export const schemaRegistry: SchemaRegistry = {
   ArticleOutline: ArticleOutlineSchema,
   ReviewResult: ReviewResultSchema,
   EditorialReview: EditorialReviewSchema,
+  EditorialReviewContinuation: EditorialReviewContinuationSchema,
 };
 
 // 各スキーマが要求するJSONキー仕様。プロンプト/修復依頼でモデルに提示する。
@@ -47,6 +49,23 @@ export const schemaHints: Record<SchemaName, string> = {
   "scores": [{ "axis": "string", "score": 0 }],
   "strengths": ["string"],
   "weaknesses": [{
+    "severity": "major | minor | preference",
+    "location": "string (任意)",
+    "problem": "string",
+    "recommendation": "string"
+  }],
+  "summary": "string"
+}`,
+  EditorialReviewContinuation: `{
+  "verdict": "publication-candidate | needs-revision | rework",
+  "scores": [{ "axis": "string", "score": 0 }],
+  "strengths": ["string"],
+  "trackedWeaknesses": [{
+    "id": "渡された既知のid",
+    "status": "open | partial | resolved",
+    "evidence": "string (任意)"
+  }],
+  "newWeaknesses": [{
     "severity": "major | minor | preference",
     "location": "string (任意)",
     "problem": "string",

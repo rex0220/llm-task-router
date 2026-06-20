@@ -33,8 +33,8 @@ model: opus
 - refine:   `llm-task-router article:refine --run <id> [--max-rounds <n=3>] [--min-severity <major>] [--until <clean|approved>]`
 - evaluate: `llm-task-router article:evaluate --run <id> [--min-severity <suggestion>] [--criteria-file <path>]`
 - revise:   `llm-task-router article:revise --run <id> (--instruction <text> | --instruction-file <path>)`
-- review-editorial: `llm-task-router article:review-editorial --run <id> [--allow-same-provider | --allow-same-model]`
-  - 本文の書き手と別 provider が編集レビュー。出力は editorial-review.md と editorial-instruction.candidates.md（候補）。採否は編集長が確定 → editorial-instruction.md → revise。
+- review-editorial: `llm-task-router article:review-editorial --run <id> [--mode independent|continuation] [--allow-same-provider | --allow-same-model]`
+  - 初回は independent、改稿後の再レビューは continuation（前回未解決＋since-last 差分で再レビューし、weakness の status を追跡）。出力は editorial-review.md と editorial-instruction.candidates.md（候補）。採否は編集長が確定 → editorial-instruction.md → revise。
 - export:   `llm-task-router article:export --run <id> --out <path> [--force]`
   - --run と --out は必須。出力されるのは final.md のみ。
   - `.env*` 等の秘密ファイル名は拒否。ワークスペース外への書き出しは警告。既存ファイルは --force なしでは上書きしない。
