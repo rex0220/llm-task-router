@@ -122,6 +122,21 @@ describe("verifyArtifacts", () => {
     expect(r.errors.join("\n")).toMatch(/claims\.json/);
   });
 
+  it("treats an unfilled gate template ('done / skipped') as not declared", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-unfilled";
+    await seedComplete(store, runId);
+    // 編集長がゲートを選ばずテンプレ初期値のまま残した状態
+    await store.save(
+      runId,
+      "publication-check.md",
+      "# Publication Check\n- GO/NO-GO: GO\n- factcheck: done / skipped\n- build-verify: skipped\n- build-verify summary: なし\n- editorial-review: done\n"
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/factcheck ゲート/);
+  });
+
   it("fails when a skipped gate has no skip reason", async () => {
     const store = await newStore();
     const runId = "2026-06-20-noskipreason";

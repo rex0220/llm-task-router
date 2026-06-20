@@ -27,7 +27,9 @@ async function readOrNull(store: RunStore, runId: string, file: string): Promise
 }
 
 function gateState(publicationCheck: string, gate: string): GateState {
-  const m = new RegExp(`^-\\s*${gate}:\\s*(done|skipped)\\b`, "im").exec(publicationCheck);
+  // 値は done か skipped の単独のみ有効。未記入テンプレの "done / skipped" を done と
+  // 誤読しないよう行末を固定する（no silent skip: 編集長に明示の選択を強制）。
+  const m = new RegExp(`^-\\s*${gate}:\\s*(done|skipped)\\s*$`, "im").exec(publicationCheck);
   if (!m) {
     return "missing";
   }
