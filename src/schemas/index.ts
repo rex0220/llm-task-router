@@ -17,6 +17,7 @@ export const schemaRegistry: SchemaRegistry = {
 export const schemaHints: Record<SchemaName, string> = {
   ArticleBrief: `{
   "title": "string",
+  "tags": ["string"],
   "targetReaders": ["string"],
   "goal": ["string"],
   "mainClaim": "string",
