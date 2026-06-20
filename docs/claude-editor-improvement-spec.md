@@ -100,6 +100,7 @@ runs/<runId>/sources.json
     "claim": "検証すべき主張",
     "type": "api|price|version|technical|general",
     "status": "verified|needs-source|incorrect|unverified",
+    "lifecycle": "present|removed",
     "sourceIds": ["S001"],
     "severity": "critical|major|minor|suggestion",
     "note": "修正指示または判断メモ"
@@ -107,7 +108,7 @@ runs/<runId>/sources.json
 ]
 ```
 
-> `claims.raw.json`（factchecker 出力）は上記から `id` を除いた idless 形。`location.anchorHash` を含む hash 採番・`id` 付与は `claims-normalize`（#5）が行う。再同定は `anchorHash` 主・`heading` 補助。
+> `claims.raw.json`（factchecker 出力）は idless 形: 上記から `id`・`location.anchorHash`・`lifecycle`・`sourceIds` を除き、代わりに `sourceRefs`（URL か raw source の一時 key）を持つ。`anchorHash` 算出・`id` 付与・`sourceRefs→sourceIds` 変換・`lifecycle` 更新は `claims-normalize`（#5）が行う。再同定は `anchorHash`（=claim 文 hash）主・`heading` 補助で、**heading は hash に含めない**。
 
 ### sources.json スキーマ
 ```json
@@ -123,10 +124,12 @@ runs/<runId>/sources.json
 ]
 ```
 
-### 設計メモで先に決めること（必須）
-1. **id 安定性**: `C001` を改稿後も同一 claim に振り直せる運用。`src/schemas/EditorialReviewContinuationSchema.ts` の weakness id 安定化（ラウンドをまたぐ追跡）を参照モデルにする。
-2. **location のズレ対策**: 本文改稿で見出しがズレる前提で、location を「検証時点のスナップショット」とするか claim 本文照合で再同定するかを決める。
-3. **検証責任**: JSON 生成は factchecker、スキーマ検証は CLI（#5 `verify-artifacts`）。この分界を明記。
+### 設計判断（P3a で確定。全文は [claims-schema-notes.md](claims-schema-notes.md)）
+1. **id 安定性**: `CNNN-<hash8>`、hash 対象は **claim 文のみ**（`anchorHash` と同一値）。台帳 `claims-ledger.json` で所有、editorial-review の `weaknessHash`/`mergeFound` を参照モデルに。
+2. **location**: `{ heading, anchorHash }`。再同定は `anchorHash` 主・`heading` 補助。**heading は hash に含めない**。
+3. **二軸状態**: `status`（検証）と `lifecycle`（present/removed）を分離。blocking = present かつ critical/major かつ status∈{unverified,needs-source,incorrect} → verify-artifacts で fail。
+4. **source 参照**: raw は `sourceRefs`（URL/key）、normalize が `SNNN`→`sourceIds` へ変換。
+5. **検証責任**: 生成=factchecker / 採番・台帳・zod 検証=コード（#5）。CLI は Web 取得を持たない。
 
 ### 役割分担（P3a で確定。詳細は [claims-schema-notes.md](claims-schema-notes.md)）
 - Web 取得・検証判断・**idless raw 生成**は `article-factchecker`。
@@ -186,32 +189,34 @@ runs/<runId>/build-verify-report.json
 
 ---
 
-## 5. `article:verify-artifacts`（CLI・検証のみ）
+## 5. `article:claims-normalize` ＋ `article:verify-artifacts`（CLI・採番＋検証）
 
 ### 目的
-各検証の中身を再判定せず、公開前に必要な成果物が揃っているかを機械的にチェックする軽量コマンド。外部通信を行わない。検証対象（#1 publication-check / #3 claims / #4 build-verify-report）が標準化された後に置く。
+(1) idless raw（`claims.raw.json` / `sources.raw.json`）を `SNNN`/`CNNN-<hash8>` 付きの `claims.json` / `sources.json` に正規化し台帳を維持する `claims-normalize`、(2) 公開前に必要な成果物の揃い／スキーマを再判定なしで機械チェックする `verify-artifacts`。いずれも外部通信を行わない。検証対象（#1 publication-check / #3 claims / #4 build-verify-report）が標準化された後に置く。詳細な採番・blocking 規則は [claims-schema-notes.md](claims-schema-notes.md)。
 
 ### コマンド
 ```bash
-llm-task-router article:verify-artifacts --run <runId>
+llm-task-router article:claims-normalize --run <runId>   # raw → ledger → claims.json/sources.json
+llm-task-router article:verify-artifacts --run <runId>   # 揃い・スキーマ・blocking をチェック
 ```
 
-### チェック項目
+### チェック項目（verify-artifacts）
 - `final.md` が存在する。
 - `final-review.md` が存在する。
 - `publication-check.md` が存在し、GO/NO-GO が記載されている。
 - `factcheck-instruction.md` または factcheck skip 理由がある。
 - `build-verify-report.json` が存在しスキーマ適合（`status: "skipped"` の場合は `skipReason` 非空）。コードを含む記事で `status: "skipped"` は警告。
 - `editorial-review.md` または editorial-review skip 理由がある。
-- `claims.json` が**スキーマに適合**し、unresolved な critical / major が残っていない。
+- `claims.json` が**スキーマに適合**し、**blocking な claim が残っていない**（blocking = `lifecycle=present` かつ `severity∈{critical,major}` かつ `status∈{unverified,needs-source,incorrect}`）。
 
 ### 仕様メモ
-- スキーマ検証は本コマンドの責務（#3 の「検証は CLI が持つ」を実装する箇所）。
-- 終了コードで合否を返し、欠落・スキーマ違反・未解決 critical/major を列挙する。
+- 採番・台帳は `claims-normalize`、スキーマ検証と blocking 判定は `verify-artifacts`（#3 の「検証は CLI が持つ」を実装する箇所）。
+- `verify-artifacts` は normalize 済み `claims.json` を前提とする（raw のみの run はエラーで normalize を促す）。
+- 終了コードで合否を返し、欠落・スキーマ違反・blocking claim を列挙する。
 - 外部通信なし＝安全方針と無衝突。
 
 ### 完了条件
-- 成果物が揃った run で pass、いずれか欠落・スキーマ違反・未解決 critical/major がある run で fail し、理由を列挙する。
+- 成果物が揃い blocking claim の無い run で pass、いずれか欠落・スキーマ違反・blocking claim がある run で fail し、理由を列挙する。
 
 ---
 

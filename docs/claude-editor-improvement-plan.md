@@ -65,7 +65,7 @@
 - **設計判断（P3a 由来）**: 安定 id（`CNNN-<hash8>`）の採番は **コード**が持つ（LLM に sha256 を決定的計算させない、editorial-ledger と同型）。よって P3b で factchecker が出すのは **id 無しの raw**。台帳化・採番・`claims.json` 生成は P5 の `claims-normalize`（コード）が担う。詳細は [claims-schema-notes.md](claims-schema-notes.md)。
 - **変更**:
   - `.claude/agents/article-factchecker.md` の出力規約に `claims.raw.json` / `sources.raw.json`（idless）を追加（`factcheck-instruction.md` は併存）。
-  - 各 claim は `claim` / `location.heading` / `type` / `status` / `sourceIds` / `severity` / `note`。hash・id は付けない。`severity` は `critical|major|minor|suggestion`。
+  - raw claim は `claim` / `location.heading` / `type` / `status` / **`sourceRefs`（URL か raw source の一時 key）** / `severity` / `note`。hash・id・anchorHash・sourceIds は付けない。raw source は `key` / `url` / `title` / `retrievedAt` / `sourceType` / `summary`（id なし）。`severity` は `critical|major|minor|suggestion`。
 - **検証**: factchecker 実行後、P3a の定義に適合した idless raw 2 ファイルが残る（P5 の normalize→検証を通る前提）。
 - **DoD**: raw が安定して生成され、フォーマット揺れがない。
 
