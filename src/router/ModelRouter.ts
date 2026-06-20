@@ -25,7 +25,15 @@ export class ModelRouter {
       throw new RouterError(`Schema is not registered: ${request.schemaName}`, "config");
     }
 
-    const candidates = [taskConfig.primary, ...(taskConfig.fallback ?? [])];
+    const candidates = filterCandidates([taskConfig.primary, ...(taskConfig.fallback ?? [])], request);
+    if (candidates.length === 0) {
+      // 独立性のための除外（excludeProviders/excludeCandidates）で全候補が落ちた。
+      // 応答後 reject ではなく、ここで早期に失敗させる（使える候補がそもそも無いと分かる）。
+      throw new RouterError(
+        `No model candidates remain for task ${request.task} after excludeProviders/excludeCandidates`,
+        "config"
+      );
+    }
     let lastError: unknown;
 
     for (const candidate of candidates) {
@@ -161,6 +169,21 @@ export class ModelRouter {
       text: `${JSON.stringify(validated.data, null, 2)}\n`,
     };
   }
+}
+
+// 候補列から provider 単位（excludeProviders）と (provider, model) 単位（excludeCandidates）で除外する。
+// 編集レビューの独立性: finalAuthor の provider を外す／--allow-same-provider 時は完全同一 model だけ外す。
+function filterCandidates(candidates: ModelCandidate[], request: ModelRequest): ModelCandidate[] {
+  const excludeProviders = request.excludeProviders ?? [];
+  const excludeCandidates = request.excludeCandidates ?? [];
+  if (excludeProviders.length === 0 && excludeCandidates.length === 0) {
+    return candidates;
+  }
+  return candidates.filter(
+    (c) =>
+      !excludeProviders.includes(c.provider) &&
+      !excludeCandidates.some((x) => x.provider === c.provider && x.model === c.model)
+  );
 }
 
 function withSchemaInstruction(input: string, schemaName: SchemaName): string {

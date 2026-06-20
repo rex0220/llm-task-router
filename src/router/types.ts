@@ -8,9 +8,10 @@ export type ModelTask =
   | "final_review"
   | "rewrite"
   | "markdown_format"
-  | "title_suggestions";
+  | "title_suggestions"
+  | "editorial_review";
 
-export type SchemaName = "ArticleBrief" | "ArticleOutline" | "ReviewResult";
+export type SchemaName = "ArticleBrief" | "ArticleOutline" | "ReviewResult" | "EditorialReview";
 
 export type ModelRequest = {
   task: ModelTask;
@@ -19,6 +20,10 @@ export type ModelRequest = {
   schemaName?: SchemaName;
   maxTokens?: number;
   temperature?: number;
+  // 候補から provider 単位で除外する（編集レビューの独立性: finalAuthor の provider を外す）。
+  excludeProviders?: string[];
+  // 候補から (provider, model) 単位で除外する（同 provider の別 model は使うが完全同一 model だけ落とす）。
+  excludeCandidates?: ModelCandidate[];
 };
 
 export type ModelUsage = {

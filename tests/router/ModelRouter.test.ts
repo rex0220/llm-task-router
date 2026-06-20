@@ -135,6 +135,47 @@ describe("ModelRouter", () => {
     expect((error as RouterError).message).not.toContain("truncated at max_tokens");
   });
 
+  it("excludeProviders skips same-provider candidates and picks a different provider", async () => {
+    const anthropic = new QueueProvider([{ text: "should not run" }]);
+    const openai = new QueueProvider([{ text: "openai ok" }]);
+    const router = new ModelRouter({ anthropic, openai }, testConfig(), new RunLogger(tmpLogPath()));
+
+    const result = await router.run({ task: "editorial_review", input: "x", excludeProviders: ["anthropic"] });
+
+    expect(result.provider).toBe("openai");
+    expect(anthropic.calls).toHaveLength(0); // 両 anthropic 候補が除外された
+    expect(openai.calls).toHaveLength(1);
+  });
+
+  it("excludeCandidates drops only the exact model and proceeds to the next (same-provider) candidate", async () => {
+    const anthropic = new QueueProvider([{ text: "sonnet ok" }]);
+    const openai = new QueueProvider([{ text: "should not run" }]);
+    const router = new ModelRouter({ anthropic, openai }, testConfig(), new RunLogger(tmpLogPath()));
+
+    // opus を完全同一 model として除外 → 次候補 anthropic/sonnet（同 provider 別 model）へ進む。
+    const result = await router.run({
+      task: "editorial_review",
+      input: "x",
+      excludeCandidates: [{ provider: "anthropic", model: "opus" }],
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("sonnet");
+    expect(openai.calls).toHaveLength(0);
+  });
+
+  it("fails when all candidates are excluded", async () => {
+    const anthropic = new QueueProvider([{ text: "x" }]);
+    const openai = new QueueProvider([{ text: "x" }]);
+    const router = new ModelRouter({ anthropic, openai }, testConfig(), new RunLogger(tmpLogPath()));
+
+    await expect(
+      router.run({ task: "editorial_review", input: "x", excludeProviders: ["anthropic", "openai"] })
+    ).rejects.toMatchObject({ kind: "config" });
+    expect(anthropic.calls).toHaveLength(0);
+    expect(openai.calls).toHaveLength(0);
+  });
+
   it("does not call providers for an invalid schemaName", async () => {
     const primary = new QueueProvider([{ text: "should not run" }]);
     const router = new ModelRouter(
@@ -197,6 +238,14 @@ function testConfig(): RouterConfig {
       rewrite: { primary: { provider: "primary", model: "p" } },
       markdown_format: { primary: { provider: "primary", model: "p" } },
       title_suggestions: { primary: { provider: "primary", model: "p" } },
+      // 独立性 filter のテスト用に両 provider をまたぐ3候補（anthropic 2 + openai 1）。
+      editorial_review: {
+        primary: { provider: "anthropic", model: "opus" },
+        fallback: [
+          { provider: "anthropic", model: "sonnet" },
+          { provider: "openai", model: "gpt" },
+        ],
+      },
     },
   };
 }

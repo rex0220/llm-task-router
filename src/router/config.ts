@@ -13,6 +13,7 @@ const modelTaskSchema = z.enum([
   "rewrite",
   "markdown_format",
   "title_suggestions",
+  "editorial_review",
 ]);
 
 const candidateSchema = z.object({

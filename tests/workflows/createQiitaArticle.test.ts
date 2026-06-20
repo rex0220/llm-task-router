@@ -595,6 +595,7 @@ function workflowConfig(): RouterConfig {
       rewrite: task,
       markdown_format: task,
       title_suggestions: task,
+      editorial_review: task,
     },
   };
 }

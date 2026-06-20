@@ -1,12 +1,14 @@
 import type { SchemaName, SchemaRegistry } from "../router/types";
 import { ArticleBriefSchema } from "./ArticleBriefSchema";
 import { ArticleOutlineSchema } from "./ArticleOutlineSchema";
+import { EditorialReviewSchema } from "./EditorialReviewSchema";
 import { ReviewResultSchema } from "./ReviewResultSchema";
 
 export const schemaRegistry: SchemaRegistry = {
   ArticleBrief: ArticleBriefSchema,
   ArticleOutline: ArticleOutlineSchema,
   ReviewResult: ReviewResultSchema,
+  EditorialReview: EditorialReviewSchema,
 };
 
 // 各スキーマが要求するJSONキー仕様。プロンプト/修復依頼でモデルに提示する。
@@ -39,6 +41,18 @@ export const schemaHints: Record<SchemaName, string> = {
     "recommendation": "string"
   }],
   "approved": "boolean (任意)"
+}`,
+  EditorialReview: `{
+  "verdict": "publication-candidate | needs-revision | rework",
+  "scores": [{ "axis": "string", "score": 0 }],
+  "strengths": ["string"],
+  "weaknesses": [{
+    "severity": "major | minor | preference",
+    "location": "string (任意)",
+    "problem": "string",
+    "recommendation": "string"
+  }],
+  "summary": "string"
 }`,
 };
 
