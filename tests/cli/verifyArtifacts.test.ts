@@ -14,17 +14,34 @@ const PUB_OK = [
   "- GO/NO-GO: GO",
   "- factcheck: done",
   "- build-verify: skipped",
+  "- build-verify summary: コードを含まない記事のため",
   "- editorial-review: done",
   "",
 ].join("\n");
 
-// 揃った run（factcheck done / build skipped / editorial done）を用意する。
+// 非 blocking な claims.json（verified は blocking ではない）。
+const CLAIMS_OK = JSON.stringify([
+  {
+    id: "C001-aaaaaaaa",
+    claim: "x",
+    location: { heading: "## h", anchorHash: "aaaaaaaa" },
+    type: "general",
+    status: "verified",
+    lifecycle: "present",
+    sourceIds: [],
+    severity: "minor",
+    note: "",
+  },
+]);
+
+// 揃った run（factcheck done＋claims.json / build skipped＋理由 / editorial done）。
 async function seedComplete(store: RunStore, runId: string): Promise<void> {
   await store.create(runId, "T", ["final"], "Qiita");
   await store.save(runId, "final.md", "# T\n本文\n");
   await store.save(runId, "final-review.md", "# review\n");
   await store.save(runId, "publication-check.md", PUB_OK);
   await store.save(runId, "factcheck-instruction.md", "- なし\n");
+  await store.save(runId, "claims.json", CLAIMS_OK);
   await store.save(runId, "editorial-review.md", "# editorial\n");
 }
 
@@ -52,7 +69,7 @@ describe("verifyArtifacts", () => {
     const store = await newStore();
     const runId = "2026-06-20-nogo";
     await seedComplete(store, runId);
-    await store.save(runId, "publication-check.md", "# Publication Check\n- factcheck: done\n- build-verify: skipped\n- editorial-review: done\n");
+    await store.save(runId, "publication-check.md", "# Publication Check\n- factcheck: done\n- build-verify: skipped\n- build-verify summary: なし\n- editorial-review: done\n");
     const r = await verifyArtifacts(store, runId);
     expect(r.ok).toBe(false);
     expect(r.errors.join("\n")).toMatch(/GO\/NO-GO/);
@@ -66,6 +83,39 @@ describe("verifyArtifacts", () => {
     const r = await verifyArtifacts(store, runId);
     expect(r.ok).toBe(false);
     expect(r.errors.join("\n")).toMatch(/build-verify ゲート/);
+  });
+
+  it("fails when build-verify report exists but the gate is not declared", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-reportnogate";
+    await seedComplete(store, runId);
+    // build-verify ゲート行を消すが report は置く → report 有無と独立に宣言を必須にする
+    await store.save(runId, "publication-check.md", "# Publication Check\n- GO/NO-GO: GO\n- factcheck: done\n- editorial-review: done\n");
+    await store.save(runId, "build-verify-report.json", JSON.stringify({ status: "passed", checkedBlocks: [], unverified: [] }));
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/build-verify ゲート/);
+  });
+
+  it("fails when factcheck=done but claims.json is missing", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-noclaims";
+    await seedComplete(store, runId);
+    await store.remove(runId, "claims.json");
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/claims\.json/);
+  });
+
+  it("fails when a skipped gate has no skip reason", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-noskipreason";
+    await seedComplete(store, runId);
+    // build-verify: skipped だが summary 行を外す
+    await store.save(runId, "publication-check.md", "# Publication Check\n- GO/NO-GO: GO\n- factcheck: done\n- build-verify: skipped\n- editorial-review: done\n");
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/build-verify summary/);
   });
 
   it("fails on blocking claims in claims.json", async () => {

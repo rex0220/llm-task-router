@@ -5,6 +5,10 @@ import { CLAIMS_FILE, isBlocking } from "./claimsNormalize";
 // 公開前ゲート: 成果物の揃い・スキーマ・blocking を機械的にチェックする（外部通信なし）。
 // 各検証の中身は再判定しない（factcheck/build/editorial の判断は各担当に委ねる）。
 // docs/claude-editor-improvement-spec.md #5 / docs/claims-schema-notes.md。
+//
+// no silent skip: 各ゲートは publication-check.md で done|skipped を必ず宣言する。
+// - done なら成果物（claims.json / build-verify-report.json / editorial-review.md）を必須にする。
+// - skipped なら publication-check.md 側の "<gate> summary:"（スキップ理由）を必須にする（P4 の skipReason と揃える）。
 
 export type VerifyArtifactsResult = {
   runId: string;
@@ -30,12 +34,17 @@ function gateState(publicationCheck: string, gate: string): GateState {
   return m[1].toLowerCase() === "done" ? "done" : "skipped";
 }
 
+// skipped ゲートのスキップ理由（publication-check の "<gate> summary:" 行）が埋まっているか。
+function hasSkipReason(publicationCheck: string, gate: string): boolean {
+  const m = new RegExp(`^-\\s*${gate} summary:\\s*(\\S.*)$`, "im").exec(publicationCheck);
+  return m !== null;
+}
+
 export async function verifyArtifacts(store: RunStore, runId: string): Promise<VerifyArtifactsResult> {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  const final = await readOrNull(store, runId, "final.md");
-  if (final === null) {
+  if ((await readOrNull(store, runId, "final.md")) === null) {
     errors.push("final.md が存在しません。");
   }
   if ((await readOrNull(store, runId, "final-review.md")) === null) {
@@ -45,28 +54,31 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
   const publicationCheck = await readOrNull(store, runId, "publication-check.md");
   if (publicationCheck === null) {
     errors.push("publication-check.md が存在しません（編集長が GO/NO-GO 前に作成する）。");
-  } else {
-    const go = /^-\s*GO\/NO-GO:\s*(\S.*)$/im.exec(publicationCheck);
-    if (!go) {
-      errors.push("publication-check.md に GO/NO-GO の記載がありません。");
-    }
+  } else if (!/^-\s*GO\/NO-GO:\s*\S.*$/im.test(publicationCheck)) {
+    errors.push("publication-check.md に GO/NO-GO の記載がありません。");
   }
 
   const pc = publicationCheck ?? "";
 
-  // --- factcheck ゲート ---
-  const factcheck = gateState(pc, "factcheck");
-  const factcheckInstruction = await readOrNull(store, runId, "factcheck-instruction.md");
-  const claimsRaw = await readOrNull(store, runId, CLAIMS_FILE);
-  if (factcheck === "missing") {
-    errors.push("publication-check.md に factcheck ゲート（done/skipped）の記載がありません。");
-  } else if (factcheck === "done" && factcheckInstruction === null && claimsRaw === null) {
-    errors.push("factcheck=done ですが factcheck-instruction.md も claims.json もありません。");
-  }
+  // 各ゲートは report 等の有無と独立に「宣言（done/skipped）」を必須にする。
+  const claimsJson = await readOrNull(store, runId, CLAIMS_FILE);
+  checkGate(pc, "factcheck", errors, {
+    done: () => {
+      if (claimsJson === null) {
+        errors.push("factcheck=done ですが normalized claims.json がありません（article:claims-normalize を実行）。");
+      }
+    },
+  });
 
-  // --- build-verify ゲート ---
-  const buildVerify = gateState(pc, "build-verify");
   const reportRaw = await readOrNull(store, runId, "build-verify-report.json");
+  checkGate(pc, "build-verify", errors, {
+    done: () => {
+      if (reportRaw === null) {
+        errors.push("build-verify=done ですが build-verify-report.json がありません。");
+      }
+    },
+  });
+  // report があれば宣言と独立にスキーマ検証する。
   if (reportRaw !== null) {
     const parsed = BuildVerifyReportSchema.safeParse(safeJson(reportRaw));
     if (!parsed.success) {
@@ -74,24 +86,20 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
     } else if (parsed.data.status === "skipped") {
       warnings.push("build-verify-report.json は status=skipped です（コードを含む記事なら要確認）。");
     }
-  } else if (buildVerify === "missing") {
-    errors.push("publication-check.md に build-verify ゲート（done/skipped）の記載がありません。");
-  } else if (buildVerify === "done") {
-    errors.push("build-verify=done ですが build-verify-report.json がありません。");
   }
 
-  // --- editorial-review ゲート ---
-  const editorial = gateState(pc, "editorial-review");
   const editorialReview = await readOrNull(store, runId, "editorial-review.md");
-  if (editorial === "missing") {
-    errors.push("publication-check.md に editorial-review ゲート（done/skipped）の記載がありません。");
-  } else if (editorial === "done" && editorialReview === null) {
-    errors.push("editorial-review=done ですが editorial-review.md がありません。");
-  }
+  checkGate(pc, "editorial-review", errors, {
+    done: () => {
+      if (editorialReview === null) {
+        errors.push("editorial-review=done ですが editorial-review.md がありません。");
+      }
+    },
+  });
 
-  // --- claims.json（あれば）スキーマ適合 + blocking ゼロ ---
-  if (claimsRaw !== null) {
-    const parsed = ClaimsSchema.safeParse(safeJson(claimsRaw));
+  // claims.json があればスキーマ適合 + blocking ゼロを検査する（factcheck=done では必須なので必ず通る）。
+  if (claimsJson !== null) {
+    const parsed = ClaimsSchema.safeParse(safeJson(claimsJson));
     if (!parsed.success) {
       errors.push(`claims.json がスキーマ不適合: ${formatIssues(parsed.error)}`);
     } else {
@@ -107,6 +115,28 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
   }
 
   return { runId, ok: errors.length === 0, errors, warnings };
+}
+
+// ゲート宣言の検査を共通化する: missing は常に error、done は成果物検査、skipped は理由必須。
+function checkGate(
+  pc: string,
+  gate: string,
+  errors: string[],
+  handlers: { done: () => void }
+): void {
+  const state = gateState(pc, gate);
+  if (state === "missing") {
+    errors.push(`publication-check.md に ${gate} ゲート（done/skipped）の記載がありません。`);
+    return;
+  }
+  if (state === "done") {
+    handlers.done();
+    return;
+  }
+  // skipped
+  if (!hasSkipReason(pc, gate)) {
+    errors.push(`${gate}=skipped ですが publication-check.md に "${gate} summary"（スキップ理由）がありません。`);
+  }
 }
 
 function safeJson(text: string): unknown {
