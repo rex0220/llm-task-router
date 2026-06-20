@@ -108,7 +108,7 @@ runs/<runId>/sources.json
 ]
 ```
 
-> `claims.raw.json`（factchecker 出力）は idless 形: 上記から `id`・`location.anchorHash`・`lifecycle`・`sourceIds` を除き、代わりに `sourceRefs`（URL か raw source の一時 key）を持つ。`anchorHash` 算出・`id` 付与・`sourceRefs→sourceIds` 変換・`lifecycle` 更新は `claims-normalize`（#5）が行う。再同定は `anchorHash`（=claim 文 hash）主・`heading` 補助で、**heading は hash に含めない**。
+> `claims.raw.json`（factchecker 出力）は idless 形: 上記から `id`・`location.anchorHash`・`lifecycle`・`sourceIds` を除き、代わりに `sourceRefs`（URL か raw source の一時 key）を持つ。観測範囲は `claims-normalize --scope full|diff`（既定 full）で渡し、`scope=full` のときだけ normalize が消えた claim を `lifecycle:removed` にする（raw 自体はラッパ不要の素直な配列）。`anchorHash` 算出・`id` 付与・`sourceRefs→sourceIds` 変換・`lifecycle` 更新は `claims-normalize`（#5）が行う。再同定は `anchorHash`（=claim 文 hash）主・`heading` 補助で、**heading は hash に含めない**。source の安定主キーは正規化 URL hash（raw `key` ではない）。
 
 ### sources.json スキーマ
 ```json
@@ -196,7 +196,7 @@ runs/<runId>/build-verify-report.json
 
 ### コマンド
 ```bash
-llm-task-router article:claims-normalize --run <runId>   # raw → ledger → claims.json/sources.json
+llm-task-router article:claims-normalize --run <runId> [--scope full|diff]   # raw → ledger → claims.json/sources.json（既定 full）
 llm-task-router article:verify-artifacts --run <runId>   # 揃い・スキーマ・blocking をチェック
 ```
 

@@ -14,7 +14,7 @@
 | location | `heading` は補助スナップショット、`anchorHash`（=claim hash）が再同定の主キー。**heading は hash に含めない** |
 | 二軸の状態 | `status`（検証: unverified/verified/needs-source/incorrect）と `lifecycle`（在否: present/removed）を**分離** |
 | blocking（ゲート fail） | `lifecycle=present` かつ `severity∈{critical,major}` かつ `status∈{unverified,needs-source,incorrect}`。`removed` と `verified`/minor 以下は数えない |
-| source 参照 | raw は `sourceRefs`（URL/一時キー）、normalize が `sources.json` の `SNNN` に変換して `sourceIds` を生成 |
+| source 参照 | raw は `sourceRefs`（URL/一時キー）、normalize が `sources.json` の `SNNN` に変換して `sourceIds` を生成。**SNNN の主キーは正規化 URL の hash**（raw `key` ではない） |
 | 検証責任 | 生成=factchecker / 採番・台帳・zod検証=コード / Web取得=agentのみ（CLIは持たない） |
 
 ---
@@ -25,13 +25,14 @@ editorial-review と同じ二層構造にする。
 
 - **安定アンカーは claim 文の内容 hash のみ**。`hash = anchorHash = sha256(normalize(claim))[:8]`。`normalize` は editorial と同様 `\s+→" "` で潰し `trim`。**hash の対象は `claim`（主張文）だけ**にする。`type`・`heading`・`severity`・`status`・`note`・`sourceIds` は可変メタで、変わっても同一 claim とみなす（type 再分類や見出し移動で別 claim になってはならない）。
   - → finding 反映: 以前は `[type, location.heading, claim]` を hash 対象としていたが、それだと**見出し変更だけで別 claim**になり anchorHash の目的（見出しズレに強い追跡）と矛盾する。claim 文のみに修正。
-- **表示 id は `CNNN-<hash8>`**。`claims-ledger.json` が `lastSeq` と `claims[]` を所有し、同一 hash の再出現は既存 id を再利用、新規だけ採番（`mergeFound` 相当）。**台帳から物理削除はしない**が、現 `final.md` に anchorHash が見つからない claim は `lifecycle: "removed"` に落とす（`closeMissing` 相当。§3 参照）。`status` は最後の値を保持しつつ、`removed` は blocking から外れる。
+- **表示 id は `CNNN-<hash8>`**。`claims-ledger.json` が `lastSeq` と `claims[]` を所有し、同一 hash の再出現は既存 id を再利用、新規だけ採番（`mergeFound` 相当）。**台帳から物理削除はしない**が、**今回の `claims.raw.json`（＝current observed set）に対応 hash が無い** claim は `lifecycle: "removed"` に落とす（`closeMissing` 相当。§3 参照）。`status` は最後の値を保持しつつ、`removed` は blocking から外れる。
 
 ```jsonc
-// claims-ledger.json（run 内・コードが所有）
+// claims-ledger.json（run 内・コードが所有。claims と sources を1ファイルで持つ）
 { "round": 0, "lastSeq": 0, "lastSourceSeq": 0,
   "claims": [ { "id": "C001-a1b2c3d4", "hash": "a1b2c3d4", "lifecycle": "present",
-    "firstRound": 1, "lastRound": 1, /* ...claim本体（status/severity/sourceIds/location...）... */ } ] }
+    "firstRound": 1, "lastRound": 1, /* ...claim本体（status/severity/sourceIds/location...）... */ } ],
+  "sources": [ { "id": "S001", "urlHash": "e5f6a7b8", "url": "https://...", /* title/retrievedAt/sourceType/summary */ } ] }
 ```
 
 ### 重要な含意 — 採番は「コード」が持つ（agent は idless raw を出す）
@@ -42,9 +43,11 @@ editorial-review の id は **パイプライン（CLI）が normalize 時に採
 
 - **P3b（agent 出力規約）**: factchecker は **id 無しの raw**（`claims.raw.json` / `sources.raw.json`）を出す。
   - raw claim: `claim`（主張文）, `location.heading`, `type`, `status`, **`sourceRefs`（URL か `sources.raw.json` 内の一時キー）**, `severity`, `note`。hash・id・`anchorHash`・`sourceIds` は付けない。
-  - raw source: `key`（一時ラベル。raw claim の `sourceRefs` が参照）, `url`, `title`, `retrievedAt`, `sourceType`, `summary`。`id`（SNNN）は付けない。
+  - raw source: `key`（**その raw 内だけの結合ラベル**。raw claim の `sourceRefs` が参照する）, `url`, `title`, `retrievedAt`, `sourceType`, `summary`。`id`（SNNN）は付けない。
   - → finding 反映: raw は idless なので、raw claim が正規化後の `S001` を参照できない。raw では URL/一時キー（`sourceRefs`）で繋ぎ、normalize が `SNNN` を採番して `sourceIds` に変換する。
-- **採番・台帳化（コード）**: idless raw → `claims-ledger.json` 反映 → `claims.json` / `sources.json`（id 付き公開ビュー）を生成する小さな**正規化ステップ**。これは editorial の `finalize`/`mergeFound` と同型。同時に (a) source の `key`→`SNNN` 採番、(b) claim の `sourceRefs`→`sourceIds` 変換、(c) `anchorHash` 算出、(d) 現 `final.md` 走査で `lifecycle` 更新、を行う。
+- **観測範囲 `scope` は normalize の CLI フラグで渡す**（agent にメタ欄を覚えさせない）。`claims-normalize --scope full|diff`（既定 full）。呼び手の編集長が全文 factcheck か P6 差分集中かを知っているので、raw 自体はラッパ不要の素直な配列（`claims.raw.json` / `sources.raw.json`）のまま。`scope=full` のときだけ normalize が `closeMissing`（→`removed`）を走らせ、`diff` では観測外の claim を removed にしない。
+- **source の安定主キーは正規化 URL の hash**（raw の `key` ではない）。`urlHash = sha256(canonicalUrl)[:8]`。`canonicalUrl` は scheme 小文字化・既定ポート除去・トラッキングクエリ（utm_* 等）除去・末尾スラッシュ正規化・fragment 除去まで施した形。`SNNN` はこの `urlHash` を主キーに `claims-ledger.json` の `sources[]` が所有し、同一 URL の再出現は既存 `SNNN` を再利用する（agent が `key` を毎回揺らしても ID は安定）。`key` は **claim↔source の raw 内結合にしか使わない**（安定 ID の素材にしない）。
+- **採番・台帳化（コード）**: idless raw → `claims-ledger.json` 反映 → `claims.json` / `sources.json`（id 付き公開ビュー）を生成する小さな**正規化ステップ**。これは editorial の `finalize`/`mergeFound` と同型。同時に (a) source の正規化URL hash→`SNNN` 採番、(b) claim の `sourceRefs`→`sourceIds` 変換、(c) `anchorHash` 算出、(d) 今回 raw を current observed set として `lifecycle` 更新、を行う。
 
 > **プランへの含意（要確認）**: 「stable id ＝ コード採番」を採ると、claims の id 安定化は **コードが要る** = P5（CLI）の射程に入る。P3b 単独（agent 規約だけ）では idless raw までしか固められない。
 > 対応案A（推奨）: P3b は idless raw の規約までを担当し、`claims-normalize`（raw→ledger→claims.json）を **P5 verify-artifacts と同じ CLI 追加**に含める（verify は normalize 後の claims.json を検証）。
@@ -78,10 +81,11 @@ unverified（初期）
   └─ incorrect      … 誤り。revise で本文修正して再検証 → verified、または本文から削除 → lifecycle:removed
 ```
 
-**lifecycle（在否）** — normalize が現 `final.md` の anchorHash 走査で機械的に更新:
+**lifecycle（在否）** — normalize が **今回の `claims.raw.json` を current observed set として台帳と突き合わせて**機械更新（`final.md` を直接走査して anchorHash を探すのではない。hash の素材＝claim 文は raw にしか無い）:
 ```
-present（現本文に anchorHash が在る） / removed（改稿で本文から消えた。台帳には残すが blocking から外す）
+present（今回の raw に同一 anchorHash の claim が在る） / removed（台帳にはあるが今回の raw に無い＝本文から消えた。台帳には残すが blocking から外す）
 ```
+- **`removed` 判定は全文 factcheck（独立フル観測）でのみ行う**。差分集中の再検証（P6, update-diff 起点）は観測範囲が部分的なので、raw に無いことを以て `removed` にしてはならない（editorial の `closeMissing` が独立フル読み時だけ走るのと同型）。この区別は `claims-normalize --scope full|diff`（既定 full）で normalize に伝える。
 
 - `severity`: `critical | major | minor | suggestion`（editorial や build-verify と統一）。
 - **blocking の定義（verify-artifacts / publication-check が参照する公開前ゲート条件）**:
@@ -97,7 +101,7 @@ present（現本文に anchorHash が在る） / removed（改稿で本文から
 | --- | --- | --- |
 | Web 取得・真偽判断・出典収集 | **article-factchecker（agent のみ）** | CLI は Web fetch を一切持たない（安全方針） |
 | idless raw（claims/sources）の生成 | article-factchecker | hash/id/anchorHash/sourceIds は付けない。source は `sourceRefs`（URL/key）で繋ぐ |
-| `SNNN`/`CNNN-<hash8>` 採番・`sourceRefs→sourceIds` 変換・`anchorHash` 算出・`lifecycle` 更新・`claims-ledger.json` 維持 | **コード（CLI normalize ステップ）** | 決定的処理は LLM に渡さない |
+| `SNNN`（主キー=正規化URL hash）/`CNNN-<hash8>` 採番・`sourceRefs→sourceIds` 変換・`anchorHash` 算出・`lifecycle` 更新・`claims-ledger.json` 維持 | **コード（CLI normalize ステップ）** | 決定的処理は LLM に渡さない |
 | zod スキーマ検証 | **コード（verify-artifacts, #5）** | 下記の zod 固定方針 |
 
 ### zod 固定方針（P5 実装の要所）
@@ -106,7 +110,7 @@ present（現本文に anchorHash が在る） / removed（改稿で本文から
 
 - `claims.json`: `id` は `/^C\d{3}-[0-9a-f]{8}$/`、`type` enum、`status` enum（unverified/verified/needs-source/incorrect）、`lifecycle` enum（present/removed）、`severity` enum、`sourceIds: string[]`（`/^S\d{3}$/` の sources id 参照）。`location` は `{ heading: string; anchorHash: string }`。
 - `claims.raw.json`（factchecker 出力）: 上記から `id`・`anchorHash`・`lifecycle`・`sourceIds` を除き、代わりに `sourceRefs: string[]`（URL か raw source の `key`）を持つ idless 形。
-- `sources.json`: `id`（`/^S\d{3}$/`）、`url` は `z.string().url()`、`retrievedAt` は日付、`sourceType` enum。`sources.raw.json` は `id` の代わりに `key`（一時ラベル）。
+- `sources.json`: `id`（`/^S\d{3}$/`）、`url` は `z.string().url()`、`retrievedAt` は日付、`sourceType` enum。台帳側は `urlHash`（正規化 URL hash＝SNNN の安定主キー）も持つ。`sources.raw.json` は `id` の代わりに `key`（raw 内結合ラベル）。
 - **build-verify-report.json も同時に zod 固定**（前回レビューの残リスク反映）: `skipReason` は `status:"skipped"` のとき非空を `.refine()`／`discriminatedUnion` で条件付き必須、`checkedBlocks[].result` enum、`unverified` の形を固定。verify-artifacts はこの zod を検証器として使う。
 
 ## 未決事項（P5 設計時に潰す）
@@ -116,5 +120,7 @@ present（現本文に anchorHash が在る） / removed（改稿で本文から
 ## 決定済み（参考）
 
 - claim→source の参照: **raw は `sourceRefs`（URL/一時 key）、normalize 後の公開ビューは `sourceIds`（`SNNN`）**。spec #3 の `sourceIds` は normalize 後の形を指す。
+- `SNNN` の安定主キーは **正規化 URL の hash**（`urlHash`）。raw の `key` は raw 内結合専用で安定 ID の素材にしない。
+- `lifecycle` の入力は **今回の `claims.raw.json`（current observed set）**。`final.md` 直接走査ではない。`removed` 判定は `claims-normalize --scope full` 時のみ。
 - hash 対象は **claim 文のみ**（`anchorHash` と id の hash8 は同一値）。heading/type/severity/status は hash に含めない。
 - 二軸: `status`（検証）と `lifecycle`（present/removed）。blocking は present かつ critical/major かつ status∈{unverified,needs-source,incorrect} で **fail**。

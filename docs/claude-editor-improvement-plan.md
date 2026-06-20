@@ -51,13 +51,15 @@
 > **このフェーズを飛ばして P3b に進まない。** #3 のコストはスキーマではなく運用の安定化にある。
 
 - **狙い**: claims 台帳の運用方針を実装前に固定し、後戻りを防ぐ。
-- **成果物**: `docs/claims-schema-notes.md`（新規）。
-- **決めること**:
-  1. **id 安定性**: 改稿後も同一 claim に同 id を振り直す運用。`src/schemas/EditorialReviewContinuationSchema.ts` の weakness id 安定化を参照モデルにする。
-  2. **location のズレ対策**: 「検証時点スナップショット」か「claim 本文照合で再同定」かを決める。
-  3. **status 遷移**: `verified|needs-source|incorrect|unverified` の遷移条件と、unresolved（critical/major）の定義。
-  4. **検証責任の分界**: JSON 生成 = factchecker / スキーマ検証 = CLI（#5）。「取得は持たない／検証は持つ」を明文化。
-- **DoD**: 上記4点が文書で確定し、P3b / P5 / P6 がこの定義を参照できる。
+- **成果物**: `docs/claims-schema-notes.md`（作成済み）。
+- **決定済み事項**（全文は [claims-schema-notes.md](claims-schema-notes.md)）:
+  1. **id 安定性**: `CNNN-<hash8>`、hash 対象は claim 文のみ（`anchorHash` と同一値）。`claims-ledger.json` で所有。`weaknessHash`/`mergeFound` を参照モデルに。
+  2. **location**: `{ heading, anchorHash }`。再同定は anchorHash 主・heading 補助（heading は hash に含めない）。
+  3. **二軸状態と blocking**: `status`（検証）と `lifecycle`（present/removed）を分離。blocking（ゲート fail）= `present` かつ `severity∈{critical,major}` かつ `status∈{unverified,needs-source,incorrect}`。
+  4. **source ID**: 安定主キーは正規化 URL hash（raw `key` ではない）。raw `sourceRefs` → normalize で `SNNN`/`sourceIds`。
+  5. **lifecycle 入力**: 今回の `claims.raw.json`（current observed set）と台帳の比較。`removed` 判定は全文 factcheck 時のみ。
+  6. **検証責任の分界**: JSON 生成 = factchecker / 採番・台帳・zod 検証 = CLI（#5）。「取得は持たない／検証は持つ」。
+- **DoD**: 上記が文書で確定し、P3b / P5 / P6 がこの定義を参照できる。 ✅
 
 ## Phase 3b — `claims.raw.json` / `sources.raw.json`（idless raw）出力規約
 
@@ -65,6 +67,7 @@
 - **設計判断（P3a 由来）**: 安定 id（`CNNN-<hash8>`）の採番は **コード**が持つ（LLM に sha256 を決定的計算させない、editorial-ledger と同型）。よって P3b で factchecker が出すのは **id 無しの raw**。台帳化・採番・`claims.json` 生成は P5 の `claims-normalize`（コード）が担う。詳細は [claims-schema-notes.md](claims-schema-notes.md)。
 - **変更**:
   - `.claude/agents/article-factchecker.md` の出力規約に `claims.raw.json` / `sources.raw.json`（idless）を追加（`factcheck-instruction.md` は併存）。
+  - raw は素直な配列2ファイル（`claims.raw.json` / `sources.raw.json`）。観測範囲は normalize の `--scope full|diff` フラグで渡す（full のみ removed 判定。agent にメタ欄を持たせない）。
   - raw claim は `claim` / `location.heading` / `type` / `status` / **`sourceRefs`（URL か raw source の一時 key）** / `severity` / `note`。hash・id・anchorHash・sourceIds は付けない。raw source は `key` / `url` / `title` / `retrievedAt` / `sourceType` / `summary`（id なし）。`severity` は `critical|major|minor|suggestion`。
 - **検証**: factchecker 実行後、P3a の定義に適合した idless raw 2 ファイルが残る（P5 の normalize→検証を通る前提）。
 - **DoD**: raw が安定して生成され、フォーマット揺れがない。
