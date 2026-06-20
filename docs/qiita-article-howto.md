@@ -251,7 +251,7 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 
 ファクトチェックの結果は機械可読な台帳にして、公開前に機械チェックする。
 
-1. factchecker は `factcheck-instruction.md` に加えて `claims.raw.json` / `sources.raw.json`（id 無しの台帳素材）を出す。修正を `article:revise` で適用したら、台帳を正規化する：
+1. factchecker は `factcheck-instruction.md` に加えて `claims.raw.json` / `sources.raw.json`（id 無しの台帳素材）を出す。**正規化は「最後に本文を変えた工程の後」に置く**（編集レビュー(6.6)の revise が主張・見出し・数値・API 記述に触れたら、normalize の前に factchecker に再確認させ raw を最新 `final.md` に合わせる。stale 台帳を防ぐ）。本文が確定したら台帳を正規化する：
 
 ```bash
 # raw（id 無し）→ id 付き claims.json/sources.json（採番・台帳化はコードが担う）
@@ -331,6 +331,7 @@ llm-task-router article:review-editorial --run 2026-06-18-ai-ir
 llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/2026-06-18-ai-ir/editorial-instruction.md
 
 # 5.8) 台帳の正規化（factcheck の raw → id 付き claims.json/sources.json）
+#      編集レビューが主張・見出し・数値・API に触れたなら、ここで再 factcheck して raw を最新化してから normalize する
 llm-task-router article:claims-normalize --run 2026-06-18-ai-ir --scope full
 
 # 5.9) 公開前ゲート（publication-check.md を書き出してから機械チェック。FAIL なら潰して再実行）
