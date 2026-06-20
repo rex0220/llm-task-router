@@ -113,10 +113,10 @@ present（今回の raw に同一 anchorHash の claim が在る） / removed（
 - `sources.json`: `id`（`/^S\d{3}$/`）、`url` は `z.string().url()`、`retrievedAt` は日付、`sourceType` enum。台帳側は `urlHash`（正規化 URL hash＝SNNN の安定主キー）も持つ。`sources.raw.json` は `id` の代わりに `key`（raw 内結合ラベル）。
 - **build-verify-report.json も zod 固定**（実装済み）: `skipReason` は `status:"skipped"` のとき非空を `.refine()` で条件付き必須、`checkedBlocks[].result` は `passed|failed|partial` enum、`unverified` は `{ id: string, reason: string, location?: string }[]`、`status="passed"` は `unverified` 空を `.refine()`。verify-artifacts はこの zod を検証器に使い、加えて status=failed/partial・空の passed・宣言不整合・claims↔sources の参照 integrity を判定する。
 
-## 未決事項（P5 設計時に潰す）
+## P5 で確定・実装済み
 
-- `claims-normalize` を独立コマンドにするか、`verify-artifacts` の前段に内包するか。→ 暫定: verify-artifacts は normalize 済み `claims.json` を要求し、normalize は別の軽量コマンド（`article:claims-normalize`）に切る方が責務が綺麗。P5 設計時に確定。
-- **`canonicalUrl` 正規化の細部は P5 で fixture テストに固定する**（後で揺れないように）。最低限カバー: `utm_*`／トラッキングクエリ除去、fragment 除去、末尾スラッシュ、既定ポート（:80/:443）除去、**クエリパラメータ順序の正規化**（ソート）、scheme/host 小文字化。これらが `urlHash` の安定性（＝`SNNN` 再利用）を左右する。
+- `claims-normalize` は **独立コマンド**にした（`article:claims-normalize`）。`verify-artifacts` は normalize 済み `claims.json` を前提とし、raw のみの run は factcheck=done で claims.json 不在として error → normalize を促す。責務分離が綺麗。
+- **`canonicalUrl` 正規化は fixture テストで固定済み**（`tests/cli/claimsNormalize.test.ts`）: `utm_*`／トラッキングクエリ除去、fragment 除去、末尾スラッシュ、既定ポート（:80/:443）除去、クエリパラメータ順序の正規化（ソート）、scheme/host 小文字化。これらが `urlHash` の安定性（＝`SNNN` 再利用）を担保する。
 
 ## 決定済み（参考）
 

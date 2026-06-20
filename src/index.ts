@@ -11,6 +11,7 @@ import { recordPublication } from "./cli/record-publication";
 import { writeUpdateDiff } from "./cli/updateDiff";
 import { normalizeClaims } from "./cli/claimsNormalize";
 import { verifyArtifacts } from "./cli/verifyArtifacts";
+import { writeClaimsRecheck } from "./cli/claimsRecheck";
 import { runEditorialReview } from "./workflows/editorialReview";
 import { initConfig } from "./cli/init";
 import { ExportIndex } from "./storage/ExportIndex";
@@ -261,6 +262,19 @@ program
     );
     console.log(`sources: runs/${summary.runId}/sources.json (${summary.sources})`);
     console.log(`blocking: ${summary.blocking}`);
+  });
+
+program
+  .command("article:claims-recheck")
+  .description("Select claims in changed sections (update-diff) for focused re-verification, prioritizing stale-prone types")
+  .requiredOption("--run <runId>", "Run id")
+  .action(async (options: { run: string }) => {
+    const store = new RunStore();
+    const result = await writeClaimsRecheck(store, options.run);
+    console.log(`runId: ${result.runId}`);
+    console.log(
+      `recheck: runs/${result.runId}/claims-recheck.md (${result.candidates.length} claims in ${result.changedSections} changed sections)`
+    );
   });
 
 program
