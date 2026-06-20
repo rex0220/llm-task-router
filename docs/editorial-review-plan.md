@@ -1,7 +1,8 @@
 # 生成AI 編集レビューの自動化 実装計画
 
 > 対象仕様: [editorial-review-spec.md](editorial-review-spec.md)（提案・Codex 12巡反映）
-> 作成: 2026-06-20
+> 作成: 2026-06-20・更新: 2026-06-20
+> 進捗: **第1段（WS1〜6 独立レビュー）＋ 第2段（WS7 継続レビュー）実装済み・テスト緑**。**第3段（WS8）はクローズ**（seed が現スタックで N/A・hybrid は実装済み・sampling/harness は将来枠。§WS8）。
 > 方針: 仕様 §11 の3段（独立 → 継続 → 安定化）に沿う。既存の `ModelRouter`/タスク機構・`evaluate→revise` パターン・`update-diff` を再利用し、**編集レビュアーはパイプラインのモデルタスク**（サブエージェントにしない、spec §12.1）。
 
 ---
@@ -118,10 +119,14 @@
 
 ## 4. 第3段（安定化・評価）
 
-### WS8（将来）
-- [router/types.ts](../src/router/types.ts) `TaskConfig` と provider request に **seed・サンプル数**を追加（複数サンプル中央値）。**非対応モデルには送らない**（既存 Model Notes 方針）。
-- ハイブリッド運用（継続＋定期独立フル読み）。
-- 手動 vs 自動レビューの一致率（総合スコア差・major 一致率・自動適用後に factcheck が捕える誤り件数）を測る評価ハーネス。
+### WS8（安定化・評価）— 調査結果に基づきクローズ（コード追加なし）
+
+実コードを確認した結果、当初想定の一部が現スタックで成立しないため、**実装は見送り、方針を明記してクローズ**する（決定: 2026-06-20）。
+
+- **seed = 現スタックで N/A**: OpenAI は **Responses API**（`client.responses.create`）で **seed 非対応**、かつ gpt-5 系は temperature も非対応（[OpenAIProvider.ts:66](../src/providers/OpenAIProvider.ts#L66) の `supportsOpenAITemperature`）。Anthropic（`messages.create`）も **seed 非対応**。→ `TaskConfig`/request に `seed` を足しても全モデルが「非対応＝送らない」になり **dead code**。**実装しない**。将来 seed 対応の provider/model を採用したらその時点で追加する。
+- **ハイブリッド運用（継続＋定期独立フル読み）= 実装済み**: 独立モードの `closeMissing()`（再検出されない既存 open/partial を resolved に）＋継続モードの status 追跡で、**定期的に独立フル読みを挟んでも候補が stale にならない**。WS7 で機構は成立。追加コードは不要（運用ガイダンスは editor-in-chief / review-editorial に記載済み: independent→continuation）。
+- **複数サンプル中央値 = 見送り（将来枠）**: seed が使えないため理屈上の安定化レバーだが、安定化するのは主に**スコアカード（informational）**で、実際の適用対象（candidates＝weakness）は ledger が追跡済み。**N×課金＋集約セマンティクスの複雑さに対し価値が中程度**のため今は作らない。
+- **評価ハーネス（手動 vs 自動 一致率）= 見送り（将来枠）**: オフラインの研究ツール。必要になった時点で別途。
 
 ---
 

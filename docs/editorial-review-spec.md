@@ -1,6 +1,6 @@
 # 生成AI 編集レビューの自動化 仕様案
 
-> ステータス: 提案（ドラフト・Codex レビュー12巡反映＋採否決定モデル＋Claude Code 設定 §12＋API設定影響 §13） / 対象: llm-task-router 記事パイプライン / 作成: 2026-06-20・更新: 2026-06-20
+> ステータス: 採用（第1段＋第2段 実装済み・第3段 WS8 クローズ。Codex レビュー12巡反映） / 対象: llm-task-router 記事パイプライン / 作成: 2026-06-20・更新: 2026-06-20
 > 関連: [update-article-spec.md](update-article-spec.md) / [qiita-article-howto.md](qiita-article-howto.md)
 
 ## 1. 目的
@@ -211,7 +211,7 @@ llm-task-router article:revise --run <id> \
 | 定量・標準概念の不足指摘 | 明示プロンプトで再現可。素だと浅い | rubric で「期待概念の不足を名指し」を要求 |
 | 事実・技術の誤り検出 | 同一モデルだと甘い（独立性低下） | 別モデル化＋factcheck 併用 |
 | 好み／読者層／トレードオフ判断 | 最も再現しにくい | 編集長/人間のトリアージを残す |
-| スコア再現性 | 単発は±数点ぶれる | 温度低め（現行設定で可）。**seed・複数サンプル中央値は現行 router 未対応**→ 第3段で `TaskConfig`/provider request に追加（§11） |
+| スコア再現性 | 単発は±数点ぶれる | 温度低め（現行設定で可）。**seed は provider API 側が非対応**（OpenAI Responses API / Anthropic messages）＝固定不可。安定化は複数サンプル中央値だが将来枠（§11 第3段はクローズ） |
 
 **効果（得られるもの）**: オンデマンドな反復（毎改訂・多記事）、rubric 固定による**比較可能なスコア**、早期フィードバック、工程の**透明性・ログ化**（「AI編集部」主旨に合致）。
 **限界（得られないもの）**: 正確性の保証（factcheck の代替不可）、鋭い専門指摘の“当たり”は確率的、同一モデルだと同質化。
@@ -224,7 +224,7 @@ llm-task-router article:revise --run <id> \
 - **ハルシネーション/過剰断定**: 編集レビューも誤指示を出しうる（実例: refine 審査が正しい記述を「直せ」と誤指示）。→ 断定ガード（§5.3）＋ **factcheck/build-verify を正確性ゲートとして維持**。自動適用だけで確定しない。
 - **アンカリング（継続モード）**: 前回追認で新鮮さ低下 → **独立フル読みを定期的に挟む**（§5.5）。
 - **過剰自動適用**: preference まで自動で当てると記事が好ましくない方向へドリフト → 編集長/人間トリアージ（§5.6）。
-- **変動**: 単発は不安定 → rubric 固定・低温度（現行可）。seed・複数サンプル中央値は router 拡張が要る（第3段、§11）。
+- **変動**: 単発は不安定 → rubric 固定・低温度（現行可）。seed は provider API 非対応で固定できない。複数サンプル中央値が安定化レバーだが将来枠（§11 第3段）。
 
 ## 11. 段階的導入
 
@@ -235,7 +235,10 @@ llm-task-router article:revise --run <id> \
    - `article:review-editorial --mode independent`（素読み）と出力正規化。
    - **運用接続（Claude Code 側の設定。詳細 §12）**: `.claude/agents/article-editor-in-chief.md` に編集レビュー工程＋③トリアージ責務を追記、`/review-editorial` command 新設、`.claude/settings.json` allowlist 追加、CLAUDE.md に原則1行（templates と repo 両方）。
 2. **第2段（継続レビュー）**: `--mode continuation`。**`EditorialReviewContinuation` schema ＋ `SchemaName` 追加**、**ラウンド別成果物**（`editorial-r<N>-review`/`editorial-r<N>-before.md`）、**前回 hash**、**weakness ID による解決追跡**、**since-last 差分**（§5.5）。編集長トリアージのスキル連携。
-3. **第3段（安定化・評価）**: ハイブリッド運用（継続＋定期独立読み）、**`TaskConfig`/provider request への seed・サンプル数の追加**（複数サンプル中央値、§9）、手動 vs 自動の一致率を測る評価ハーネス。
+3. **第3段（安定化・評価）— クローズ**（決定 2026-06-20。実装計画 [editorial-review-plan.md](editorial-review-plan.md) WS8）:
+   - **ハイブリッド運用（継続＋定期独立フル読み）は実装済み**（独立の `closeMissing` ＋継続の status 追跡）。
+   - **seed は現スタックで N/A**（OpenAI Responses API / Anthropic messages とも非対応）＝追加しても dead code。実装しない。
+   - **複数サンプル中央値・評価ハーネスは将来枠**（seed 不可ゆえの理屈上の安定化レバーだが、安定化対象は informational なスコアカードで価値中程度／ハーネスはオフライン研究ツール）。
 
 ## 12. Claude Code（進行・統括）側の設定変更
 
@@ -284,7 +287,7 @@ llm-task-router article:revise --run <id> \
 | `.env` / `api_key_env` | **原則変更なし** | reviewer は既存 provider を使うので既存キー（`OPENAI_API_KEY_ARTICLE` / `ANTHROPIC_API_KEY_ARTICLE`）を再利用。コスト/quota を分離したい場合のみ専用 `api_key_env` を任意で |
 | provider 実装（HTTP request 形） | **変更なし** | `OpenAIProvider`/`AnthropicProvider` の request 組み立ては不変。`editorial_review` も同じ呼び方 |
 | router の候補選択 | **小拡張（第1段）** | 独立性のため `finalAuthorModel.provider` を除外して候補を選ぶ機構が要る: **(a) `ModelRequest` に `excludeProviders?`/`candidatePolicy` を足し `ModelRouter.run()` が適用** or **(b) `editorial_review` 専用 wrapper で provider 事前解決**（§5.1）。前述「provider 実装は不変」と矛盾しない（HTTP 層ではなく候補選択層の追加） |
-| `TaskConfig` / provider request（seed・サンプル数） | **第3段で変更** | §11 第3段で seed・サンプル数を request に足す＝**ここで初めて呼び出しパラメータ設定が拡張**。モデルにより temperature/seed 非対応があるので「未対応パラメータは送らない」既存方針（README Model Notes）を踏襲 |
+| `TaskConfig` / provider request（seed） | **変更なし（N/A）** | OpenAI Responses API / Anthropic messages とも **seed 非対応**のため追加しない（足しても dead code）。複数サンプル中央値は将来枠（§11 第3段クローズ） |
 
 - **router の task enum/型 追加は必須**: `editorial_review` を `models.yaml` に足す**だけでは止まる**。`ModelTask` union と `modelTaskSchema` の enum（[router/types.ts](../src/router/types.ts) 等）に `editorial_review` を追加する（§11 第1段に含む）。`SchemaName` への `EditorialReview` 追加（§5.2）も同様にコード側の変更。
 - **既存タスク（create/refine/evaluate/revise/draft/final_review/rewrite）の設定は不変**。純粋に追加。
@@ -296,7 +299,7 @@ llm-task-router article:revise --run <id> \
 ## 付録: チャット繰り返し vs API 繰り返し（要点）
 
 - チャットは**自動でステートフル**（スレッド全体が文脈）＝“踏まえる”が自動だが、ドリフト・迎合・非再現が付随。
-- API は**ステートレス**＝前回は自分で渡す。代わりに**継続/独立を選べ、モデル・温度を固定でき再現的**（seed 対応を足せばさらに再現性が上がる。現行 router 未対応＝§11 第3段）。
+- API は**ステートレス**＝前回は自分で渡す。代わりに**継続/独立を選べ、モデル・温度を固定でき再現的**（seed は provider API 非対応で固定不可＝§11 第3段クローズ。安定化は複数サンプル中央値だが将来枠）。
 - よって「前回を踏まえた再レビュー」は API でも完全に可能（前回レビュー＋差分を入力に同梱するだけ）。むしろ**差分集中で蒸し返しを抑えつつ、独立読みで偏りをリセット**できる点が API の利点。
 
 ## 付録: Codex レビュー反映ログ（2026-06-20）
