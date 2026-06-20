@@ -180,7 +180,7 @@ llm-task-router article:verify-artifacts --run <runId>
 - `final-review.md` が存在する。
 - `publication-check.md` が存在し、GO/NO-GO が記載されている。
 - `factcheck-instruction.md` または factcheck skip 理由がある。
-- コードを含む記事では `build-verify-report.json` または build-verify skip 理由がある。
+- `build-verify-report.json` が存在しスキーマ適合（`status: "skipped"` の場合は `skipReason` 非空）。コードを含む記事で `status: "skipped"` は警告。
 - `editorial-review.md` または editorial-review skip 理由がある。
 - `claims.json` に unresolved な critical / major が残っていない。
 
