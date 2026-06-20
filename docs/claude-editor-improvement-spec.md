@@ -245,6 +245,7 @@ llm-task-router article:verify-artifacts --run <runId>   # 揃い・スキーマ
 
 ### 仕様
 - `article:update-diff` が出す `changed-sections.json` と `claims.json` を突き合わせ、変更セクションに属する claim を再検証対象に絞る。
+- 変更セクションの追加行から新規 claim が発生し得るため、`claims-recheck.md` は既存 claim の再検証対象だけでなく「新規 claim 抽出対象セクション」も列挙する。factchecker は全文再検証はしないが、update-diff の追加行から新しく検証すべき claim を抽出して raw に含める。
 - 価格・API・モデルID・バージョンなど陳腐化しやすい `type` を優先する。
 - 同一 URL・同一記事としての更新リライト（`record-publication`）と整合する。
 

@@ -48,6 +48,8 @@ const SOURCES_OK = JSON.stringify([
   { id: "S001", url: "https://example.com/doc", title: "Doc", retrievedAt: "2026-06-20", sourceType: "primary", summary: "" },
 ]);
 
+const BUILD_ENV = { node: "v20.18.0", typescript: "5.8.3" };
+
 // 揃った run（factcheck done＋claims.json/sources.json / build skipped＋理由 / editorial done）。
 async function seedComplete(store: RunStore, runId: string): Promise<void> {
   await store.create(runId, "T", ["final"], "Qiita");
@@ -106,7 +108,7 @@ describe("verifyArtifacts", () => {
     await seedComplete(store, runId);
     // build-verify ゲート行を消すが report は置く → report 有無と独立に宣言を必須にする
     await store.save(runId, "publication-check.md", "# Publication Check\n- GO/NO-GO: GO\n- factcheck: done\n- editorial-review: done\n");
-    await store.save(runId, "build-verify-report.json", JSON.stringify({ status: "passed", checkedBlocks: [], unverified: [] }));
+    await store.save(runId, "build-verify-report.json", JSON.stringify({ status: "passed", environment: BUILD_ENV, checkedBlocks: [], unverified: [] }));
     const r = await verifyArtifacts(store, runId);
     expect(r.ok).toBe(false);
     expect(r.errors.join("\n")).toMatch(/build-verify ゲート/);
@@ -210,6 +212,20 @@ describe("verifyArtifacts", () => {
     expect(r.errors.join("\n")).toMatch(/sources\.json/);
   });
 
+  it("fails when sources.json has an invalid retrievedAt date", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-baddate";
+    await seedComplete(store, runId);
+    await store.save(
+      runId,
+      "sources.json",
+      JSON.stringify([{ id: "S001", url: "https://example.com/doc", title: "Doc", retrievedAt: "", sourceType: "primary", summary: "" }])
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/sources\.json がスキーマ不適合/);
+  });
+
   it("fails on blocking claims in claims.json", async () => {
     const store = await newStore();
     const runId = "2026-06-20-blk";
@@ -251,7 +267,7 @@ describe("verifyArtifacts", () => {
     const runId = "2026-06-20-bvfailed";
     await seedComplete(store, runId);
     await store.save(runId, "publication-check.md", PUB_BUILD_DONE);
-    await store.save(runId, "build-verify-report.json", JSON.stringify({ status: "failed", checkedBlocks: [], unverified: [] }));
+    await store.save(runId, "build-verify-report.json", JSON.stringify({ status: "failed", environment: BUILD_ENV, checkedBlocks: [], unverified: [] }));
     const r = await verifyArtifacts(store, runId);
     expect(r.ok).toBe(false);
     expect(r.errors.join("\n")).toMatch(/status=failed/);
@@ -265,7 +281,7 @@ describe("verifyArtifacts", () => {
     await store.save(
       runId,
       "build-verify-report.json",
-      JSON.stringify({ status: "passed", checkedBlocks: [{ id: "B001", result: "failed" }], unverified: [] })
+      JSON.stringify({ status: "passed", environment: BUILD_ENV, checkedBlocks: [{ id: "B001", result: "failed" }], unverified: [] })
     );
     const r = await verifyArtifacts(store, runId);
     expect(r.ok).toBe(false);
@@ -295,7 +311,7 @@ describe("verifyArtifacts", () => {
     await store.save(
       runId,
       "build-verify-report.json",
-      JSON.stringify({ status: "passed", checkedBlocks: [{ id: "B001", result: "passed" }], unverified: [] })
+      JSON.stringify({ status: "passed", environment: BUILD_ENV, checkedBlocks: [{ id: "B001", result: "passed" }], unverified: [] })
     );
     const r = await verifyArtifacts(store, runId);
     expect(r.ok).toBe(true);
@@ -312,6 +328,7 @@ describe("verifyArtifacts", () => {
       "build-verify-report.json",
       JSON.stringify({
         status: "passed",
+        environment: BUILD_ENV,
         checkedBlocks: [{ id: "B001", result: "passed" }],
         unverified: [{ id: "B002", reason: "外部API依存で未検証" }],
       })
@@ -326,10 +343,25 @@ describe("verifyArtifacts", () => {
     const runId = "2026-06-20-bvemptypassed";
     await seedComplete(store, runId);
     await store.save(runId, "publication-check.md", PUB_BUILD_DONE);
-    await store.save(runId, "build-verify-report.json", JSON.stringify({ status: "passed", checkedBlocks: [], unverified: [] }));
+    await store.save(runId, "build-verify-report.json", JSON.stringify({ status: "passed", environment: BUILD_ENV, checkedBlocks: [], unverified: [] }));
     const r = await verifyArtifacts(store, runId);
     expect(r.ok).toBe(false);
     expect(r.errors.join("\n")).toMatch(/checkedBlocks が空/);
+  });
+
+  it("fails when a non-skipped build-verify-report has no environment.node", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-bvnoenv";
+    await seedComplete(store, runId);
+    await store.save(runId, "publication-check.md", PUB_BUILD_DONE);
+    await store.save(
+      runId,
+      "build-verify-report.json",
+      JSON.stringify({ status: "passed", checkedBlocks: [{ id: "B001", result: "passed" }], unverified: [] })
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/environment\.node/);
   });
 
   it("warns (not fails) when build-verify-report is a valid skip", async () => {

@@ -36,6 +36,7 @@ model: opus
    - id（B001…）はブロックごとに安定して振る。`unverified` には外部API・有料依存などで検証できなかったブロックを `{ id, reason, location? }` で入れる。
    - **`status: "passed"` は全ブロック検証済みで通った状態**。未検証が残る（`unverified` が空でない）なら `partial` にする（passed に混ぜない）。`verify-artifacts` が passed＋未検証を弾く。
    - `skipReason` は `status: "skipped"` のときの必須欄（コード無し・環境再現不能など）。それ以外では空文字でよい。
+   - `status: "passed"|"failed"|"partial"` のときは `environment.node` を必ず入れる（後から検証環境を追跡できるようにする）。
    - これは将来 `llm-task-router article:verify-artifacts` の検証対象になる証跡なので、スキーマを崩さない。
 
 更新リライト時（差分集中）:

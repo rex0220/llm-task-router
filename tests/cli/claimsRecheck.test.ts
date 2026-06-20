@@ -29,6 +29,10 @@ function section(heading: string): ChangedSection {
   return { heading, level: 2, added: 1, removed: 0 };
 }
 
+function removedOnlySection(heading: string): ChangedSection {
+  return { heading, level: 2, added: 0, removed: 1 };
+}
+
 describe("selectRecheckClaims", () => {
   it("selects only claims whose heading is in a changed section", () => {
     const claims = [
@@ -84,11 +88,45 @@ describe("writeClaimsRecheck", () => {
 
     const result = await writeClaimsRecheck(store, runId);
     expect(result.candidates.map((c) => c.id)).toEqual(["C001-aaaaaaaa"]);
+    expect(result.discoverySections).toEqual(["料金"]);
 
     const md = await store.read(runId, "claims-recheck.md");
     expect(md).toContain("C001-aaaaaaaa");
     expect(md).not.toContain("C002-bbbbbbbb");
     expect(md).toContain("優先（price / api / version）");
+    expect(md).toContain("新規 claim 抽出対象セクション");
+    expect(md).toContain("update-diff.md の追加行");
+  });
+
+  it("still asks factchecker to discover new claims when a changed section has no existing claim", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-newclaim";
+    await store.create(runId, "T", ["final"], "Qiita");
+    await store.save(runId, "claims.json", JSON.stringify([claim({ id: "C001-aaaaaaaa", heading: "## 無関係" })]));
+    await store.save(runId, "changed-sections.json", JSON.stringify([section("新機能")]));
+
+    const result = await writeClaimsRecheck(store, runId);
+    expect(result.candidates).toEqual([]);
+    expect(result.discoverySections).toEqual(["新機能"]);
+
+    const md = await store.read(runId, "claims-recheck.md");
+    expect(md).toContain("対象 claim: 0");
+    expect(md).toContain("- 新機能");
+    expect(md).toContain("新しく検証すべき claim");
+  });
+
+  it("does not ask for new claim discovery for sections with deletions only", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-delonly";
+    await store.create(runId, "T", ["final"], "Qiita");
+    await store.save(runId, "claims.json", JSON.stringify([claim({ id: "C001-aaaaaaaa", heading: "## 古い節" })]));
+    await store.save(runId, "changed-sections.json", JSON.stringify([removedOnlySection("古い節")]));
+
+    const result = await writeClaimsRecheck(store, runId);
+    expect(result.discoverySections).toEqual([]);
+    const md = await store.read(runId, "claims-recheck.md");
+    expect(md).toContain("## 新規 claim 抽出対象セクション");
+    expect(md).toContain("（なし）");
   });
 
   it("falls back to the supersedes run's claims.json when the current run has none", async () => {

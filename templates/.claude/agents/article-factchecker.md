@@ -53,8 +53,8 @@ model: opus
 - runs/<id>/update-diff.md と runs/<id>/changed-sections.json があれば、それが「今回変わった箇所」。**全文を再検証せず、変更箇所と周辺文脈に集中**する。
 - 入力は update-diff.md（＋必要に応じ final.md の該当セクション）。changed-sections.json の見出しを検証対象の地図に使う。
 - 変更で陳腐化した事実（価格・モデルID・バージョン・仕様）が現行と一致するかを優先的に裏取りする。
-- runs/<id>/claims-recheck.md があれば、それが「変更セクションに属し再検証すべき claim」の一覧（`llm-task-router article:claims-recheck` が生成。価格・API・バージョン優先）。**その claim だけ**を再検証する。
-- raw（claims.raw.json / sources.raw.json）も**変更箇所の claim だけ**で出す。編集長は `claims-normalize --scope diff` で適用し、観測外の既存 claim を誤って removed にしない（full 観測でないため）。
+- runs/<id>/claims-recheck.md があれば、それが「変更セクションに属し再検証すべき既存 claim」と「新規 claim 抽出対象セクション」の一覧（`llm-task-router article:claims-recheck` が生成。価格・API・バージョン優先）。**既存 claim の再検証**に加え、update-diff.md の追加行から**新しく検証すべき claim**（価格・API・モデルID・バージョン・技術仕様・固有名詞など）を抽出する。
+- raw（claims.raw.json / sources.raw.json）は**再検証した既存 claim と、変更箇所から新規抽出した claim だけ**で出す。編集長は `claims-normalize --scope diff` で適用し、観測外の既存 claim を誤って removed にしない（full 観測でないため）。
 
 原則:
 - 本文そのものは書き換えない（適用は編集長が `llm-task-router article:revise` で行う）。

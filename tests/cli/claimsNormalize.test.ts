@@ -132,7 +132,7 @@ describe("normalizeClaims", () => {
       rawClaim({ claim: "blk", severity: "critical", status: "needs-source" }),
       rawClaim({ claim: "ok-minor", severity: "minor", status: "incorrect" }),
       rawClaim({ claim: "ok-verified", severity: "major", status: "verified", sourceRefs: ["k"] }),
-    ], [{ key: "k", url: "https://example.com/x", title: "", retrievedAt: "", sourceType: "secondary", summary: "" }]);
+    ], [{ key: "k", url: "https://example.com/x", title: "", retrievedAt: "2026-06-20", sourceType: "secondary", summary: "" }]);
 
     const summary = await normalizeClaims(store, runId, "full");
     expect(summary.blocking).toBe(1);
@@ -217,5 +217,32 @@ describe("normalizeClaims", () => {
     const runId = "2026-06-20-f";
     await seed(store, runId, [rawClaim({ sourceRefs: ["https://nowhere.example/none"] })]);
     await expect(normalizeClaims(store, runId, "full")).rejects.toThrow(/does not resolve/);
+  });
+
+  it("rejects duplicate raw source keys before sourceRefs can resolve ambiguously", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-g";
+    await seed(
+      store,
+      runId,
+      [rawClaim({ status: "verified", sourceRefs: ["doc"] })],
+      [
+        { key: "doc", url: "https://example.com/a", title: "A", retrievedAt: "2026-06-20", sourceType: "primary", summary: "" },
+        { key: "doc", url: "https://example.com/b", title: "B", retrievedAt: "2026-06-20", sourceType: "primary", summary: "" },
+      ]
+    );
+    await expect(normalizeClaims(store, runId, "full")).rejects.toThrow(/duplicate source key/);
+  });
+
+  it("rejects raw sources without a YYYY-MM-DD retrievedAt", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-h";
+    await seed(
+      store,
+      runId,
+      [rawClaim({ status: "verified", sourceRefs: ["doc"] })],
+      [{ key: "doc", url: "https://example.com/a", title: "A", retrievedAt: "", sourceType: "primary", summary: "" }]
+    );
+    await expect(normalizeClaims(store, runId, "full")).rejects.toThrow();
   });
 });

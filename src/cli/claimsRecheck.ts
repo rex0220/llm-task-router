@@ -33,6 +33,7 @@ export type RecheckResult = {
   claimsSourceRunId: string; // claims.json をどの run から読んだか（current か supersedes 元か）
   changedSections: number;
   candidates: RecheckCandidate[];
+  discoverySections: string[];
 };
 
 // 見出しの表記ゆれを吸収（先頭の # と前後空白を落とす）。
@@ -67,7 +68,7 @@ function buildRecheckMarkdown(result: RecheckResult): string {
     `- 対象 claim: ${result.candidates.length}（陳腐化しやすい type を優先）`,
     ...(result.claimsSourceRunId !== result.runId ? [`- claims 台帳の参照元: ${result.claimsSourceRunId}（更新前の版）`] : []),
     "",
-    "> factchecker は **これらの claim だけ**を `--scope diff` で再検証する（全文再検証しない）。",
+    "> factchecker は **既存 claim の再検証**と、update-diff 内の**新規 claim 抽出**だけを `--scope diff` で行う（全文再検証しない）。",
     "> 再検証後は `claims.raw.json` を更新し `article:claims-normalize --scope diff` で戻す。",
     "",
   ];
@@ -84,6 +85,19 @@ function buildRecheckMarkdown(result: RecheckResult): string {
   };
   section("優先（price / api / version）", volatile);
   section("その他（technical / general）", others);
+  lines.push("## 新規 claim 抽出対象セクション", "");
+  if (result.discoverySections.length === 0) {
+    lines.push("（なし）", "");
+  } else {
+    lines.push(
+      "以下の変更セクションについて、update-diff.md の追加行から新しく検証すべき claim（価格・API・モデルID・バージョン・技術仕様・固有名詞など）を抽出し、claims.raw.json に含める。",
+      ""
+    );
+    for (const heading of result.discoverySections) {
+      lines.push(`- ${heading}`);
+    }
+    lines.push("");
+  }
   return lines.join("\n");
 }
 
@@ -122,7 +136,26 @@ export async function writeClaimsRecheck(store: RunStore, runId: string): Promis
   const { claims, sourceRunId } = await resolveClaims(store, runId);
 
   const candidates = selectRecheckClaims(claims, changed);
-  const result: RecheckResult = { runId, claimsSourceRunId: sourceRunId, changedSections: changed.length, candidates };
+  const discoverySections = selectDiscoverySections(changed);
+  const result: RecheckResult = {
+    runId,
+    claimsSourceRunId: sourceRunId,
+    changedSections: changed.length,
+    candidates,
+    discoverySections,
+  };
   await store.save(runId, RECHECK_FILE, buildRecheckMarkdown(result));
   return result;
+}
+
+// 追加行があるセクションは、既存 claims.json に無い新規 claim が生まれ得る。
+// CLI は真偽や claim 抽出を判断せず、factchecker が見るべき変更セクションを明示する。
+function selectDiscoverySections(changed: ChangedSection[]): string[] {
+  const headings = new Set<string>();
+  for (const section of changed) {
+    if (section.added > 0) {
+      headings.add(normalizeHeading(section.heading));
+    }
+  }
+  return [...headings];
 }
