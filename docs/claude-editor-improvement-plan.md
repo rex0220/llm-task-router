@@ -1,0 +1,122 @@
+# Claude Code 編集長モデル 改善 実行計画書
+
+- 仕様: [claude-editor-improvement-spec.md](claude-editor-improvement-spec.md)
+- 起案・所見: [claude-editor-improvement-proposal.md](claude-editor-improvement-proposal.md)
+- 本書の位置づけ: 仕様書（What）を、着手順・PR 単位・着手判断・検証手順・見積りに落とした進行計画（How / When）。
+
+## 進め方の方針
+
+- **1 フェーズ = 1 PR**。各フェーズは独立にレビュー・マージでき、後段ほど前段の成果物に依存する。
+- **証跡系（エージェント出力規約）を先、検証系（CLI）を後**に置く。検証する側は検証対象が標準化されてから着手する。
+- **#3 は実装前に設計メモを別 PR で確定**してから着手する（本計画の最大リスク。後述のゲート参照）。
+- ドキュメント／エージェント手順の変更はテスト対象外、CLI 実装（#5）は vitest を追加する。
+- ブランチは `main` 直push せず、フェーズごとに作業ブランチ → PR。
+
+## 全体ロードマップ
+
+| Phase | 対象（spec #） | 種別 | 依存 | 規模 | テスト |
+| --- | --- | --- | --- | --- | --- |
+| P1 | #1 publication-check.md | エージェント手順 | なし | XS | 不要 |
+| P2 | #2 README 章 | ドキュメント | なし | S | 不要 |
+| P3a | #3 設計メモ（先行ゲート） | ドキュメント | なし | S | 不要 |
+| P3b | #3 claims/sources 出力規約 | エージェント手順 | P3a | M | 不要 |
+| P4 | #4 build-verify-report.json | エージェント手順 | なし | S | 不要 |
+| P5 | #5 article:verify-artifacts | CLI（検証のみ） | P1・P3b・P4 | M〜L | 必要 |
+| P6 | #6 claim 差分再検証 | 運用＋CLI連携 | P3b 安定後 | L | 必要 |
+
+> P1・P2・P3a・P4 は相互に依存しないため並行・任意順で着手できる。クリティカルパスは **P3a → P3b → P5 → P6**。
+
+---
+
+## Phase 1 — `publication-check.md` 標準化
+
+- **狙い**: GO/NO-GO 判断とゲート状況を run の証跡として残す。最小コストで本丸価値（運用証跡）が出る。
+- **変更**:
+  - `.claude/agents/article-editor-in-chief.md` の進行手順 6 に「ゲート実施チェックリストを `runs/<id>/publication-check.md` に書き出してから GO/NO-GO を推奨」を追記。
+  - テンプレートは spec #1 の項目に合わせる。
+- **検証**: 1 記事を通し、`runs/<runId>/publication-check.md` が GO/NO-GO とゲート状況込みで残ることを目視確認。
+- **完了条件 (DoD)**: 編集長フローで silent に GO せず、必ずファイル証跡が残る。
+
+## Phase 2 — README「Claude Code を編集長として使う」章
+
+- **狙い**: 既存の役割分担を初見ユーザーへ入口で伝える。新規実装なし。
+- **変更**:
+  - `README.md` / `README.ja.md` に章を追加。`docs/qiita-article-howto.md` 末尾の「工程 ↔ 担当AI ↔ CLIコマンド」対応表を要約転記。
+  - 必須記述: 「本文を直接編集しない」「修正は `article:revise` 経由」「export はユーザー承認後」「`init` が `.claude/` と `CLAUDE.md` を配布＝主要価値」。
+- **検証**: README から各工程の slash command / agent / CLI 対応が一読で追えること。
+- **DoD**: 2 ファイル（en/ja）が同期。
+
+## Phase 3a — claims スキーマ設計メモ（先行ゲート・必須）
+
+> **このフェーズを飛ばして P3b に進まない。** #3 のコストはスキーマではなく運用の安定化にある。
+
+- **狙い**: claims 台帳の運用方針を実装前に固定し、後戻りを防ぐ。
+- **成果物**: `docs/claims-schema-notes.md`（新規）。
+- **決めること**:
+  1. **id 安定性**: 改稿後も同一 claim に同 id を振り直す運用。`src/schemas/EditorialReviewContinuationSchema.ts` の weakness id 安定化を参照モデルにする。
+  2. **location のズレ対策**: 「検証時点スナップショット」か「claim 本文照合で再同定」かを決める。
+  3. **status 遷移**: `verified|needs-source|incorrect|unverified` の遷移条件と、unresolved（critical/major）の定義。
+  4. **検証責任の分界**: JSON 生成 = factchecker / スキーマ検証 = CLI（#5）。「取得は持たない／検証は持つ」を明文化。
+- **DoD**: 上記4点が文書で確定し、P3b / P5 / P6 がこの定義を参照できる。
+
+## Phase 3b — `claims.json` / `sources.json` 出力規約
+
+- **依存**: P3a 完了。
+- **変更**:
+  - `.claude/agents/article-factchecker.md` の出力規約に `claims.json` / `sources.json` を追加（`factcheck-instruction.md` は併存）。
+  - スキーマは spec #3 準拠。`severity` は `critical|major|minor|suggestion`。
+- **検証**: factchecker 実行後、P3a の定義に適合した 2 ファイルが残る（P5 実装後はそのスキーマ検証を通る）。
+- **DoD**: 台帳が安定して生成され、フォーマット揺れがない。
+
+## Phase 4 — `build-verify-report.json` 出力規約
+
+- **依存**: なし（P5 の検証対象なので P5 より前）。
+- **変更**:
+  - `.claude/agents/article-build-verifier.md` の出力規約に `build-verify-report.json` を追加（`build-verify-instruction.md` は併存）。
+  - スキーマは spec #4 準拠。
+- **検証**: コードを含む記事の検証後、実行環境とブロック別結果を含む report が残る。
+- **DoD**: report が証跡として残り、P5 のスキーマ検証を通る。
+
+## Phase 5 — `article:verify-artifacts`（CLI・検証のみ）
+
+- **依存**: P1（publication-check）・P3b（claims）・P4（build-verify-report）。
+- **狙い**: 公開前に必要な成果物の揃いを機械的にチェック。外部通信なし＝安全方針と無衝突。
+- **変更**:
+  - `src/index.ts` に `article:verify-artifacts` コマンドを追加（`--run <runId>`）。
+  - 実装本体（例: `src/cli/verifyArtifacts.ts`）。チェック項目は spec #5。
+  - `claims.json` のスキーマ検証はここで持つ（zod 等、既存 `src/schemas` の流儀に合わせる）。
+  - 終了コードで合否、欠落・スキーマ違反・未解決 critical/major を列挙。
+- **テスト**: vitest で「揃った run → pass」「欠落 / スキーマ違反 / 未解決 major → fail と理由列挙」を網羅。fixture run を用意。
+- **DoD**: テスト緑、外部通信ゼロ、編集長フローの公開前ゲートとして使える。
+
+## Phase 6 — 公開済み記事更新での claim 差分再検証
+
+- **依存**: P3b の claims 運用が安定してから。
+- **狙い**: 更新リライト時に全文再検証せず、変更 claim だけ重点再検証。
+- **変更**:
+  - `article:update-diff` の `changed-sections.json` と `claims.json` を突き合わせ、変更セクションに属する claim を抽出する連携。
+  - 価格・API・モデルID・バージョンなど陳腐化しやすい `type` を優先。
+- **テスト**: 変更セクションに属する claim のみ抽出されることを fixture で検証。
+- **DoD**: 更新 run で対象 claim が正しく絞り込まれ、`record-publication` フローと整合。
+
+---
+
+## リスクと対応
+
+| リスク | 影響 | 対応 |
+| --- | --- | --- |
+| #3 の id / location 運用が後から崩れる | P5・P6 が手戻り | P3a を必須ゲート化。実装前に文書確定 |
+| エージェント生成 JSON のフォーマット揺れ | 台帳が信用できない | スキーマ検証を P5 の CLI に集約。生成は規約で縛る |
+| CLI に検証以上の責務が混入 | 薄い実行レイヤー思想が崩れる | 「取得は持たない／検証は持つ」を全フェーズの不変条件にする |
+| ドキュメント間の参照ズレ | 計画の不整合 | proposal / spec / plan の実施順を変更時に三者同期 |
+
+## マージ順の推奨
+
+1. P1（XS・即効） → 2. P2（独立） → 3. P4（独立） → 4. P3a（ゲート） → 5. P3b → 6. P5 → 7. P6
+
+P1・P2・P4 は依存がないため先行マージしてよい。P3a は P3b 着手前までに必ず確定する。
+
+## 進捗管理
+
+- 各フェーズは PR の本文に DoD チェックリストを貼り、満たした項目をチェックする。
+- proposal / spec / 本計画の実施順は常に一致させる（変更時は三者同時更新）。
