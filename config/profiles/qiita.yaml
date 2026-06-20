@@ -6,6 +6,7 @@
 platform: Qiita
 language: ja
 criteria_file: config/criteria/default.md
+editorial_criteria_file: config/criteria/editorial.md
 style: |
   Qiita の作法に従う。本文は Markdown。
   - コードブロックは言語指定つきのフェンスを使う。

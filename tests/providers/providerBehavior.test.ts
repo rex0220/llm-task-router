@@ -47,6 +47,10 @@ function providerConfig(): RouterConfig {
       rewrite: { primary: { provider: "openai", model: "gpt-4o" } },
       markdown_format: { primary: { provider: "openai", model: "gpt-4o" } },
       title_suggestions: { primary: { provider: "openai", model: "gpt-4o" } },
+      editorial_review: {
+        primary: { provider: "anthropic", model: "claude-3-5-sonnet-latest" },
+        fallback: [{ provider: "openai", model: "gpt-4o" }],
+      },
     },
   };
 }

@@ -39,6 +39,8 @@ describe("importArticle", () => {
     expect(meta.profile).toBe("qiita");
     expect(Object.values(meta.steps).every((s) => s.status === "done")).toBe(true);
     expect(meta.steps.final.file).toBe("final.md");
+    // import 由来は外部/人間作 → finalAuthorModel は "external"（編集レビューの独立性チェック免除）。
+    expect(meta.finalAuthorModel).toBe("external");
   });
 
   it("saves the brush-up brief as brushup-criteria.md", async () => {
@@ -83,6 +85,36 @@ describe("importArticle", () => {
     await expect(store.read(runId, "review.json")).rejects.toThrow();
     const meta = await store.readMeta(runId);
     expect(meta.imported).toBe(true);
+  });
+
+  it("force replace removes stale editorial-review artifacts, the ledger, and round artifacts (incl. N>20)", async () => {
+    const store = await newStore();
+    const from = await writeArticle("# T\n本文\n");
+
+    const { runId } = await importArticle(store, { from, profile: "qiita" });
+    // 別本文向けの編集レビュー成果物・台帳・ラウンド成果物が残っている状況を再現
+    await store.save(runId, "editorial-review.json", "{}");
+    await store.save(runId, "editorial-review.md", "古い講評");
+    await store.save(runId, "editorial-instruction.candidates.md", "古い候補");
+    await store.save(runId, "editorial-instruction.md", "古い確定指示");
+    await store.save(runId, "editorial-ledger.json", '{"round":21}');
+    await store.save(runId, "editorial-r1-before.md", "r1");
+    await store.save(runId, "editorial-r21-review.json", "{}"); // 20 を超えるラウンド
+    await store.save(runId, "refine-r25-before.md", "old refine");
+
+    await importArticle(store, { from, runId, profile: "qiita", force: true });
+    for (const f of [
+      "editorial-review.json",
+      "editorial-review.md",
+      "editorial-instruction.candidates.md",
+      "editorial-instruction.md",
+      "editorial-ledger.json",
+      "editorial-r1-before.md",
+      "editorial-r21-review.json",
+      "refine-r25-before.md",
+    ]) {
+      await expect(store.read(runId, f)).rejects.toThrow();
+    }
   });
 
   it("flags front-matter without removing it", async () => {

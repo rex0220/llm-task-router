@@ -114,6 +114,8 @@ export async function reviseQiitaFinal(
   const text = stripWrappingCodeFence(response.text);
   await store.save(runId, "final.md", text);
   await store.markDone(runId, "final", "final.md");
+  // final.md を書いたモデルを記録（markDone の後。編集レビューの独立性に使う）。
+  await store.setFinalAuthorModel(runId, { provider: response.provider, model: response.model });
   const warnings = detectWrapText(text);
   onEvent({
     type: "step:done",
@@ -709,6 +711,10 @@ export async function runQiitaArticle(
       } catch {
         // schema 検証済みなので通常は到達しない。失敗しても本体フローは止めない。
       }
+    }
+    // final.md を書いた final step（rewrite）のモデルを記録（markDone の後）。
+    if (step.name === "final") {
+      await store.setFinalAuthorModel(runId, { provider: response.provider, model: response.model });
     }
     onEvent({
       type: "step:done",

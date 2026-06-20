@@ -79,6 +79,11 @@ llm-task-router article:update-diff --run 2026-06-16-my-article
 # 公開を記録する: meta.published と export/index.json を更新（export とは別ステップ）
 llm-task-router article:record-publication --run 2026-06-16-my-article \
   --slug my-article --url https://qiita.com/.../items/xxxx --article-id xxxx --article-version 2
+
+# 編集レビュー（読者・編集視点の批評）。本文の書き手と別 provider のモデルが担当
+llm-task-router article:review-editorial --run 2026-06-16-example
+# 改稿後の再レビュー（解決済みを追跡）
+llm-task-router article:review-editorial --run 2026-06-16-example --mode continuation
 ```
 
 `--topic-file` のとき `runId` はファイル名から生成されます（例: `ai-ir.txt` → `2026-06-16-ai-ir`）。`--run <runId>` で明示固定もできます。成果物は `runs/<runId>/` に保存されます。
@@ -149,6 +154,12 @@ llm-task-router article:evaluate --run <runId> --min-severity minor
 - `article:import --from export/<slug>.md --supersedes <前の run> --root <根 run>` で `update-base.md` を固定保存し、`lineage` を `meta.json` に記録します。
 - `article:update-diff --run <id>` は `update-base.md` と現 `final.md` を比較し、`update-diff.md`（unified 風の差分）と `changed-sections.json`（見出しごとの追加/削除行数）を書き出します。ファクトチェック／ビルド検証が**変更セクションだけ**を見られるようになります。
 - `article:record-publication --run <id> --slug <slug> --url <url> --article-id <id> --article-version <n>` は `meta.published` と `export/index.json` 台帳（slug → 最新 run / URL）を**同時に**更新します。`export`（`final.md` をコピーするだけ）とは意図的に別ステップで、export はローカル書き出し、`record-publication` は公開の記録です。同一 slug の version 退行を防ぎます（完全一致の再実行は no-op、意図的な訂正は `--force`）。フラグは `--article-version`（CLI 全体の version フラグ `--version` との衝突を避けるため）。`export` と同様に公開相当の操作なので編集長 allowlist に**入れず**、毎回プロンプトが出ます。
+
+### 編集レビュー（独立したレビュアーの目）
+
+`article:review-editorial --run <id>` は、**本文の書き手と別の provider のモデル**で読者・編集視点の批評を回します。独立性は実行時に担保され、`finalAuthorModel` の provider を reviewer 候補から除外します（`models.yaml` の `editorial_review` タスクは両 provider をまたぐので必ず別 provider が残る）。`--allow-same-provider` は同 provider の別 model を許可（完全同一 model は依然除外）、`--allow-same-model` は完全同一まで許可。import（外部/人間作）の run は免除。審査（`evaluate`/`refine`）・外部のファクト/ビルド検証と並ぶ**第3のレビューレンズ**で、**正確性ゲートではありません**（事実はファクトチェックが担当）。
+
+出力はスコアカード（`editorial-review.json` / `editorial-review.md`）と**候補**ファイル（`editorial-instruction.candidates.md`、`major`/`minor` かつ `open`/`partial` のみ。`preference`・`resolved` は除外）。候補は自動適用されません。編集長が採用分を `editorial-instruction.md` に確定し、`article:revise --instruction-file` で適用します。`--mode continuation` は改稿後の再レビューで、前回レビュー時点の本文と現 `final.md` の差分（累積でなく since-last）を見て、前回の未解決指摘の解決状況を追跡します。run 内台帳（`editorial-ledger.json`）が `WNNN-<hash8>` の weakness id を所有してラウンドをまたいで安定させ、定期的な独立フル読みは再検出されなくなった指摘を閉じます。
 
 ## 実行推移の表示
 

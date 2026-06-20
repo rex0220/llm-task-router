@@ -106,6 +106,17 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
   );
 
   it(
+    "article:review-editorial --help shows --mode and independence override flags",
+    () => {
+      const out = run(["article:review-editorial", "--help"]);
+      expect(out).toContain("--mode");
+      expect(out).toContain("--allow-same-provider");
+      expect(out).toContain("--allow-same-model");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
     "article:record-publication --help shows --article-version (not the reserved --version)",
     () => {
       const out = run(["article:record-publication", "--help"]);

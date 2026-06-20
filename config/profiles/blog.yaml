@@ -2,6 +2,7 @@
 platform: ブログ
 language: ja
 criteria_file: config/criteria/default.md
+editorial_criteria_file: config/criteria/editorial.md
 style: |
   一般的な技術ブログの作法に従う。本文は標準的な Markdown。
   - プラットフォーム独自の記法（:::note など）は使わず、標準 Markdown のみで書く。
