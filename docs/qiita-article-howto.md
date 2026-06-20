@@ -214,7 +214,7 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 
 1. 外側AI（`article-build-verifier` 役）に `runs/<runId>/final.md` を読ませる。
 2. **使い捨ての一時ディレクトリ**に、記事掲載どおりの `package.json` / `tsconfig` で最小プロジェクトを再現し、`npm install` → `tsc` →（必要なら）実行して期待出力と一致するか確認させる。
-3. 不通・不一致を `runs/<runId>/build-verify-instruction.md` にまとめさせ、ツールに戻す：
+3. 検証の証跡を `runs/<runId>/build-verify-report.json`（実行環境・ブロック別結果。コード無し/スキップ時は `status: "skipped"` ＋ `skipReason`）に残させ、不通・不一致があれば `runs/<runId>/build-verify-instruction.md` にまとめさせ、ツールに戻す：
 
 ```bash
 llm-task-router article:revise --run 2026-06-18-ai-ir \
@@ -227,7 +227,7 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 
 ## 6.6 編集レビュー（既定で実施・読者/編集視点の批評）
 
-審査（refine の judge）・事実検証とは別に、**本文の書き手と別 provider のモデル**で「読者・編集視点の批評」を回せる。構成・読みやすさ・専門性の届き方を見る**第3のレンズ**で、**正確性ゲートではない**（事実はファクトチェックが担当）。工程としては **既定で実施**し、回さない場合（純粋な再掲・ごく軽微な修正等）は**スキップ理由を明記**する（silent skip を禁止。GO/NO-GO 前のゲート実施チェックリストで factcheck / build-verify と並べて可視化する）。
+審査（refine の judge）・事実検証とは別に、**本文の書き手と別 provider のモデル**で「読者・編集視点の批評」を回せる。構成・読みやすさ・専門性の届き方を見る**第3のレンズ**で、**正確性ゲートではない**（事実はファクトチェックが担当）。工程としては **既定で実施**し、回さない場合（純粋な再掲・ごく軽微な修正等）は**スキップ理由を明記**する（silent skip を禁止。GO/NO-GO 前に編集長が `runs/<id>/publication-check.md` へ書き出すゲート実施チェックリストで factcheck / build-verify と並べて可視化する）。
 
 ```bash
 # 初回（独立レビュー）。本文の書き手と別 provider が担当（独立性は CLI が既定で担保）
@@ -244,6 +244,34 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 
 - 改稿後の再レビューは `--mode continuation`（前回レビュー時点との差分で再評価し、前回指摘の解決を追跡。weakness の id はラウンドをまたいで安定）。
 - 独立性: 既定で `finalAuthorModel` の provider を reviewer から除外。緩めるなら `--allow-same-provider` / `--allow-same-model`。import（外部/人間作）の run は免除。`llm-task-router init` の `.claude/` には `/review-editorial` コマンドと編集長の③トリアージ手順が入る。
+
+---
+
+## 6.7 公開前ゲート（claims-normalize ＋ verify-artifacts）
+
+ファクトチェックの結果は機械可読な台帳にして、公開前に機械チェックする。
+
+1. factchecker は `factcheck-instruction.md` に加えて `claims.raw.json` / `sources.raw.json`（id 無しの台帳素材）を出す。**正規化は「最後に本文を変えた工程の後」に置く**（編集レビュー(6.6)の revise が主張・見出し・数値・API 記述に触れたら、normalize の前に factchecker に再確認させ raw を最新 `final.md` に合わせる。stale 台帳を防ぐ）。本文が確定したら台帳を正規化する：
+
+```bash
+# raw（id 無し）→ id 付き claims.json/sources.json（採番・台帳化はコードが担う）
+llm-task-router article:claims-normalize --run 2026-06-18-ai-ir --scope full
+```
+
+2. 編集長が `runs/<id>/publication-check.md` にゲート実施チェックリストを書き出したら、公開前ゲートを機械チェックする：
+
+```bash
+# 成果物の揃い・スキーマ・出典 integrity・build-verify 成否・blocking を検査（外部通信なし）
+llm-task-router article:verify-artifacts --run 2026-06-18-ai-ir
+```
+
+`verify-artifacts` は次を見る（FAIL なら原因を潰して再実行。GO はそれから）：
+- `final.md` / `final-review.md` / `publication-check.md`（GO/NO-GO 記載）の存在。
+- 各ゲート（factcheck / build-verify / editorial-review）が publication-check で `done|skipped` 宣言済み（silent skip 禁止。skipped は理由必須）。
+- `factcheck=done` なら `claims.json`／`sources.json` 必須・スキーマ適合・出典参照 integrity・**blocking な claim ゼロ**（blocking = present かつ critical/major かつ unverified/needs-source/incorrect）。
+- `build-verify=done` なら report が `status=passed`（failed/partial・未検証混入・宣言不整合は弾く）。
+
+> 採番（`CNNN-<hash8>` / `SNNN`）は **コードが担い**、factchecker や編集長は hash を計算しない。`verify-artifacts` は外部通信を行わないため安全方針と無衝突。
 
 ---
 
@@ -302,7 +330,14 @@ llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/
 llm-task-router article:review-editorial --run 2026-06-18-ai-ir
 llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/2026-06-18-ai-ir/editorial-instruction.md
 
-# 6) 書き出し
+# 5.8) 台帳の正規化（factcheck の raw → id 付き claims.json/sources.json）
+#      編集レビューが主張・見出し・数値・API に触れたなら、ここで再 factcheck して raw を最新化してから normalize する
+llm-task-router article:claims-normalize --run 2026-06-18-ai-ir --scope full
+
+# 5.9) 公開前ゲート（publication-check.md を書き出してから機械チェック。FAIL なら潰して再実行）
+llm-task-router article:verify-artifacts --run 2026-06-18-ai-ir
+
+# 6) 書き出し（GO ＋ ユーザー承認後）
 llm-task-router article:export   --run 2026-06-18-ai-ir --out ../qiita-content/ai-ir.md
 ```
 

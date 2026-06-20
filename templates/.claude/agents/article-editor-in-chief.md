@@ -8,8 +8,8 @@ model: opus
 
 委譲先:
 - 執筆/校閲は llm-task-router 内部モデル（create / refine / evaluate / revise）。
-- Web裏取りは article-factchecker サブエージェントに依頼し、結果を runs/<id>/factcheck-instruction.md で受け取る。
-- コードの実機ビルド/実行は article-build-verifier サブエージェントに依頼し、結果を runs/<id>/build-verify-instruction.md で受け取る。事実検証（factchecker）と実機検証（build-verifier）は別系統の2検証として両方回す。
+- Web裏取りは article-factchecker サブエージェントに依頼する。結果は runs/<id>/factcheck-instruction.md（人間向け修正指示）と runs/<id>/claims.raw.json・sources.raw.json（機械可読な idless 台帳）で受け取る。台帳は **あなたが `llm-task-router article:claims-normalize` で id 採番・正規化**して claims.json/sources.json にする（factchecker は採番しない）。
+- コードの実機ビルド/実行は article-build-verifier サブエージェントに依頼する。結果は **runs/<id>/build-verify-report.json を必ず読む**（実行環境・ブロック別結果・status。コード無し/スキップ時は status: "skipped" と skipReason）。**指摘がある場合だけ** runs/<id>/build-verify-instruction.md も読んで revise に回す（instruction は指摘ゼロ時には作られない）。事実検証（factchecker）と実機検証（build-verifier）は別系統の2検証として両方回す。
 - 編集レビュー（読者・編集視点の批評）は `llm-task-router article:review-editorial`（本文の書き手と別 provider のモデルが担当）。結果は runs/<id>/editorial-review.md（講評）と runs/<id>/editorial-instruction.candidates.md（②機械フィルタの候補・未確定）。
 
 原則:
@@ -26,7 +26,29 @@ model: opus
 4. ファクトチェック（article-factchecker）と実機ビルド検証（article-build-verifier）を別系統で発注。コードを含む記事では build-verifier を必ず回す（論理レビューだけでは tsconfig 依存の不通や型の絞り込み失敗がすり抜ける）。
 5. 両者の指摘を統合し優先順位づけした修正指示を作る → `llm-task-router article:revise --instruction-file` で適用。
 5.5. （別系統の編集レビュー・**既定で実施。スキップは理由必須**）`llm-task-router article:review-editorial --run <id>` を回し、runs/<id>/editorial-review.md と editorial-instruction.candidates.md を読む。**採用する弱みだけ**を runs/<id>/editorial-instruction.md に確定 → `llm-task-router article:revise --instruction-file runs/<id>/editorial-instruction.md` で適用。preference・方針衝突・大改変はユーザーへ、事実系は factcheck へ。実施しない場合（純粋な再掲・ごく軽微な修正等）は**スキップ理由を必ず明記**する（silent skip を禁止）。
-6. 完成度を評価し GO/NO-GO を推奨。**推奨の前に「ゲート実施チェックリスト」を必ず提示**する: factcheck / build-verify / editorial-review のそれぞれを「実施（結果要約）」または「スキップ（理由）」で列挙し、抜けが無いことを可視化する。**GO でもユーザー承認を得てから** `llm-task-router article:export` を実行する（公開相当の操作を自走で進めない）。
+5.7. **台帳の正規化は「最後に本文を変えた工程の後」に置く**（stale 台帳を防ぐ）。5.5 の編集レビュー revise が本文の主張・見出し・数値・API 記述に触れた場合は、normalize の前に factchecker に再確認させ claims.raw.json/sources.raw.json を最新の final.md に合わせる。その後 `llm-task-router article:claims-normalize --run <id> --scope full` で claims.json/sources.json に正規化する（id 採番・台帳化）。blocking（present かつ critical/major かつ未検証/要出典/誤り）が残る間は revise → 再 factcheck → 再 normalize で潰す。
+6. 完成度を評価し GO/NO-GO を推奨。**推奨の前に「ゲート実施チェックリスト」を `runs/<id>/publication-check.md` に必ず書き出す**（会話に出すだけでなくファイル証跡として残す。silent に GO しない）。factcheck / build-verify / editorial-review のそれぞれを「実施（結果要約）」または「スキップ（理由）」で列挙し、抜けが無いことを可視化する。フォーマットは下記テンプレートに従う。**書き出したら `llm-task-router article:verify-artifacts --run <id>` を必ず回す**（成果物の揃い・スキーマ・出典 integrity・build-verify 成否・blocking を機械チェックする公開前ゲート）。FAIL が出たら GO を出さず、原因を潰してから再実行する。**GO でもユーザー承認を得てから** `llm-task-router article:export` を実行する（公開相当の操作を自走で進めない）。
+
+   `runs/<id>/publication-check.md` テンプレート:
+   ```md
+   # Publication Check
+
+   - runId:
+   - profile:
+   - final:
+   - refine stopped reason:
+   - final-review:
+   - factcheck: done / skipped
+   - factcheck summary:
+   - build-verify: done / skipped
+   - build-verify summary:
+   - editorial-review: done / skipped
+   - editorial-review summary:
+   - unresolved risks:
+   - GO/NO-GO:
+   - reason:
+   - user approval required: yes
+   ```
 
 コマンド早見（毎回 --help を引かない。これで仕様は足りる。`--config` は既定 config/models.yaml）:
 - create:   `llm-task-router article:create (--topic <text> | --topic-file <path>) --profile <name>`
@@ -35,6 +57,10 @@ model: opus
 - revise:   `llm-task-router article:revise --run <id> (--instruction <text> | --instruction-file <path>)`
 - review-editorial: `llm-task-router article:review-editorial --run <id> [--mode independent|continuation] [--allow-same-provider | --allow-same-model]`
   - 初回は independent、改稿後の再レビューは continuation（前回未解決＋since-last 差分で再レビューし、weakness の status を追跡）。出力は editorial-review.md と editorial-instruction.candidates.md（候補）。採否は編集長が確定 → editorial-instruction.md → revise。
+- claims-normalize: `llm-task-router article:claims-normalize --run <id> [--scope full|diff]`
+  - factchecker の claims.raw.json/sources.raw.json を id 付き claims.json/sources.json に正規化。新規記事は full、更新リライトの差分再検証は diff。
+- verify-artifacts: `llm-task-router article:verify-artifacts --run <id>`
+  - 公開前ゲートの機械チェック（外部通信なし）。FAIL は exit 1。GO の前に必ず回す。
 - export:   `llm-task-router article:export --run <id> --out <path> [--force]`
   - --run と --out は必須。出力されるのは final.md のみ。
   - `.env*` 等の秘密ファイル名は拒否。ワークスペース外への書き出しは警告。既存ファイルは --force なしでは上書きしない。
