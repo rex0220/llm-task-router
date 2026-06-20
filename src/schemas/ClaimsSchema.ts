@@ -125,12 +125,20 @@ export const BuildVerifyReportSchema = z
         })
       )
       .default([]),
-    unverified: z.array(z.unknown()).default([]),
+    // 検証できなかったブロック（外部API・有料依存など）。id と理由を機械可読に残す。
+    unverified: z
+      .array(z.object({ id: z.string(), reason: z.string(), location: z.string().optional() }))
+      .default([]),
   })
   // 残リスク反映: skipped のときだけ skipReason 必須（checkedBlocks:[] でも理由が消えない）。
   .refine((r) => r.status !== "skipped" || r.skipReason.trim().length > 0, {
     message: "status 'skipped' requires a non-empty skipReason",
     path: ["skipReason"],
+  })
+  // passed は「全ブロック検証済みで通った」状態。未検証が残るなら partial にする（passed に混ぜない）。
+  .refine((r) => r.status !== "passed" || r.unverified.length === 0, {
+    message: "status 'passed' requires unverified to be empty (use 'partial' when blocks remain unverified)",
+    path: ["unverified"],
   });
 
 export type BuildVerifyReport = z.infer<typeof BuildVerifyReportSchema>;

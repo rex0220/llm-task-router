@@ -30,10 +30,11 @@ model: opus
          "notes": "掲載どおりに typecheck 通過 / 落ちた根拠など"
        }
      ],
-     "unverified": []
+     "unverified": [{ "id": "B002", "reason": "外部API依存で未検証", "location": "## 該当見出し" }]
    }
    ```
-   - id（B001…）はブロックごとに安定して振る。`unverified` には外部API・有料依存などで検証できなかったブロックの id と理由を入れる。
+   - id（B001…）はブロックごとに安定して振る。`unverified` には外部API・有料依存などで検証できなかったブロックを `{ id, reason, location? }` で入れる。
+   - **`status: "passed"` は全ブロック検証済みで通った状態**。未検証が残る（`unverified` が空でない）なら `partial` にする（passed に混ぜない）。`verify-artifacts` が passed＋未検証を弾く。
    - `skipReason` は `status: "skipped"` のときの必須欄（コード無し・環境再現不能など）。それ以外では空文字でよい。
    - これは将来 `llm-task-router article:verify-artifacts` の検証対象になる証跡なので、スキーマを崩さない。
 

@@ -287,6 +287,36 @@ describe("verifyArtifacts", () => {
     expect(r.errors).toEqual([]);
   });
 
+  it("fails when status=passed but unverified is non-empty (use partial)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-bvunverified";
+    await seedComplete(store, runId);
+    await store.save(runId, "publication-check.md", PUB_BUILD_DONE);
+    await store.save(
+      runId,
+      "build-verify-report.json",
+      JSON.stringify({
+        status: "passed",
+        checkedBlocks: [{ id: "B001", result: "passed" }],
+        unverified: [{ id: "B002", reason: "外部API依存で未検証" }],
+      })
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/unverified/);
+  });
+
+  it("fails when build-verify=done and passed but checkedBlocks is empty", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-bvemptypassed";
+    await seedComplete(store, runId);
+    await store.save(runId, "publication-check.md", PUB_BUILD_DONE);
+    await store.save(runId, "build-verify-report.json", JSON.stringify({ status: "passed", checkedBlocks: [], unverified: [] }));
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/checkedBlocks が空/);
+  });
+
   it("warns (not fails) when build-verify-report is a valid skip", async () => {
     const store = await newStore();
     const runId = "2026-06-20-skipok";

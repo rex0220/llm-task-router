@@ -99,6 +99,10 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
       if (report.status === "failed" || report.status === "partial") {
         errors.push(`build-verify-report.json が status=${report.status} です（実機検証が通っていません）。`);
       }
+      // done かつ passed なのに検証ブロックが空＝実際には何も検証していない passed を防ぐ。
+      if (buildVerify === "done" && report.status === "passed" && report.checkedBlocks.length === 0) {
+        errors.push("build-verify=done かつ status=passed ですが checkedBlocks が空です（実際に検証したブロックがありません）。");
+      }
       // 宣言と report status の整合性。
       if (buildVerify === "done" && report.status === "skipped") {
         errors.push("build-verify=done ですが build-verify-report.json は status=skipped（宣言と不整合）。");
