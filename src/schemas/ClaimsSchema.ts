@@ -47,7 +47,8 @@ export type RawSource = z.infer<typeof RawSourceSchema>;
 
 // --- normalize 後の公開ビュー（claims.json / sources.json） ---
 
-export const ClaimSchema = z.object({
+// base object（refine 前。.extend() で台帳スキーマに継承するため分離）。
+export const ClaimFieldsSchema = z.object({
   id: z.string().regex(CLAIM_ID_RE),
   claim: z.string().min(1),
   location: z.object({ heading: z.string(), anchorHash: z.string().regex(/^[0-9a-f]{8}$/) }),
@@ -58,6 +59,13 @@ export const ClaimSchema = z.object({
   severity: z.enum(SEVERITIES),
   note: z.string(),
 });
+
+// verified は裏取り済み＝出典必須（raw だけでなく公開 claims.json でも担保）。
+const verifiedHasSource = (c: { status: string; sourceIds: string[] }): boolean =>
+  c.status !== "verified" || c.sourceIds.length > 0;
+const verifiedHasSourceMsg = { message: "status 'verified' requires at least one sourceId", path: ["sourceIds"] };
+
+export const ClaimSchema = ClaimFieldsSchema.refine(verifiedHasSource, verifiedHasSourceMsg);
 
 export const SourceSchema = z.object({
   id: z.string().regex(SOURCE_ID_RE),
@@ -76,11 +84,11 @@ export type Source = z.infer<typeof SourceSchema>;
 
 // --- run 内台帳（claims-ledger.json。コードが所有） ---
 
-export const LedgerClaimSchema = ClaimSchema.extend({
+export const LedgerClaimSchema = ClaimFieldsSchema.extend({
   hash: z.string().regex(/^[0-9a-f]{8}$/),
   firstRound: z.number().int(),
   lastRound: z.number().int(),
-});
+}).refine(verifiedHasSource, verifiedHasSourceMsg);
 
 export const LedgerSourceSchema = SourceSchema.extend({
   urlHash: z.string().regex(/^[0-9a-f]{8}$/),

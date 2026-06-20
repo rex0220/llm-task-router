@@ -19,7 +19,7 @@ const PUB_OK = [
   "",
 ].join("\n");
 
-// 非 blocking な claims.json（verified は blocking ではない）。
+// 非 blocking な claims.json（verified は出典必須なので sourceIds を持つ）。
 const CLAIMS_OK = JSON.stringify([
   {
     id: "C001-aaaaaaaa",
@@ -28,13 +28,17 @@ const CLAIMS_OK = JSON.stringify([
     type: "general",
     status: "verified",
     lifecycle: "present",
-    sourceIds: [],
+    sourceIds: ["S001"],
     severity: "minor",
     note: "",
   },
 ]);
 
-// 揃った run（factcheck done＋claims.json / build skipped＋理由 / editorial done）。
+const SOURCES_OK = JSON.stringify([
+  { id: "S001", url: "https://example.com/doc", title: "Doc", retrievedAt: "2026-06-20", sourceType: "primary", summary: "" },
+]);
+
+// 揃った run（factcheck done＋claims.json/sources.json / build skipped＋理由 / editorial done）。
 async function seedComplete(store: RunStore, runId: string): Promise<void> {
   await store.create(runId, "T", ["final"], "Qiita");
   await store.save(runId, "final.md", "# T\n本文\n");
@@ -42,6 +46,7 @@ async function seedComplete(store: RunStore, runId: string): Promise<void> {
   await store.save(runId, "publication-check.md", PUB_OK);
   await store.save(runId, "factcheck-instruction.md", "- なし\n");
   await store.save(runId, "claims.json", CLAIMS_OK);
+  await store.save(runId, "sources.json", SOURCES_OK);
   await store.save(runId, "editorial-review.md", "# editorial\n");
 }
 
@@ -116,6 +121,68 @@ describe("verifyArtifacts", () => {
     const r = await verifyArtifacts(store, runId);
     expect(r.ok).toBe(false);
     expect(r.errors.join("\n")).toMatch(/build-verify summary/);
+  });
+
+  it("fails when a verified claim has empty sourceIds (claims.json schema refine)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-verifiednosrc";
+    await seedComplete(store, runId);
+    await store.save(
+      runId,
+      "claims.json",
+      JSON.stringify([
+        {
+          id: "C001-aaaaaaaa",
+          claim: "x",
+          location: { heading: "## h", anchorHash: "aaaaaaaa" },
+          type: "api",
+          status: "verified",
+          lifecycle: "present",
+          sourceIds: [],
+          severity: "critical",
+          note: "",
+        },
+      ])
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/スキーマ不適合|sourceId/);
+  });
+
+  it("fails when a claim's sourceId is not present in sources.json", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-dangling";
+    await seedComplete(store, runId);
+    await store.save(
+      runId,
+      "claims.json",
+      JSON.stringify([
+        {
+          id: "C001-aaaaaaaa",
+          claim: "x",
+          location: { heading: "## h", anchorHash: "aaaaaaaa" },
+          type: "api",
+          status: "verified",
+          lifecycle: "present",
+          sourceIds: ["S999"],
+          severity: "minor",
+          note: "",
+        },
+      ])
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/存在しません/);
+  });
+
+  it("fails when claims.json exists but sources.json is missing", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-nosources";
+    await seedComplete(store, runId);
+    await store.remove(runId, "sources.json");
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/sources\.json/);
   });
 
   it("fails on blocking claims in claims.json", async () => {

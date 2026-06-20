@@ -1,6 +1,6 @@
 import type { RunStore } from "../storage/RunStore";
-import { BuildVerifyReportSchema, ClaimsSchema } from "../schemas/ClaimsSchema";
-import { CLAIMS_FILE, isBlocking } from "./claimsNormalize";
+import { BuildVerifyReportSchema, ClaimsSchema, SourcesSchema } from "../schemas/ClaimsSchema";
+import { CLAIMS_FILE, SOURCES_FILE, isBlocking } from "./claimsNormalize";
 
 // 公開前ゲート: 成果物の揃い・スキーマ・blocking を機械的にチェックする（外部通信なし）。
 // 各検証の中身は再判定しない（factcheck/build/editorial の判断は各担当に委ねる）。
@@ -97,10 +97,12 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
     },
   });
 
-  // claims.json があればスキーマ適合 + blocking ゼロを検査する（factcheck=done では必須なので必ず通る）。
+  // claims.json があればスキーマ適合 + blocking ゼロ + 出典 integrity を検査する
+  // （factcheck=done では claims.json 必須なので必ず通る）。
   if (claimsJson !== null) {
     const parsed = ClaimsSchema.safeParse(safeJson(claimsJson));
     if (!parsed.success) {
+      // verified かつ sourceIds 空などはここで弾かれる（ClaimSchema の refine）。
       errors.push(`claims.json がスキーマ不適合: ${formatIssues(parsed.error)}`);
     } else {
       const blocking = parsed.data.filter(isBlocking);
@@ -110,6 +112,30 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
             .map((c) => `${c.id}(${c.severity}/${c.status})`)
             .join(", ")}`
         );
+      }
+
+      // sources.json の存在・スキーマ・参照 integrity（claims[].sourceIds が実在するか）。
+      const sourcesJson = await readOrNull(store, runId, SOURCES_FILE);
+      if (sourcesJson === null) {
+        errors.push("claims.json があるのに sources.json がありません（article:claims-normalize を実行）。");
+      } else {
+        const sources = SourcesSchema.safeParse(safeJson(sourcesJson));
+        if (!sources.success) {
+          errors.push(`sources.json がスキーマ不適合: ${formatIssues(sources.error)}`);
+        } else {
+          const sourceIds = new Set(sources.data.map((s) => s.id));
+          const dangling = new Set<string>();
+          for (const c of parsed.data) {
+            for (const sid of c.sourceIds) {
+              if (!sourceIds.has(sid)) {
+                dangling.add(`${c.id}->${sid}`);
+              }
+            }
+          }
+          if (dangling.size > 0) {
+            errors.push(`claims.json の sourceId が sources.json に存在しません: ${[...dangling].join(", ")}`);
+          }
+        }
       }
     }
   }
