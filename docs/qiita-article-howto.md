@@ -225,9 +225,9 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 
 ---
 
-## 6.6 編集レビュー（任意・読者/編集視点の批評）
+## 6.6 編集レビュー（既定で実施・読者/編集視点の批評）
 
-審査（refine の judge）・事実検証とは別に、**本文の書き手と別 provider のモデル**で「読者・編集視点の批評」を回せる。構成・読みやすさ・専門性の届き方を見る**第3のレンズ**で、**正確性ゲートではない**（事実はファクトチェックが担当）。
+審査（refine の judge）・事実検証とは別に、**本文の書き手と別 provider のモデル**で「読者・編集視点の批評」を回せる。構成・読みやすさ・専門性の届き方を見る**第3のレンズ**で、**正確性ゲートではない**（事実はファクトチェックが担当）。工程としては **既定で実施**し、回さない場合（純粋な再掲・ごく軽微な修正等）は**スキップ理由を明記**する（silent skip を禁止。GO/NO-GO 前のゲート実施チェックリストで factcheck / build-verify と並べて可視化する）。
 
 ```bash
 # 初回（独立レビュー）。本文の書き手と別 provider が担当（独立性は CLI が既定で担保）
@@ -297,6 +297,10 @@ llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/
 
 # 5.5) ビルド検証（コードを含む記事）→ 指示を戻す
 llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/2026-06-18-ai-ir/build-verify-instruction.md
+
+# 5.7) 編集レビュー（既定で実施。本文と別 provider）→ 編集長が採否を確定 → 指示を戻す
+llm-task-router article:review-editorial --run 2026-06-18-ai-ir
+llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/2026-06-18-ai-ir/editorial-instruction.md
 
 # 6) 書き出し
 llm-task-router article:export   --run 2026-06-18-ai-ir --out ../qiita-content/ai-ir.md
@@ -370,3 +374,4 @@ llm-task-router article:record-publication --run 2026-06-19-<slug>-v2 \
 | 作成・評価・修正 | llm-task-router 内部モデル | 外側AIは CLI を回すだけ |
 | ファクトチェック | Claude Code（Web検索） | 本文(OpenAI)と別系統で独立検証 |
 | ビルド検証 | Claude Code（article-build-verifier） | コードを実機で `tsc`/実行。論理レビューがすり抜ける不通を捕捉 |
+| 編集レビュー | 本文と別 provider のモデル（独立性は CLI が担保） | 読者・編集視点の第3レンズ。既定で実施し、回さない場合は理由を明記 |

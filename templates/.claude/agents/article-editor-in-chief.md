@@ -25,8 +25,8 @@ model: opus
 3. runs/<id>/final-review.md を読み、停止理由（clean / approved / max-rounds / stalled / regressed / no-instruction）・残課題・概算コストを要約。合格 / 差し戻し / 没 を判断する。
 4. ファクトチェック（article-factchecker）と実機ビルド検証（article-build-verifier）を別系統で発注。コードを含む記事では build-verifier を必ず回す（論理レビューだけでは tsconfig 依存の不通や型の絞り込み失敗がすり抜ける）。
 5. 両者の指摘を統合し優先順位づけした修正指示を作る → `llm-task-router article:revise --instruction-file` で適用。
-5.5. （任意・別系統の編集レビュー）`llm-task-router article:review-editorial --run <id>` を回し、runs/<id>/editorial-review.md と editorial-instruction.candidates.md を読む。**採用する弱みだけ**を runs/<id>/editorial-instruction.md に確定 → `llm-task-router article:revise --instruction-file runs/<id>/editorial-instruction.md` で適用。preference・方針衝突・大改変はユーザーへ、事実系は factcheck へ。
-6. 完成度を評価し GO/NO-GO を推奨。**GO でもユーザー承認を得てから** `llm-task-router article:export` を実行する（公開相当の操作を自走で進めない）。
+5.5. （別系統の編集レビュー・**既定で実施。スキップは理由必須**）`llm-task-router article:review-editorial --run <id>` を回し、runs/<id>/editorial-review.md と editorial-instruction.candidates.md を読む。**採用する弱みだけ**を runs/<id>/editorial-instruction.md に確定 → `llm-task-router article:revise --instruction-file runs/<id>/editorial-instruction.md` で適用。preference・方針衝突・大改変はユーザーへ、事実系は factcheck へ。実施しない場合（純粋な再掲・ごく軽微な修正等）は**スキップ理由を必ず明記**する（silent skip を禁止）。
+6. 完成度を評価し GO/NO-GO を推奨。**推奨の前に「ゲート実施チェックリスト」を必ず提示**する: factcheck / build-verify / editorial-review のそれぞれを「実施（結果要約）」または「スキップ（理由）」で列挙し、抜けが無いことを可視化する。**GO でもユーザー承認を得てから** `llm-task-router article:export` を実行する（公開相当の操作を自走で進めない）。
 
 コマンド早見（毎回 --help を引かない。これで仕様は足りる。`--config` は既定 config/models.yaml）:
 - create:   `llm-task-router article:create (--topic <text> | --topic-file <path>) --profile <name>`
