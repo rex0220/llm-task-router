@@ -9,6 +9,8 @@ import { exportFinalArticle } from "./cli/export";
 import { importArticle } from "./cli/import";
 import { recordPublication } from "./cli/record-publication";
 import { writeUpdateDiff } from "./cli/updateDiff";
+import { normalizeClaims } from "./cli/claimsNormalize";
+import { verifyArtifacts } from "./cli/verifyArtifacts";
 import { runEditorialReview } from "./workflows/editorialReview";
 import { initConfig } from "./cli/init";
 import { ExportIndex } from "./storage/ExportIndex";
@@ -239,6 +241,48 @@ program
     console.log(`runId: ${options.run}`);
     console.log(`diff: runs/${options.run}/update-diff.md (+${result.added} / -${result.removed} lines)`);
     console.log(`sections: runs/${options.run}/changed-sections.json (${result.changedSections.length} changed)`);
+  });
+
+program
+  .command("article:claims-normalize")
+  .description("Normalize idless claims.raw.json/sources.raw.json into id-stamped claims.json/sources.json (assigns CNNN/SNNN, updates the ledger)")
+  .requiredOption("--run <runId>", "Run id")
+  .option("--scope <mode>", "Observation scope: full | diff (full lets missing claims become removed)", "full")
+  .action(async (options: { run: string; scope: string }) => {
+    const scope = options.scope === "diff" ? "diff" : options.scope === "full" ? "full" : null;
+    if (scope === null) {
+      throw new Error(`Invalid --scope: ${options.scope} (expected full | diff)`);
+    }
+    const store = new RunStore();
+    const summary = await normalizeClaims(store, options.run, scope);
+    console.log(`runId: ${summary.runId}`);
+    console.log(
+      `claims: runs/${summary.runId}/claims.json (${summary.present} present, ${summary.removed} removed; round ${summary.round}, scope ${summary.scope})`
+    );
+    console.log(`sources: runs/${summary.runId}/sources.json (${summary.sources})`);
+    console.log(`blocking: ${summary.blocking}`);
+  });
+
+program
+  .command("article:verify-artifacts")
+  .description("Check that pre-publication artifacts are present, schema-valid, and free of blocking claims (no network)")
+  .requiredOption("--run <runId>", "Run id")
+  .action(async (options: { run: string }) => {
+    const store = new RunStore();
+    const result = await verifyArtifacts(store, options.run);
+    console.log(`runId: ${result.runId}`);
+    for (const w of result.warnings) {
+      console.log(`warn: ${w}`);
+    }
+    if (result.ok) {
+      console.log("verify-artifacts: OK (公開前ゲートを満たしています)");
+    } else {
+      for (const e of result.errors) {
+        console.log(`error: ${e}`);
+      }
+      console.log(`verify-artifacts: FAIL (${result.errors.length} 件)`);
+      process.exitCode = 1;
+    }
   });
 
 program
