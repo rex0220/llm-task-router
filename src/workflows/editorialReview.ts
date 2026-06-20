@@ -201,7 +201,7 @@ export async function runEditorialReview(
   const exempt = finalAuthor === "external" || meta.imported === true;
   if (!exempt && !finalAuthor) {
     throw new Error(
-      `Run ${runId} の finalAuthorModel が未記録です。一度 article:revise / article:resume で final.md を再生成してから editorial review を回してください。`
+      `Run ${runId} の finalAuthorModel が未記録です。一度 article:revise で final.md を改稿（または article:review で再生成）して記録してから editorial review を回してください。（article:resume は完了 step をスキップするため記録されません）`
     );
   }
   // exempt が false なら finalAuthor は "external" ではない（ModelStamp）と TS も推論する。

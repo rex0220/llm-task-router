@@ -87,6 +87,24 @@ describe("importArticle", () => {
     expect(meta.imported).toBe(true);
   });
 
+  it("force replace removes stale editorial-review artifacts", async () => {
+    const store = await newStore();
+    const from = await writeArticle("# T\n本文\n");
+
+    const { runId } = await importArticle(store, { from, profile: "qiita" });
+    // 別本文向けの編集レビュー成果物が残っている状況を再現
+    await store.save(runId, "editorial-review.json", "{}");
+    await store.save(runId, "editorial-review.md", "古い講評");
+    await store.save(runId, "editorial-instruction.candidates.md", "古い候補");
+    await store.save(runId, "editorial-instruction.md", "古い確定指示");
+
+    await importArticle(store, { from, runId, profile: "qiita", force: true });
+    await expect(store.read(runId, "editorial-review.json")).rejects.toThrow();
+    await expect(store.read(runId, "editorial-review.md")).rejects.toThrow();
+    await expect(store.read(runId, "editorial-instruction.candidates.md")).rejects.toThrow();
+    await expect(store.read(runId, "editorial-instruction.md")).rejects.toThrow();
+  });
+
   it("flags front-matter without removing it", async () => {
     const store = await newStore();
     const from = await writeArticle("---\ntitle: x\n---\n# T\n本文\n");

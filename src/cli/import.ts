@@ -46,6 +46,11 @@ function staleArtifacts(maxRefineRounds: number): string[] {
     "refine-summary.md",
     // 版の正本（§5.3）。--force 再 import では作り直す（古い版を回帰起点に残さない）。
     "update-base.md",
+    // 編集レビュー成果物。別本文向けの候補・確定指示を残すと編集長が stale を読む/revise する事故になる。
+    "editorial-review.json",
+    "editorial-review.md",
+    "editorial-instruction.candidates.md",
+    "editorial-instruction.md",
   ];
   for (let n = 1; n <= maxRefineRounds; n++) {
     files.push(`refine-r${n}-review.json`, `refine-r${n}-review.md`, `refine-r${n}-instruction.md`, `refine-r${n}-before.md`);
