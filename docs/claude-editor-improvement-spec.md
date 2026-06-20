@@ -91,12 +91,12 @@ runs/<runId>/claims.json
 runs/<runId>/sources.json
 ```
 
-### claims.json スキーマ
+### claims.json スキーマ（normalize 後の公開ビュー。id はコード採番）
 ```json
 [
   {
-    "id": "C001",
-    "location": "該当見出しまたは本文位置",
+    "id": "C001-a1b2c3d4",
+    "location": { "heading": "## 設計方針", "anchorHash": "a1b2c3d4" },
     "claim": "検証すべき主張",
     "type": "api|price|version|technical|general",
     "status": "verified|needs-source|incorrect|unverified",
@@ -106,6 +106,8 @@ runs/<runId>/sources.json
   }
 ]
 ```
+
+> `claims.raw.json`（factchecker 出力）は上記から `id` を除いた idless 形。`location.anchorHash` を含む hash 採番・`id` 付与は `claims-normalize`（#5）が行う。再同定は `anchorHash` 主・`heading` 補助。
 
 ### sources.json スキーマ
 ```json
@@ -126,16 +128,17 @@ runs/<runId>/sources.json
 2. **location のズレ対策**: 本文改稿で見出しがズレる前提で、location を「検証時点のスナップショット」とするか claim 本文照合で再同定するかを決める。
 3. **検証責任**: JSON 生成は factchecker、スキーマ検証は CLI（#5 `verify-artifacts`）。この分界を明記。
 
-### 役割分担
-- Web 取得・検証判断は引き続き `article-factchecker`。
-- CLI 本体は Web fetch を持たない。スキーマ検証のみ #5 で持つ。
+### 役割分担（P3a で確定。詳細は [claims-schema-notes.md](claims-schema-notes.md)）
+- Web 取得・検証判断・**idless raw 生成**は `article-factchecker`。
+- 安定 id（`CNNN-<hash8>`）の**採番・台帳（claims-ledger.json）・claims.json 生成はコード**（#5 の `claims-normalize`）。LLM に決定的 hash を計算させない（editorial-ledger と同型）。
+- CLI 本体は Web fetch を持たない。採番・スキーマ検証は #5 で持つ。
 
 ### 変更箇所
-- `.claude/agents/article-factchecker.md` の出力規約に `claims.json` / `sources.json` を追加。
-- 設計メモ（id・location・status 遷移）を新規作成。
+- `.claude/agents/article-factchecker.md` の出力規約に `claims.raw.json` / `sources.raw.json`（idless）を追加。
+- 設計メモ [claims-schema-notes.md](claims-schema-notes.md)（id・location・status 遷移・検証責任・zod 固定方針）を作成済み。
 
 ### 完了条件
-- factchecker 実行後、スキーマに適合した `claims.json` / `sources.json` が残り、#5 の検証を通る。
+- factchecker 実行後 idless raw が残り、#5 の `claims-normalize` で id 付き `claims.json` が生成され、検証を通る。
 
 ---
 

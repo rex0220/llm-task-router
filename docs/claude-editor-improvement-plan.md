@@ -19,9 +19,9 @@
 | P1 | #1 publication-check.md | エージェント手順 | なし | XS | 不要 |
 | P2 | #2 README 章 | ドキュメント | なし | S | 不要 |
 | P3a | #3 設計メモ（先行ゲート） | ドキュメント | なし | S | 不要 |
-| P3b | #3 claims/sources 出力規約 | エージェント手順 | P3a | M | 不要 |
+| P3b | #3 claims/sources idless raw 出力規約 | エージェント手順 | P3a | M | 不要 |
 | P4 | #4 build-verify-report.json | エージェント手順 | なし | S | 不要 |
-| P5 | #5 article:verify-artifacts | CLI（検証のみ） | P1・P3b・P4 | M〜L | 必要 |
+| P5 | #5 claims-normalize ＋ verify-artifacts | CLI（採番＋検証） | P1・P3b・P4 | M〜L | 必要 |
 | P6 | #6 claim 差分再検証 | 運用＋CLI連携 | P3b 安定後 | L | 必要 |
 
 > P1・P2・P3a・P4 は相互に依存しないため並行・任意順で着手できる。クリティカルパスは **P3a → P3b → P5 → P6**。
@@ -59,14 +59,15 @@
   4. **検証責任の分界**: JSON 生成 = factchecker / スキーマ検証 = CLI（#5）。「取得は持たない／検証は持つ」を明文化。
 - **DoD**: 上記4点が文書で確定し、P3b / P5 / P6 がこの定義を参照できる。
 
-## Phase 3b — `claims.json` / `sources.json` 出力規約
+## Phase 3b — `claims.raw.json` / `sources.raw.json`（idless raw）出力規約
 
 - **依存**: P3a 完了。
+- **設計判断（P3a 由来）**: 安定 id（`CNNN-<hash8>`）の採番は **コード**が持つ（LLM に sha256 を決定的計算させない、editorial-ledger と同型）。よって P3b で factchecker が出すのは **id 無しの raw**。台帳化・採番・`claims.json` 生成は P5 の `claims-normalize`（コード）が担う。詳細は [claims-schema-notes.md](claims-schema-notes.md)。
 - **変更**:
-  - `.claude/agents/article-factchecker.md` の出力規約に `claims.json` / `sources.json` を追加（`factcheck-instruction.md` は併存）。
-  - スキーマは spec #3 準拠。`severity` は `critical|major|minor|suggestion`。
-- **検証**: factchecker 実行後、P3a の定義に適合した 2 ファイルが残る（P5 実装後はそのスキーマ検証を通る）。
-- **DoD**: 台帳が安定して生成され、フォーマット揺れがない。
+  - `.claude/agents/article-factchecker.md` の出力規約に `claims.raw.json` / `sources.raw.json`（idless）を追加（`factcheck-instruction.md` は併存）。
+  - 各 claim は `claim` / `location.heading` / `type` / `status` / `sourceIds` / `severity` / `note`。hash・id は付けない。`severity` は `critical|major|minor|suggestion`。
+- **検証**: factchecker 実行後、P3a の定義に適合した idless raw 2 ファイルが残る（P5 の normalize→検証を通る前提）。
+- **DoD**: raw が安定して生成され、フォーマット揺れがない。
 
 ## Phase 4 — `build-verify-report.json` 出力規約
 
@@ -77,16 +78,16 @@
 - **検証**: コードを含む記事の検証後、実行環境とブロック別結果を含む report が残る。
 - **DoD**: report が証跡として残り、P5 のスキーマ検証を通る。
 
-## Phase 5 — `article:verify-artifacts`（CLI・検証のみ）
+## Phase 5 — `article:claims-normalize` ＋ `article:verify-artifacts`（CLI・検証のみ）
 
-- **依存**: P1（publication-check）・P3b（claims）・P4（build-verify-report）。
-- **狙い**: 公開前に必要な成果物の揃いを機械的にチェック。外部通信なし＝安全方針と無衝突。
+- **依存**: P1（publication-check）・P3b（idless raw）・P4（build-verify-report）。
+- **狙い**: (1) idless raw → 安定 id 付き `claims.json` の正規化、(2) 公開前に必要な成果物の揃い／スキーマを機械的にチェック。いずれも外部通信なし＝安全方針と無衝突。
 - **変更**:
-  - `src/index.ts` に `article:verify-artifacts` コマンドを追加（`--run <runId>`）。
-  - 実装本体（例: `src/cli/verifyArtifacts.ts`）。チェック項目は spec #5。
-  - `claims.json` のスキーマ検証はここで持つ（zod 等、既存 `src/schemas` の流儀に合わせる）。
-  - 終了コードで合否、欠落・スキーマ違反・未解決 critical/major を列挙。
-- **テスト**: vitest で「揃った run → pass」「欠落 / スキーマ違反 / 未解決 major → fail と理由列挙」を網羅。fixture run を用意。
+  - `src/cli/claimsNormalize.ts`（P3a 由来）: `claims.raw.json` → `claims-ledger.json` 反映 → `claims.json`（`CNNN-<hash8>`）。hash 採番・台帳マージは editorial-review の `weaknessHash`/`mergeFound` と同型で実装。`sources.raw.json` → `sources.json` も同様。
+  - `src/cli/verifyArtifacts.ts`: チェック項目は spec #5（normalize 済み `claims.json` 前提）。終了コードで合否、欠落・スキーマ違反・未解決 critical/major を列挙。
+  - `src/schemas/` に claims / sources / build-verify-report の zod を追加（claims-schema-notes.md「zod 固定方針」）。`build-verify-report.json` の `skipReason` 条件付き必須もここで固定。
+  - `src/index.ts` に `article:claims-normalize` / `article:verify-artifacts` を登録（各 `--run <runId>`）。
+- **テスト**: vitest で normalize（同一 hash の id 再利用 / 新規採番 / 改稿で消えた claim の status 保持）と verify（揃った run→pass、欠落/スキーマ違反/未解決 major→fail と理由列挙）を網羅。fixture run を用意。
 - **DoD**: テスト緑、外部通信ゼロ、編集長フローの公開前ゲートとして使える。
 
 ## Phase 6 — 公開済み記事更新での claim 差分再検証
