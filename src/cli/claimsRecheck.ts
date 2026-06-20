@@ -30,6 +30,7 @@ export type RecheckCandidate = {
 
 export type RecheckResult = {
   runId: string;
+  claimsSourceRunId: string; // claims.json をどの run から読んだか（current か supersedes 元か）
   changedSections: number;
   candidates: RecheckCandidate[];
 };
@@ -64,6 +65,7 @@ function buildRecheckMarkdown(result: RecheckResult): string {
     "",
     `- 変更セクション: ${result.changedSections}`,
     `- 対象 claim: ${result.candidates.length}（陳腐化しやすい type を優先）`,
+    ...(result.claimsSourceRunId !== result.runId ? [`- claims 台帳の参照元: ${result.claimsSourceRunId}（更新前の版）`] : []),
     "",
     "> factchecker は **これらの claim だけ**を `--scope diff` で再検証する（全文再検証しない）。",
     "> 再検証後は `claims.raw.json` を更新し `article:claims-normalize --scope diff` で戻す。",
@@ -85,14 +87,42 @@ function buildRecheckMarkdown(result: RecheckResult): string {
   return lines.join("\n");
 }
 
+async function readClaims(store: RunStore, runId: string): Promise<Claim[] | null> {
+  return store.read(runId, CLAIMS_FILE).then(
+    (content) => ClaimsSchema.parse(JSON.parse(content)),
+    () => null
+  );
+}
+
+// claims.json の入手経路を解決する。
+// 更新 run（import 起点）は自分の claims.json を持たないので、meta.lineage.supersedesRunId
+// （更新前の版の run）の台帳を参照する。「今回変わった見出しに属する既存 claim」を選ぶ責務に合う。
+async function resolveClaims(store: RunStore, runId: string): Promise<{ claims: Claim[]; sourceRunId: string }> {
+  const own = await readClaims(store, runId);
+  if (own) {
+    return { claims: own, sourceRunId: runId };
+  }
+  const meta = await store.readMeta(runId).catch(() => null);
+  const prev = meta?.lineage?.supersedesRunId;
+  if (prev) {
+    const prior = await readClaims(store, prev);
+    if (prior) {
+      return { claims: prior, sourceRunId: prev };
+    }
+  }
+  throw new Error(
+    `claims.json が現在の run にも supersedes 元 run にもありません（公開版で article:claims-normalize を実行済みか確認）。`
+  );
+}
+
 // claims.json と changed-sections.json から再検証対象を選び、claims-recheck.md を書き出す。
 export async function writeClaimsRecheck(store: RunStore, runId: string): Promise<RecheckResult> {
-  const claims = ClaimsSchema.parse(JSON.parse(await store.read(runId, CLAIMS_FILE)));
   // 無ければここで失敗（update-diff 未実行＝差分更新の run でない）。
   const changed = JSON.parse(await store.read(runId, CHANGED_SECTIONS_FILE)) as ChangedSection[];
+  const { claims, sourceRunId } = await resolveClaims(store, runId);
 
   const candidates = selectRecheckClaims(claims, changed);
-  const result: RecheckResult = { runId, changedSections: changed.length, candidates };
+  const result: RecheckResult = { runId, claimsSourceRunId: sourceRunId, changedSections: changed.length, candidates };
   await store.save(runId, RECHECK_FILE, buildRecheckMarkdown(result));
   return result;
 }

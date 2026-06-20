@@ -272,6 +272,9 @@ program
     const store = new RunStore();
     const result = await writeClaimsRecheck(store, options.run);
     console.log(`runId: ${result.runId}`);
+    if (result.claimsSourceRunId !== result.runId) {
+      console.log(`claims source: ${result.claimsSourceRunId} (supersedes 元の版)`);
+    }
     console.log(
       `recheck: runs/${result.runId}/claims-recheck.md (${result.candidates.length} claims in ${result.changedSections} changed sections)`
     );

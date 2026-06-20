@@ -91,11 +91,40 @@ describe("writeClaimsRecheck", () => {
     expect(md).toContain("優先（price / api / version）");
   });
 
+  it("falls back to the supersedes run's claims.json when the current run has none", async () => {
+    const store = await newStore();
+    const prevId = "2026-06-18-x";
+    const newId = "2026-06-20-x-v2";
+    // 公開版（前の run）に claims 台帳がある
+    await store.create(prevId, "T", ["final"], "Qiita");
+    await store.save(prevId, "claims.json", JSON.stringify([claim({ id: "C001-aaaaaaaa", heading: "## 料金", type: "price" })]));
+    // 更新 run は claims.json を持たず、lineage で supersedes を指す
+    await store.create(newId, "T", ["final"], "Qiita");
+    const meta = await store.readMeta(newId);
+    meta.lineage = { supersedesRunId: prevId };
+    await store.writeMeta(meta);
+    await store.save(newId, "changed-sections.json", JSON.stringify([section("料金")]));
+
+    const result = await writeClaimsRecheck(store, newId);
+    expect(result.claimsSourceRunId).toBe(prevId);
+    expect(result.candidates.map((c) => c.id)).toEqual(["C001-aaaaaaaa"]);
+    const md = await store.read(newId, "claims-recheck.md");
+    expect(md).toContain(`参照元: ${prevId}`);
+  });
+
   it("fails when changed-sections.json is missing (non-update run)", async () => {
     const store = await newStore();
     const runId = "2026-06-20-noupdate";
     await store.create(runId, "T", ["final"], "Qiita");
     await store.save(runId, "claims.json", JSON.stringify([claim({ id: "C001-aaaaaaaa", heading: "## S" })]));
     await expect(writeClaimsRecheck(store, runId)).rejects.toThrow();
+  });
+
+  it("fails when neither the current run nor the supersedes run has claims.json", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-noclaims";
+    await store.create(runId, "T", ["final"], "Qiita");
+    await store.save(runId, "changed-sections.json", JSON.stringify([section("S")]));
+    await expect(writeClaimsRecheck(store, runId)).rejects.toThrow(/claims\.json/);
   });
 });
