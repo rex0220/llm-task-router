@@ -125,6 +125,14 @@ describe("runEditorialReview (independent mode)", () => {
     expect(result.reviewerModel).toEqual({ provider: "anthropic", model: "opus" });
   });
 
+  it("re-enforces independence after an imported run is revised by a model", async () => {
+    // import 直後は external で免除されるが、revise が finalAuthorModel をモデル印に更新したら
+    // imported が残っていても独立性チェックを復活させる（同 provider は除外して別 provider で回す）。
+    const { store, runId } = await makeRun({ provider: "anthropic", model: "opus" }, { imported: true });
+    const result = await runEditorialReview(routerReturning(REVIEW_JSON), store, runId);
+    expect(result.reviewerModel.provider).toBe("openai");
+  });
+
   it("fails on a generated run with no recorded finalAuthorModel", async () => {
     const { store, runId } = await makeRun(undefined);
     await expect(runEditorialReview(routerReturning(REVIEW_JSON), store, runId)).rejects.toThrow(/finalAuthorModel/);
