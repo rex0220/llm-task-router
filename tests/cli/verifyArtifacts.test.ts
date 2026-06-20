@@ -19,6 +19,16 @@ const PUB_OK = [
   "",
 ].join("\n");
 
+// build-verify: done を宣言する版（report と整合させる用）。
+const PUB_BUILD_DONE = [
+  "# Publication Check",
+  "- GO/NO-GO: GO",
+  "- factcheck: done",
+  "- build-verify: done",
+  "- editorial-review: done",
+  "",
+].join("\n");
+
 // 非 blocking な claims.json（verified は出典必須なので sourceIds を持つ）。
 const CLAIMS_OK = JSON.stringify([
   {
@@ -219,6 +229,62 @@ describe("verifyArtifacts", () => {
     const r = await verifyArtifacts(store, runId);
     expect(r.ok).toBe(false);
     expect(r.errors.join("\n")).toMatch(/skipReason/);
+  });
+
+  it("fails when build-verify-report status is failed", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-bvfailed";
+    await seedComplete(store, runId);
+    await store.save(runId, "publication-check.md", PUB_BUILD_DONE);
+    await store.save(runId, "build-verify-report.json", JSON.stringify({ status: "failed", checkedBlocks: [], unverified: [] }));
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/status=failed/);
+  });
+
+  it("fails when a checkedBlock result is failed even if status is passed", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-bvblockfail";
+    await seedComplete(store, runId);
+    await store.save(runId, "publication-check.md", PUB_BUILD_DONE);
+    await store.save(
+      runId,
+      "build-verify-report.json",
+      JSON.stringify({ status: "passed", checkedBlocks: [{ id: "B001", result: "failed" }], unverified: [] })
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/失敗\/部分成功/);
+  });
+
+  it("fails when build-verify=done but the report is status=skipped (inconsistent)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-bvinconsistent";
+    await seedComplete(store, runId);
+    await store.save(runId, "publication-check.md", PUB_BUILD_DONE);
+    await store.save(
+      runId,
+      "build-verify-report.json",
+      JSON.stringify({ status: "skipped", skipReason: "x", checkedBlocks: [], unverified: [] })
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/不整合/);
+  });
+
+  it("passes when build-verify=done and the report is passed", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-bvpassed";
+    await seedComplete(store, runId);
+    await store.save(runId, "publication-check.md", PUB_BUILD_DONE);
+    await store.save(
+      runId,
+      "build-verify-report.json",
+      JSON.stringify({ status: "passed", checkedBlocks: [{ id: "B001", result: "passed" }], unverified: [] })
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
   });
 
   it("warns (not fails) when build-verify-report is a valid skip", async () => {

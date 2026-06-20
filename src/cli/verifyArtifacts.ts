@@ -70,6 +70,7 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
     },
   });
 
+  const buildVerify = gateState(pc, "build-verify");
   const reportRaw = await readOrNull(store, runId, "build-verify-report.json");
   checkGate(pc, "build-verify", errors, {
     done: () => {
@@ -78,13 +79,36 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
       }
     },
   });
-  // report があれば宣言と独立にスキーマ検証する。
+  // report があれば宣言と独立にスキーマ検証 + 実機検証の成否・整合性を見る。
   if (reportRaw !== null) {
     const parsed = BuildVerifyReportSchema.safeParse(safeJson(reportRaw));
     if (!parsed.success) {
       errors.push(`build-verify-report.json がスキーマ不適合: ${formatIssues(parsed.error)}`);
-    } else if (parsed.data.status === "skipped") {
-      warnings.push("build-verify-report.json は status=skipped です（コードを含む記事なら要確認）。");
+    } else {
+      const report = parsed.data;
+      // ブロック単位の失敗/部分成功は機械可読な「落ちた」なので通さない。
+      const badBlocks = report.checkedBlocks.filter((b) => b.result === "failed" || b.result === "partial");
+      if (badBlocks.length > 0) {
+        errors.push(
+          `build-verify-report.json に失敗/部分成功のブロックが残っています: ${badBlocks
+            .map((b) => `${b.id}(${b.result})`)
+            .join(", ")}`
+        );
+      }
+      // report 全体の status が落ちていれば error（LLM の要約判断に戻さない）。
+      if (report.status === "failed" || report.status === "partial") {
+        errors.push(`build-verify-report.json が status=${report.status} です（実機検証が通っていません）。`);
+      }
+      // 宣言と report status の整合性。
+      if (buildVerify === "done" && report.status === "skipped") {
+        errors.push("build-verify=done ですが build-verify-report.json は status=skipped（宣言と不整合）。");
+      }
+      if (buildVerify === "skipped" && report.status !== "skipped") {
+        errors.push(`build-verify=skipped ですが build-verify-report.json は status=${report.status}（宣言と不整合）。`);
+      }
+      if (report.status === "skipped" && buildVerify !== "done") {
+        warnings.push("build-verify-report.json は status=skipped です（コードを含む記事なら要確認）。");
+      }
     }
   }
 
