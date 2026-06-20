@@ -50,7 +50,7 @@ Each stage maps a Claude Code operation to the CLI command it drives:
 | --- | --- | --- |
 | Draft the topic file | `/draft-topic` | writes `topics/<slug>.txt` (no body yet) |
 | Create → refine → gate | `/write-article` → `article-editor-in-chief` | `article:create` → `article:refine` |
-| Fact-check (Web) | `article-factchecker` (separate provider from the body) | findings → `article:revise --instruction-file` |
+| Fact-check (Web) | `article-factchecker` (separate external check) | findings → `article:revise --instruction-file` |
 | Build-verify code | `article-build-verifier` (real `tsc` / run) | findings → `article:revise --instruction-file` |
 | Editorial review | `/review-editorial` | `article:review-editorial` → `article:revise` |
 | Publication decision | editor-in-chief writes `runs/<id>/publication-check.md` and recommends GO/NO-GO | **user approves**, then `article:export` |

@@ -142,6 +142,7 @@ runs/<runId>/build-verify-report.json
 ```json
 {
   "status": "passed|failed|partial|skipped",
+  "skipReason": "",
   "environment": {
     "node": "v20.x",
     "typescript": "x.y.z"
@@ -159,6 +160,8 @@ runs/<runId>/build-verify-report.json
   "unverified": []
 }
 ```
+
+> `skipReason` は `status: "skipped"`（`checkedBlocks: []`）で理由が消えないようトップレベルに置く（実装時のレビュー反映）。
 
 ### 5. `article:verify-artifacts` を追加する
 

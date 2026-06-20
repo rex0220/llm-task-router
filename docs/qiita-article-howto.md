@@ -214,7 +214,7 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 
 1. 外側AI（`article-build-verifier` 役）に `runs/<runId>/final.md` を読ませる。
 2. **使い捨ての一時ディレクトリ**に、記事掲載どおりの `package.json` / `tsconfig` で最小プロジェクトを再現し、`npm install` → `tsc` →（必要なら）実行して期待出力と一致するか確認させる。
-3. 検証の証跡を `runs/<runId>/build-verify-report.json`（実行環境・ブロック別結果。コード無し/スキップ時は `status: "skipped"` ＋理由）に残させ、不通・不一致があれば `runs/<runId>/build-verify-instruction.md` にまとめさせ、ツールに戻す：
+3. 検証の証跡を `runs/<runId>/build-verify-report.json`（実行環境・ブロック別結果。コード無し/スキップ時は `status: "skipped"` ＋ `skipReason`）に残させ、不通・不一致があれば `runs/<runId>/build-verify-instruction.md` にまとめさせ、ツールに戻す：
 
 ```bash
 llm-task-router article:revise --run 2026-06-18-ai-ir \

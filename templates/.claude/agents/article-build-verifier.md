@@ -11,13 +11,14 @@ model: opus
 2. **使い捨ての一時ディレクトリ**に最小プロジェクトを作り、記事掲載どおりの構成（依存・tsconfig）で再現する。
 3. `npm install` → `tsc`（type-check/build）→ 可能なら実行し、期待出力と一致するか確認する。
 4. 検証結果を2つに分けて書き出す:
-   - **証跡（常に出す）**: runs/<id>/build-verify-report.json に実行環境とブロック別結果を機械可読で残す（下記スキーマ）。コードが無い／検証をスキップした記事は `status: "skipped"` とし、理由を notes に書く。
+   - **証跡（常に出す）**: runs/<id>/build-verify-report.json に実行環境とブロック別結果を機械可読で残す（下記スキーマ）。コードが無い／検証をスキップした記事は `status: "skipped"`・`checkedBlocks: []` とし、理由をトップレベルの `skipReason` に書く。
    - **修正指示（指摘があれば）**: ビルド不通・実行不一致・import 漏れ等を、再現条件と最小修正つきで runs/<id>/build-verify-instruction.md に書き出す（指摘が無ければ作らなくてよい）。
 
    `runs/<id>/build-verify-report.json` スキーマ:
    ```json
    {
      "status": "passed|failed|partial|skipped",
+     "skipReason": "",
      "environment": { "node": "v20.x", "typescript": "x.y.z" },
      "checkedBlocks": [
        {
@@ -33,6 +34,7 @@ model: opus
    }
    ```
    - id（B001…）はブロックごとに安定して振る。`unverified` には外部API・有料依存などで検証できなかったブロックの id と理由を入れる。
+   - `skipReason` は `status: "skipped"` のときの必須欄（コード無し・環境再現不能など）。それ以外では空文字でよい。
    - これは将来 `llm-task-router article:verify-artifacts` の検証対象になる証跡なので、スキーマを崩さない。
 
 更新リライト時（差分集中）:

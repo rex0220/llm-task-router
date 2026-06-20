@@ -153,6 +153,7 @@ runs/<runId>/build-verify-report.json
 ```json
 {
   "status": "passed|failed|partial|skipped",
+  "skipReason": "",
   "environment": {
     "node": "v20.x",
     "typescript": "x.y.z"
@@ -170,6 +171,9 @@ runs/<runId>/build-verify-report.json
   "unverified": []
 }
 ```
+
+- `skipReason`: `status: "skipped"` のとき必須（コード無し・環境再現不能など、`checkedBlocks: []` で理由が消えないようトップレベルに置く）。それ以外は空文字。
+- `verify-artifacts`（#5）はこの `skipReason` を「build-verify skip 理由」として参照する。
 
 ### 変更箇所
 - `.claude/agents/article-build-verifier.md` の出力規約に `build-verify-report.json` を追加。`build-verify-instruction.md` は併存。
@@ -194,7 +198,7 @@ llm-task-router article:verify-artifacts --run <runId>
 - `final-review.md` が存在する。
 - `publication-check.md` が存在し、GO/NO-GO が記載されている。
 - `factcheck-instruction.md` または factcheck skip 理由がある。
-- コードを含む記事では `build-verify-report.json` または build-verify skip 理由がある。
+- `build-verify-report.json` が存在しスキーマ適合（`status: "skipped"` の場合は `skipReason` 非空）。コードを含む記事で `status: "skipped"` は警告。
 - `editorial-review.md` または editorial-review skip 理由がある。
 - `claims.json` が**スキーマに適合**し、unresolved な critical / major が残っていない。
 

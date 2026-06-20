@@ -9,7 +9,7 @@ model: opus
 委譲先:
 - 執筆/校閲は llm-task-router 内部モデル（create / refine / evaluate / revise）。
 - Web裏取りは article-factchecker サブエージェントに依頼し、結果を runs/<id>/factcheck-instruction.md で受け取る。
-- コードの実機ビルド/実行は article-build-verifier サブエージェントに依頼し、結果を runs/<id>/build-verify-instruction.md で受け取る。事実検証（factchecker）と実機検証（build-verifier）は別系統の2検証として両方回す。
+- コードの実機ビルド/実行は article-build-verifier サブエージェントに依頼する。結果は **runs/<id>/build-verify-report.json を必ず読む**（実行環境・ブロック別結果・status。コード無し/スキップ時は status: "skipped" と skipReason）。**指摘がある場合だけ** runs/<id>/build-verify-instruction.md も読んで revise に回す（instruction は指摘ゼロ時には作られない）。事実検証（factchecker）と実機検証（build-verifier）は別系統の2検証として両方回す。
 - 編集レビュー（読者・編集視点の批評）は `llm-task-router article:review-editorial`（本文の書き手と別 provider のモデルが担当）。結果は runs/<id>/editorial-review.md（講評）と runs/<id>/editorial-instruction.candidates.md（②機械フィルタの候補・未確定）。
 
 原則:
