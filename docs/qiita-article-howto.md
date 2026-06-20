@@ -247,6 +247,34 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 
 ---
 
+## 6.7 公開前ゲート（claims-normalize ＋ verify-artifacts）
+
+ファクトチェックの結果は機械可読な台帳にして、公開前に機械チェックする。
+
+1. factchecker は `factcheck-instruction.md` に加えて `claims.raw.json` / `sources.raw.json`（id 無しの台帳素材）を出す。修正を `article:revise` で適用したら、台帳を正規化する：
+
+```bash
+# raw（id 無し）→ id 付き claims.json/sources.json（採番・台帳化はコードが担う）
+llm-task-router article:claims-normalize --run 2026-06-18-ai-ir --scope full
+```
+
+2. 編集長が `runs/<id>/publication-check.md` にゲート実施チェックリストを書き出したら、公開前ゲートを機械チェックする：
+
+```bash
+# 成果物の揃い・スキーマ・出典 integrity・build-verify 成否・blocking を検査（外部通信なし）
+llm-task-router article:verify-artifacts --run 2026-06-18-ai-ir
+```
+
+`verify-artifacts` は次を見る（FAIL なら原因を潰して再実行。GO はそれから）：
+- `final.md` / `final-review.md` / `publication-check.md`（GO/NO-GO 記載）の存在。
+- 各ゲート（factcheck / build-verify / editorial-review）が publication-check で `done|skipped` 宣言済み（silent skip 禁止。skipped は理由必須）。
+- `factcheck=done` なら `claims.json`／`sources.json` 必須・スキーマ適合・出典参照 integrity・**blocking な claim ゼロ**（blocking = present かつ critical/major かつ unverified/needs-source/incorrect）。
+- `build-verify=done` なら report が `status=passed`（failed/partial・未検証混入・宣言不整合は弾く）。
+
+> 採番（`CNNN-<hash8>` / `SNNN`）は **コードが担い**、factchecker や編集長は hash を計算しない。`verify-artifacts` は外部通信を行わないため安全方針と無衝突。
+
+---
+
 ## 7. 書き出し
 
 完成したら `final.md` を任意のパス（Qiita 投稿用リポジトリ等）へコピー：
@@ -302,7 +330,13 @@ llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/
 llm-task-router article:review-editorial --run 2026-06-18-ai-ir
 llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/2026-06-18-ai-ir/editorial-instruction.md
 
-# 6) 書き出し
+# 5.8) 台帳の正規化（factcheck の raw → id 付き claims.json/sources.json）
+llm-task-router article:claims-normalize --run 2026-06-18-ai-ir --scope full
+
+# 5.9) 公開前ゲート（publication-check.md を書き出してから機械チェック。FAIL なら潰して再実行）
+llm-task-router article:verify-artifacts --run 2026-06-18-ai-ir
+
+# 6) 書き出し（GO ＋ ユーザー承認後）
 llm-task-router article:export   --run 2026-06-18-ai-ir --out ../qiita-content/ai-ir.md
 ```
 
