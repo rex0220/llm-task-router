@@ -225,6 +225,28 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 
 ---
 
+## 6.6 編集レビュー（任意・読者/編集視点の批評）
+
+審査（refine の judge）・事実検証とは別に、**本文の書き手と別 provider のモデル**で「読者・編集視点の批評」を回せる。構成・読みやすさ・専門性の届き方を見る**第3のレンズ**で、**正確性ゲートではない**（事実はファクトチェックが担当）。
+
+```bash
+# 初回（独立レビュー）。本文の書き手と別 provider が担当（独立性は CLI が既定で担保）
+llm-task-router article:review-editorial --run 2026-06-18-ai-ir
+```
+
+- 出力: `editorial-review.md`（スコア・強み・弱み）と `editorial-instruction.candidates.md`（**候補**＝`major`/`minor` かつ未解決のみ。`preference`・解決済みは除外）。
+- **候補は自動適用されない**。編集長が採用分を `runs/<runId>/editorial-instruction.md` に確定 → revise で戻す：
+
+```bash
+llm-task-router article:revise --run 2026-06-18-ai-ir \
+  --instruction-file runs/2026-06-18-ai-ir/editorial-instruction.md
+```
+
+- 改稿後の再レビューは `--mode continuation`（前回レビュー時点との差分で再評価し、前回指摘の解決を追跡。weakness の id はラウンドをまたいで安定）。
+- 独立性: 既定で `finalAuthorModel` の provider を reviewer から除外。緩めるなら `--allow-same-provider` / `--allow-same-model`。import（外部/人間作）の run は免除。`llm-task-router init` の `.claude/` には `/review-editorial` コマンドと編集長の③トリアージ手順が入る。
+
+---
+
 ## 7. 書き出し
 
 完成したら `final.md` を任意のパス（Qiita 投稿用リポジトリ等）へコピー：

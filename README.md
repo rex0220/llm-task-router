@@ -79,6 +79,11 @@ llm-task-router article:update-diff --run 2026-06-16-my-article
 # Record a publication: update meta.published and export/index.json (a separate step from export)
 llm-task-router article:record-publication --run 2026-06-16-my-article \
   --slug my-article --url https://qiita.com/.../items/xxxx --article-id xxxx --article-version 2
+
+# Editorial review (reader/editor critique) by a model different from the body writer
+llm-task-router article:review-editorial --run 2026-06-16-example
+# Re-review after a revision, tracking which weaknesses are resolved
+llm-task-router article:review-editorial --run 2026-06-16-example --mode continuation
 ```
 
 With `--topic-file`, the `runId` is derived from the file name (e.g. `ai-ir.txt` → `2026-06-16-ai-ir`). Use `--run <runId>` to set it explicitly. Outputs are saved under `runs/<runId>/`.
@@ -149,6 +154,12 @@ For **re-publishing an already-public article** (keeping the same URL and skelet
 - `article:import --from export/<slug>.md --supersedes <prev-run> --root <root-run>` saves `update-base.md` and records `lineage` in `meta.json`.
 - `article:update-diff --run <id>` diffs `update-base.md` against the current `final.md` and writes `update-diff.md` (a unified-style diff) and `changed-sections.json` (per-heading add/remove counts), so the fact-checker / build-verifier can review **only the changed sections** instead of the whole article.
 - `article:record-publication --run <id> --slug <slug> --url <url> --article-id <id> --article-version <n>` updates `meta.published` and the `export/index.json` ledger (slug → latest run / URL) **together**. This is deliberately separate from `export` (which only copies `final.md`): export does a local write, `record-publication` records the publication. It guards against version regressions for the same slug (an identical re-run is a no-op; an intentional correction needs `--force`). The flag is `--article-version` (not `--version`, which is the CLI's own version flag). Like `export`, it is a publish-equivalent step and is **not** added to the editor-in-chief allowlist, so it always prompts.
+
+### Editorial review (independent reviewer lens)
+
+`article:review-editorial --run <id>` runs a reader/editor critique with a model **different from the body writer**. Independence is enforced at runtime: the final author's provider is excluded from the reviewer candidate set (the `editorial_review` task in `models.yaml` spans both providers so one always remains). `--allow-same-provider` allows the same provider with a different model (the exact same model is still dropped); `--allow-same-model` allows the exact same model. Imported (external/human-authored) runs are exempt. It is a third reviewing lens alongside the judge (`evaluate`/`refine`) and the external fact/build checks — **not** a correctness gate (facts still go to the fact-checker).
+
+It writes a scorecard (`editorial-review.json` / `editorial-review.md`) and a **candidates** file (`editorial-instruction.candidates.md`) containing only `major`/`minor` weaknesses that are `open` or `partial` (`preference` and `resolved` are excluded). Candidates are not applied automatically: the editor-in-chief selects which to adopt into a confirmed `editorial-instruction.md`, then `article:revise --instruction-file` applies that file. `--mode continuation` re-reviews after a revision — it diffs the previous review's body snapshot against the current `final.md` (since-last, not cumulative), passes the prior unresolved weaknesses, and tracks which are resolved. A run-level ledger (`editorial-ledger.json`) owns the `WNNN-<hash8>` weakness ids so they stay stable across rounds; a periodic independent full read closes weaknesses it no longer reports.
 
 ## Progress Output
 
