@@ -40,6 +40,28 @@ llm-task-router article:create --topic "..."
 
 API keys go in a `.env` in your working directory. `config/models.yaml` can refer to separated key names with `providers.*.api_key_env`; if omitted, providers fall back to standard names such as `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`.
 
+## Using Claude Code as the editor-in-chief
+
+`llm-task-router` is the thin execution layer; the editorial judgment can be driven by **Claude Code acting as the editor-in-chief**. `llm-task-router init` distributes not just `config/` but the editor-in-chief set — `.claude/` (sub-agents, slash commands, and a pipeline allowlist) and `CLAUDE.md`. That set is a primary feature, not an add-on.
+
+Each stage maps a Claude Code operation to the CLI command it drives:
+
+| Stage | Claude Code (slash command / sub-agent) | CLI it drives |
+| --- | --- | --- |
+| Draft the topic file | `/draft-topic` | writes `topics/<slug>.txt` (no body yet) |
+| Create → refine → gate | `/write-article` → `article-editor-in-chief` | `article:create` → `article:refine` |
+| Fact-check (Web) | `article-factchecker` (separate provider from the body) | findings → `article:revise --instruction-file` |
+| Build-verify code | `article-build-verifier` (real `tsc` / run) | findings → `article:revise --instruction-file` |
+| Editorial review | `/review-editorial` | `article:review-editorial` → `article:revise` |
+| Publication decision | editor-in-chief writes `runs/<id>/publication-check.md` and recommends GO/NO-GO | **user approves**, then `article:export` |
+| Update a published article | `/update-article` | `article:import` → `article:update-diff` → `article:export` + `article:record-publication` |
+
+Operating rules the editor-in-chief follows:
+
+- **Never edit `final.md` by hand.** Every fix goes back through `article:revise --instruction-file`, so artifacts stay under `runs/` and the previous version is kept as `final.bak.md`.
+- The outside AI is an **operator**: it runs the CLI and reads `final-review.md` / the reports to judge — the body itself is written by the internal models in `config/models.yaml`.
+- **`article:export` runs only after user approval.** Publication-equivalent steps are never auto-run.
+
 ## Commands
 
 Run with no arguments (or `--help`) to list commands; `-v` / `--version` prints the version. Each command supports `--help` (e.g. `llm-task-router article:export --help`).

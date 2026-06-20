@@ -40,6 +40,28 @@ llm-task-router article:create --topic "..."
 
 APIキーは作業ディレクトリの `.env` に置きます。`config/models.yaml` は `providers.*.api_key_env` で個別のキー名を指定でき、未指定なら `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` といった標準名にフォールバックします。
 
+## Claude Code を編集長として使う
+
+`llm-task-router` は薄い実行レイヤーで、編集判断は **Claude Code を編集長**として駆動できます。`llm-task-router init` は `config/` だけでなく編集長セット — `.claude/`（サブエージェント・スラッシュコマンド・パイプライン用 allowlist）と `CLAUDE.md` — を配布します。これは付属物ではなく主要価値です。
+
+各工程は、Claude Code 側の操作と、それが駆動する CLI コマンドの対応で読めます。
+
+| 工程 | Claude Code（slash command / sub-agent） | 駆動する CLI |
+| --- | --- | --- |
+| 指示ファイル起案 | `/draft-topic` | `topics/<slug>.txt` を作る（本文は書かない） |
+| 作成 → 底上げ → ゲート | `/write-article` → `article-editor-in-chief` | `article:create` → `article:refine` |
+| ファクトチェック（Web） | `article-factchecker`（本文と別 provider） | 指摘 → `article:revise --instruction-file` |
+| ビルド検証 | `article-build-verifier`（実機 `tsc` / 実行） | 指摘 → `article:revise --instruction-file` |
+| 編集レビュー | `/review-editorial` | `article:review-editorial` → `article:revise` |
+| 公開判断 | 編集長が `runs/<id>/publication-check.md` を書き出し GO/NO-GO を推奨 | **ユーザー承認後**に `article:export` |
+| 公開済み記事の更新 | `/update-article` | `article:import` → `article:update-diff` → `article:export` + `article:record-publication` |
+
+編集長が守る運用ルール:
+
+- **`final.md` を手書き編集しない。** 修正はすべて `article:revise --instruction-file` 経由で戻すため、成果物は `runs/` に集約され、直前版は `final.bak.md` として残ります。
+- 外側AIは**オペレーター**です。CLI を回し `final-review.md` や各 report を読んで判断します。本文自体は `config/models.yaml` の内部モデルが書きます。
+- **`article:export` はユーザー承認後にのみ実行**します。公開相当の操作を自走しません。
+
 ## コマンド
 
 引数なし（または `--help`）でコマンド一覧を表示します。`-v` / `--version` で版数を表示。各コマンドは `--help` に対応します（例: `llm-task-router article:export --help`）。
