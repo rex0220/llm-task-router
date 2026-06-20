@@ -432,18 +432,23 @@ program
     }
   );
 
+// 固定 rubric の既定パス（profile に editorial_criteria_file が無い場合の fallback。spec §5.3）。
+const DEFAULT_EDITORIAL_CRITERIA_FILE = "config/criteria/editorial.md";
+
 // 編集レビュー用 criteria の合成（spec §5.3）。
-// 固定 rubric（profile の editorial_criteria_file、上書き不可）＋ 追加コンテキスト（brushup-criteria.md があれば末尾連結）。
+// 固定 rubric（profile の editorial_criteria_file、無ければ既定、上書き不可）＋ 追加コンテキスト（brushup-criteria.md があれば末尾連結）。
 async function resolveEditorialCriteria(store: RunStore, runId: string): Promise<string | undefined> {
   const meta = await store.readMeta(runId);
-  let rubric = "";
+  // 固定 rubric は profile 未設定/未指定でも落とさない（spec §5.3）。既定は config/criteria/editorial.md。
+  let editorialCriteriaFile = DEFAULT_EDITORIAL_CRITERIA_FILE;
   if (meta.profile) {
     const profile = await loadProfile(meta.profile);
     if (profile.editorialCriteriaFile) {
-      assertSafeInputPath(profile.editorialCriteriaFile);
-      rubric = (await readFile(profile.editorialCriteriaFile, "utf8")).trim();
+      editorialCriteriaFile = profile.editorialCriteriaFile;
     }
   }
+  assertSafeInputPath(editorialCriteriaFile);
+  let rubric = (await readFile(editorialCriteriaFile, "utf8")).trim();
   const brushup = await store.read(runId, "brushup-criteria.md").then(
     (content) => content.trim(),
     () => ""

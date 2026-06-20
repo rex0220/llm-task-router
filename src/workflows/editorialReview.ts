@@ -309,8 +309,11 @@ export async function runEditorialReview(
   const final = await store.read(runId, "final.md");
 
   // 独立性の前提（spec §5.1）。
+  // 免除は「現 final.md を外部/人間が書いた」場合のみ。import 直後は finalAuthorModel="external" で免除されるが、
+  // その後 article:revise がモデル印を記録したら（imported は残っていても）独立性チェックを復活させる。
+  // 後方互換: finalAuthorModel を持たない古い import run（imported のみ）は救済する。
   const finalAuthor = meta.finalAuthorModel;
-  const exempt = finalAuthor === "external" || meta.imported === true;
+  const exempt = finalAuthor === "external" || (meta.imported === true && !finalAuthor);
   if (!exempt && !finalAuthor) {
     throw new Error(
       `Run ${runId} の finalAuthorModel が未記録です。一度 article:revise で final.md を改稿（または article:review で再生成）して記録してから editorial review を回してください。（article:resume は完了 step をスキップするため記録されません）`
