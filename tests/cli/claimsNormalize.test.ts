@@ -138,6 +138,36 @@ describe("normalizeClaims", () => {
     expect(summary.blocking).toBe(1);
   });
 
+  it("seeds the ledger from the supersedes run so unchanged claims survive a diff update", async () => {
+    const store = await newStore();
+    const prevId = "2026-06-18-x";
+    const newId = "2026-06-20-x-v2";
+
+    // 公開版（前の run）: A,B を full で正規化して台帳を作る
+    await seed(store, prevId, [rawClaim({ claim: "A" }), rawClaim({ claim: "B" })]);
+    await normalizeClaims(store, prevId, "full");
+    const prevClaims = ClaimsSchema.parse(JSON.parse(await store.read(prevId, "claims.json")));
+    const prevBId = prevClaims.find((c) => c.claim === "B")!.id;
+
+    // 更新 run: lineage で prev を指し、差分 raw は A だけ
+    await store.create(newId, "T", ["final"], "Qiita");
+    const meta = await store.readMeta(newId);
+    meta.lineage = { supersedesRunId: prevId };
+    await store.writeMeta(meta);
+    await store.save(newId, "claims.raw.json", JSON.stringify([rawClaim({ claim: "A" })]));
+    await store.save(newId, "sources.raw.json", "[]");
+
+    const summary = await normalizeClaims(store, newId, "diff");
+    // 差分に無い B も present のまま、id も引き継がれる
+    expect(summary.present).toBe(2);
+    expect(summary.removed).toBe(0);
+    const claims = ClaimsSchema.parse(JSON.parse(await store.read(newId, "claims.json")));
+    expect(claims.find((c) => c.claim === "A")?.lifecycle).toBe("present");
+    const b = claims.find((c) => c.claim === "B");
+    expect(b?.lifecycle).toBe("present");
+    expect(b?.id).toBe(prevBId);
+  });
+
   it("rejects a verified claim with no sourceRefs", async () => {
     const store = await newStore();
     const runId = "2026-06-20-e";

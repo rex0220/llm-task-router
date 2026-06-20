@@ -86,12 +86,31 @@ function emptyLedger(): ClaimsLedger {
   return { round: 0, lastSeq: 0, lastSourceSeq: 0, claims: [], sources: [] };
 }
 
-async function readLedger(store: RunStore, runId: string): Promise<ClaimsLedger> {
-  const parsed = await store.read(runId, LEDGER_FILE).then(
+async function readLedgerFile(store: RunStore, runId: string): Promise<ClaimsLedger | null> {
+  return store.read(runId, LEDGER_FILE).then(
     (content) => ClaimsLedgerSchema.parse(JSON.parse(content)),
     () => null
   );
-  return parsed ?? emptyLedger();
+}
+
+// 台帳を解決する。current run に無ければ meta.lineage.supersedesRunId（更新前の版）の
+// 台帳を seed として継承する（claims-recheck と同じ lineage フォールバック）。
+// これで更新 run の差分再検証後も、未変更 claim / source / id 順序が前版から引き継がれる。
+// 注: store.read は新しい文字列を JSON.parse するので seed は deep copy。前版ファイルは書き換えない。
+async function readLedger(store: RunStore, runId: string): Promise<ClaimsLedger> {
+  const own = await readLedgerFile(store, runId);
+  if (own) {
+    return own;
+  }
+  const meta = await store.readMeta(runId).catch(() => null);
+  const prev = meta?.lineage?.supersedesRunId;
+  if (prev) {
+    const seed = await readLedgerFile(store, prev);
+    if (seed) {
+      return seed;
+    }
+  }
+  return emptyLedger();
 }
 
 // raw source を台帳へマージし、urlHash→SNNN を確定する。同一 URL の再出現は既存 SNNN を再利用。
