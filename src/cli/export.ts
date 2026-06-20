@@ -72,8 +72,18 @@ function yamlString(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, " ")}"`;
 }
 
+// タイトルの正本は本文先頭 H1（revise が編集するのは本文）。meta.articleTitle は
+// create 時（brief 由来）に固定され revise で更新されないため、H1 を優先し meta は
+// fallback に回す。両方あって食い違うときは「黙って古い meta を採る」事故を防ぐため warn。
 function resolveTitle(body: string, meta: RunMeta): string {
-  return meta.articleTitle?.trim() || firstH1(body) || meta.runId;
+  const h1 = firstH1(body);
+  const metaTitle = meta.articleTitle?.trim();
+  if (h1 && metaTitle && h1 !== metaTitle) {
+    process.stderr.write(
+      `Warning: 本文 H1 と meta.articleTitle が異なります。H1 を採用します（meta: "${metaTitle}", H1: "${h1}"）。\n`
+    );
+  }
+  return h1 || metaTitle || meta.runId;
 }
 
 function buildQiitaFrontMatter(title: string, tags: string[]): string {

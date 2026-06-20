@@ -111,6 +111,24 @@ describe("exportFinalArticle", () => {
     expect(written).toContain("本文");
   });
 
+  it("prefers the body H1 over a stale meta.articleTitle (revise updated the H1)", async () => {
+    // revise で H1（タイトル）を変更したが meta.articleTitle は create 時の旧値のまま、という状況。
+    const warn = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { store, runId } = await makeRun("Qiita", "# 新しいタイトル（3要素）\n\n本文\n", {
+      articleTitle: "古いタイトル（5要素）",
+      tags: ["Tag"],
+    });
+    const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+
+    await exportFinalArticle(store, runId, out, { frontMatter: true });
+    const written = await readFile(out, "utf8");
+    // front-matter は revise 後の新 H1 を採用し、旧 articleTitle は捨てる
+    expect(written).toContain('title: "新しいタイトル（3要素）"');
+    expect(written).not.toContain("古いタイトル（5要素）");
+    // 食い違いは silent にせず warn する
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("本文 H1 と meta.articleTitle が異なります"));
+  });
+
   it("falls back to the body H1 for the title when meta has none", async () => {
     const { store, runId } = await makeRun("Qiita", "# 本文タイトル\n\nbody\n", { tags: ["Tag"] });
     const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
