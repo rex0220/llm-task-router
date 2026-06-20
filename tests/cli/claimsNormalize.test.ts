@@ -168,6 +168,43 @@ describe("normalizeClaims", () => {
     expect(b?.id).toBe(prevBId);
   });
 
+  it("does not mutate the supersedes ledger and carries sources/sourceIds into the diff update", async () => {
+    const store = await newStore();
+    const prevId = "2026-06-18-y";
+    const newId = "2026-06-20-y-v2";
+    const src = { key: "k", url: "https://example.com/a", title: "A doc", retrievedAt: "2026-06-18", sourceType: "primary", summary: "" };
+
+    // prev: A は verified + 出典、B は needs-source（出典なし）
+    await seed(
+      store,
+      prevId,
+      [rawClaim({ claim: "A", status: "verified", sourceRefs: ["k"] }), rawClaim({ claim: "B", type: "price", status: "needs-source" })],
+      [src]
+    );
+    await normalizeClaims(store, prevId, "full");
+    const prevLedgerBefore = await store.read(prevId, "claims-ledger.json");
+
+    // new: lineage→prev、diff raw は A だけ（出典そのまま）
+    await store.create(newId, "T", ["final"], "Qiita");
+    const meta = await store.readMeta(newId);
+    meta.lineage = { supersedesRunId: prevId };
+    await store.writeMeta(meta);
+    await store.save(newId, "claims.raw.json", JSON.stringify([rawClaim({ claim: "A", status: "verified", sourceRefs: ["k"] })]));
+    await store.save(newId, "sources.raw.json", JSON.stringify([src]));
+
+    await normalizeClaims(store, newId, "diff");
+
+    // 前版台帳は不変（seed は deep copy）
+    expect(await store.read(prevId, "claims-ledger.json")).toBe(prevLedgerBefore);
+
+    // 新 run: A の sourceIds（S001 再利用）と sources.json、B の present が維持
+    const claims = ClaimsSchema.parse(JSON.parse(await store.read(newId, "claims.json")));
+    const sources = SourcesSchema.parse(JSON.parse(await store.read(newId, "sources.json")));
+    expect(claims.find((c) => c.claim === "A")?.sourceIds).toEqual(["S001"]);
+    expect(sources.map((s) => s.id)).toContain("S001");
+    expect(claims.find((c) => c.claim === "B")?.lifecycle).toBe("present");
+  });
+
   it("rejects a verified claim with no sourceRefs", async () => {
     const store = await newStore();
     const runId = "2026-06-20-e";
