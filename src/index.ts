@@ -45,7 +45,7 @@ import {
   SOURCES_BEGIN,
   SOURCES_END,
 } from "./cli/references";
-import { runEditorialReview } from "./workflows/editorialReview";
+import { runEditorialReview, resolveWeakness, parseWeaknessResolution } from "./workflows/editorialReview";
 import { initConfig } from "./cli/init";
 import { ExportIndex } from "./storage/ExportIndex";
 import { loadProfile } from "./workflows/profile";
@@ -729,6 +729,32 @@ program
       );
     }
   );
+
+program
+  .command("article:editorial-resolve")
+  .description(
+    "Record the editor's decision (accepted|waived|escalated|user-approved) on an editorial weakness into editorial-ledger.json (reviewer status untouched)"
+  )
+  .requiredOption("--run <runId>", "Run id")
+  .requiredOption("--id <weaknessId>", "Weakness id (e.g. W001-ab5edbd0)")
+  .requiredOption("--resolution <accepted|waived|escalated|user-approved>", "Editor decision")
+  .requiredOption("--evidence <text>", "Why (audit; 例: 採用して revise 済み / 媒体適性で見送り / ユーザー承認)")
+  .action(async (options: { run: string; id: string; resolution: string; evidence: string }) => {
+    const resolution = parseWeaknessResolution(options.resolution);
+    const store = new RunStore();
+    await assertRunExists(store, options.run);
+    const result = await resolveWeakness(store, options.run, options.id, resolution, options.evidence);
+    // canonical 工程ではない追加アクション。progress.md だけで採否まで追えるよう1行残す。
+    await recordProgress(store, result.runId, {
+      step: "editorial-resolve",
+      status: "done",
+      output: `runs/${result.runId}/editorial-ledger.json`,
+      note: `${result.id} (${result.severity}) -> ${result.resolution}`,
+    });
+    console.log(
+      `editorial-resolve: ${result.id} -> ${result.resolution} (runs/${result.runId}/editorial-ledger.json)`
+    );
+  });
 
 // 固定 rubric の既定パス（profile に editorial_criteria_file が無い場合の fallback。spec §5.3）。
 const DEFAULT_EDITORIAL_CRITERIA_FILE = "config/criteria/editorial.md";

@@ -122,6 +122,81 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
   );
 
   it(
+    "article:editorial-resolve records the decision in the ledger, regenerates candidates, and logs a progress event",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "er-resolve-e2e-"));
+      const runId = "2026-06-21-er-resolve-e2e";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      // 最小の台帳＋最新 alias（head 復元用）を seed。weakness 1件（minor / open）。
+      const wid = "W001-deadbeef";
+      await store.save(
+        runId,
+        "editorial-ledger.json",
+        JSON.stringify({
+          round: 1,
+          lastSeq: 1,
+          weaknesses: [
+            { id: wid, hash: "deadbeef", severity: "minor", problem: "用語揺れ", recommendation: "統一", status: "open", firstRound: 1, lastRound: 1 },
+          ],
+        })
+      );
+      await store.save(
+        runId,
+        "editorial-review.json",
+        JSON.stringify({ round: 1, verdict: "needs-revision", scores: [], strengths: [], weaknesses: [], summary: "s" })
+      );
+
+      execFileSync(
+        process.execPath,
+        [bin, "article:editorial-resolve", "--run", runId, "--id", wid, "--resolution", "accepted", "--evidence", "採用して revise 済み"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+
+      const ledger = JSON.parse(readFileSync(join(cwd, "runs", runId, "editorial-ledger.json"), "utf8")) as {
+        weaknesses: { id: string; status: string; resolution?: string; resolutionEvidence?: string }[];
+      };
+      const entry = ledger.weaknesses.find((w) => w.id === wid);
+      expect(entry?.status).toBe("open"); // reviewer status は不変
+      expect(entry?.resolution).toBe("accepted");
+      expect(entry?.resolutionEvidence).toBe("採用して revise 済み");
+
+      // 候補が即時再生成され、採用済み weakness は外れている。
+      const candidates = readFileSync(join(cwd, "runs", runId, "editorial-instruction.candidates.md"), "utf8");
+      expect(candidates).toContain("適用候補はありません");
+
+      const events = readFileSync(join(cwd, "runs", runId, "progress.events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { step: string; status: string; note?: string });
+      const ev = events.find((e) => e.step === "editorial-resolve");
+      expect(ev?.status).toBe("done");
+      expect(ev?.note).toContain("accepted");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:editorial-resolve rejects an invalid --resolution",
+    () => {
+      const { status, stderr } = runFail([
+        "article:editorial-resolve",
+        "--run",
+        "no-such-run",
+        "--id",
+        "W001-x",
+        "--resolution",
+        "bogus",
+        "--evidence",
+        "x",
+      ]);
+      expect(status).toBe(1);
+      expect(stderr).toContain("Invalid resolution");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
     "article:references --help shows --run and --stdout",
     () => {
       const out = run(["article:references", "--help"]);

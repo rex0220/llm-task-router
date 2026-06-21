@@ -8,7 +8,11 @@ import { ModelRouter } from "../../src/router/ModelRouter";
 import type { RouterConfig } from "../../src/router/types";
 import { RunStore } from "../../src/storage/RunStore";
 import type { ModelStamp } from "../../src/storage/RunStore";
-import { runEditorialReview } from "../../src/workflows/editorialReview";
+import {
+  runEditorialReview,
+  resolveWeakness,
+  parseWeaknessResolution,
+} from "../../src/workflows/editorialReview";
 import { tmpLogPath } from "../helpers/tmp";
 
 const REVIEW_JSON = JSON.stringify({
@@ -218,5 +222,103 @@ describe("runEditorialReview (continuation mode)", () => {
     await expect(runEditorialReview(routerReturning(REVIEW_JSON), store, runId, { mode: "continuation" })).rejects.toThrow(
       /台帳/
     );
+  });
+});
+
+type ResolvedLedgerView = {
+  weaknesses: {
+    id: string;
+    status: string;
+    resolution?: string;
+    resolutionEvidence?: string;
+    resolvedAt?: string;
+    resolvedRound?: number;
+  }[];
+};
+
+describe("resolveWeakness", () => {
+  it("parseWeaknessResolution accepts the four decisions and rejects others", () => {
+    expect(parseWeaknessResolution("accepted")).toBe("accepted");
+    expect(parseWeaknessResolution("user-approved")).toBe("user-approved");
+    expect(() => parseWeaknessResolution("resolved")).toThrow(/Invalid resolution/);
+  });
+
+  it("writes the editor decision without touching reviewer status, and refreshes candidates/review.md immediately (fix1)", async () => {
+    const { store, runId } = await makeRun({ provider: "openai", model: "gpt" });
+    await runEditorialReview(routerReturning(REVIEW_JSON), store, runId);
+    const before = JSON.parse(await store.read(runId, "editorial-ledger.json")) as LedgerView;
+    const majorId = before.weaknesses.find((w) => w.severity === "major")!.id;
+
+    const result = await resolveWeakness(store, runId, majorId, "accepted", "採用して revise 済み");
+    expect(result).toEqual({ runId, id: majorId, resolution: "accepted", severity: "major" });
+
+    const after = JSON.parse(await store.read(runId, "editorial-ledger.json")) as ResolvedLedgerView;
+    const entry = after.weaknesses.find((w) => w.id === majorId)!;
+    expect(entry.status).toBe("open"); // reviewer status は不変
+    expect(entry.resolution).toBe("accepted");
+    expect(entry.resolutionEvidence).toBe("採用して revise 済み");
+    expect(entry.resolvedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(entry.resolvedRound).toBe(1);
+
+    // fix1: 再レビューを回さなくても reader 向け成果物が即時更新される。
+    const candidates = await store.read(runId, "editorial-instruction.candidates.md");
+    expect(candidates).not.toContain("前提が不明"); // 採用済み major は候補から消える
+    expect(candidates).toContain("用語揺れ"); // 未処理 minor は残る
+    const reviewMd = await store.read(runId, "editorial-review.md");
+    expect(reviewMd).toContain("採否: accepted");
+  });
+
+  it("keeps an accepted weakness out of candidates once the reviewer stops reporting it", async () => {
+    const { store, runId } = await makeRun({ provider: "openai", model: "gpt" });
+    await runEditorialReview(routerReturning(REVIEW_JSON), store, runId);
+    const ledger1 = JSON.parse(await store.read(runId, "editorial-ledger.json")) as LedgerView;
+    const majorId = ledger1.weaknesses.find((w) => w.severity === "major")!.id;
+    await resolveWeakness(store, runId, majorId, "accepted", "採用して revise 済み");
+
+    // major を報告しない再レビュー → closeMissing で status=resolved、resolution は accepted のまま残り候補外。
+    const onlyMinor = JSON.stringify({
+      verdict: "publication-candidate",
+      scores: [{ axis: "構成", score: 9.5 }],
+      strengths: ["改善"],
+      weaknesses: [{ severity: "minor", problem: "用語揺れ", recommendation: "統一する" }],
+      summary: "ほぼ",
+    });
+    const result2 = await runEditorialReview(routerReturning(onlyMinor), store, runId);
+    expect(result2.candidateCount).toBe(1);
+    const after = JSON.parse(await store.read(runId, "editorial-ledger.json")) as ResolvedLedgerView;
+    const entry = after.weaknesses.find((w) => w.id === majorId)!;
+    expect(entry.status).toBe("resolved");
+    expect(entry.resolution).toBe("accepted");
+  });
+
+  it("resurfaces an accepted weakness when a later review still reports it (fix2: stale resolution cleared)", async () => {
+    const { store, runId } = await makeRun({ provider: "openai", model: "gpt" });
+    await runEditorialReview(routerReturning(REVIEW_JSON), store, runId);
+    const ledger1 = JSON.parse(await store.read(runId, "editorial-ledger.json")) as LedgerView;
+    const majorId = ledger1.weaknesses.find((w) => w.severity === "major")!.id;
+    await resolveWeakness(store, runId, majorId, "accepted", "採用したつもり（実は未修正）");
+
+    // 同内容を再検出（改稿しても reviewer が同じ major を再び指摘）→ resolution を消して候補へ戻す。
+    const result2 = await runEditorialReview(routerReturning(REVIEW_JSON), store, runId);
+    expect(result2.candidateCount).toBe(2); // major 再浮上 + minor
+    const candidates = await store.read(runId, "editorial-instruction.candidates.md");
+    expect(candidates).toContain("前提が不明");
+    const after = JSON.parse(await store.read(runId, "editorial-ledger.json")) as ResolvedLedgerView;
+    const entry = after.weaknesses.find((w) => w.id === majorId)!;
+    expect(entry.status).toBe("open");
+    expect(entry.resolution).toBeUndefined();
+  });
+
+  it("rejects empty evidence and unknown ids", async () => {
+    const { store, runId } = await makeRun({ provider: "openai", model: "gpt" });
+    await runEditorialReview(routerReturning(REVIEW_JSON), store, runId);
+    await expect(resolveWeakness(store, runId, "W001-xxxxxxxx", "waived", "理由")).rejects.toThrow(/台帳にありません/);
+    const real = (JSON.parse(await store.read(runId, "editorial-ledger.json")) as LedgerView).weaknesses[0].id;
+    await expect(resolveWeakness(store, runId, real, "waived", "   ")).rejects.toThrow(/evidence/);
+  });
+
+  it("fails when there is no ledger yet", async () => {
+    const { store, runId } = await makeRun({ provider: "openai", model: "gpt" });
+    await expect(resolveWeakness(store, runId, "W001-xxxxxxxx", "accepted", "理由")).rejects.toThrow(/台帳/);
   });
 });
