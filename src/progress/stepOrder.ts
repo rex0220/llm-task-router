@@ -9,6 +9,7 @@ export const QIITA_CANONICAL_STEPS: CanonicalStep[] = [
   { key: "create", label: "create（企画→draft）" },
   { key: "refine", label: "refine（評価→改稿ループ）" },
   { key: "evaluate", label: "final-review（evaluate）" },
+  { key: "direction", label: "方向性ゲート（factcheck前）" },
   { key: "factcheck", label: "factcheck（Web裏取り）" },
   { key: "build-verify", label: "build-verify（実機）" },
   { key: "editorial", label: "編集レビュー" },
@@ -29,6 +30,8 @@ export const STEP_ALIASES: Record<string, string> = {
   "review-editorial": "editorial",
   editorial_review: "editorial",
   "claims-recheck": "claims-normalize",
+  "direction-check": "direction",
+  // 注: direction-draft（早期プレビュー）は canonical direction に畳まない（非 canonical のまま）。
 };
 
 export function resolveCanonicalKey(step: string): string {

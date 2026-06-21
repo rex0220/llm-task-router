@@ -20,6 +20,15 @@ import {
   COMPLETION_REPORT_FILE,
   COMPLETION_REPORT_BAK,
 } from "./cli/completionReport";
+import {
+  collectDirectionCheckData,
+  directionGateStatus,
+  mergeDirectionCheck,
+  DIRECTION_CHECK_FILE,
+  DIRECTION_CHECK_BAK,
+  type DirectionSource,
+  type Verdict,
+} from "./cli/directionCheck";
 import { runEditorialReview } from "./workflows/editorialReview";
 import { initConfig } from "./cli/init";
 import { ExportIndex } from "./storage/ExportIndex";
@@ -856,6 +865,20 @@ function parseOptionalNumber(value: string | undefined, flag: string): number | 
   return n;
 }
 
+function parseVerdict(value: string): Verdict {
+  if (value !== "ok" && value !== "revise") {
+    throw new Error(`Invalid --verdict: ${value} (use ok|revise)`);
+  }
+  return value;
+}
+
+function parseDirectionSource(value: string): DirectionSource {
+  if (value !== "final" && value !== "draft") {
+    throw new Error(`Invalid --source: ${value} (use final|draft)`);
+  }
+  return value;
+}
+
 async function createRuntime(configPath: string): Promise<{ router: ModelRouter; store: RunStore }> {
   const config = await loadRouterConfig(configPath);
   const providers = createProviders(config);
@@ -968,6 +991,69 @@ program
     console.log(`completion-report: runs/${options.run}/${COMPLETION_REPORT_FILE}`);
     if (data.goNoGo) {
       console.log(`GO/NO-GO: ${data.goNoGo}`);
+    }
+  });
+
+program
+  .command("article:direction-check")
+  .description("Record a pre-factcheck direction gate into runs/<id>/direction-check.md (lightweight, editor-judged)")
+  .requiredOption("--run <runId>", "Run id")
+  .requiredOption("--verdict <ok|revise>", "Editor verdict after reading the article (ok = go to factcheck, revise = fix first)")
+  .option("--note <text>", "Direction notes / revise instruction (recommended when --verdict revise)")
+  .option("--source <final|draft>", "Article to read: final.md (default, the real gate) or draft.md (early preview)", "final")
+  .option("--stdout", "Print to stdout only (no file write, no progress recording)")
+  .option("--reset-editor", "Reset the editor (所感) section to the template (backs up the existing file first)")
+  .action(async (options: { run: string; verdict: string; note?: string; source: string; stdout?: boolean; resetEditor?: boolean }) => {
+    const verdict = parseVerdict(options.verdict);
+    const source = parseDirectionSource(options.source);
+    const store = new RunStore();
+    await assertRunExists(store, options.run);
+
+    const data = await collectDirectionCheckData(store, options.run, source, verdict, options.note);
+    const existing = options.resetEditor
+      ? null
+      : await store.read(options.run, DIRECTION_CHECK_FILE).catch(() => null);
+    const { content, recovered } = mergeDirectionCheck(data, existing);
+
+    if (options.stdout) {
+      // 完全な dry run: ファイルも progress も残さない。
+      process.stdout.write(content.endsWith("\n") ? content : `${content}\n`);
+      return;
+    }
+
+    if (options.resetEditor || recovered) {
+      const prev = await store.read(options.run, DIRECTION_CHECK_FILE).catch(() => null);
+      if (prev !== null) {
+        await store.save(options.run, DIRECTION_CHECK_BAK, prev);
+        process.stderr.write(
+          `  ⚠ 既存の direction-check.md を ${DIRECTION_CHECK_BAK} に退避しました${recovered ? "（auto マーカーが見つからないため再生成）" : ""}。\n`
+        );
+      }
+    }
+
+    await store.save(options.run, DIRECTION_CHECK_FILE, content);
+
+    // progress 記録: source=final だけ canonical direction を進める（draft は早期プレビュー＝非 canonical）。
+    // verdict=revise は canonical direction を error（未通過）で記録し、status を factcheck へ進めない。
+    // 再判定 ok（done）が error を上書きする。draft は preview のため常に done（gate ではない）。
+    const revisePrefix = verdict === "revise" ? "revise before factcheck; " : "";
+    if (source === "final") {
+      await recordProgress(store, options.run, {
+        step: "direction",
+        status: directionGateStatus(verdict),
+        note: `${revisePrefix}verdict=${verdict}`,
+      });
+    } else {
+      await recordProgress(store, options.run, {
+        step: "direction-draft",
+        status: "done",
+        note: `early preview; ${revisePrefix}verdict=${verdict}`,
+      });
+    }
+
+    console.log(`direction-check: runs/${options.run}/${DIRECTION_CHECK_FILE} (source=${source}, verdict=${verdict})`);
+    if (verdict === "revise") {
+      process.stderr.write("  ⚠ 方向性 要修正: factcheck の前に revise で直してください（factcheck に進まない）。\n");
     }
   });
 

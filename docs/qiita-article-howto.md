@@ -210,6 +210,25 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 
 ---
 
+## 5.5 方向性ゲート（direction-check・factcheck の前）
+
+高コストな factcheck / build-verify に入る前に、編集長が記事の**方向性**（テーマ適合・構成・読者）を一度見て OK / 要修正を判定する軽量ゲート。**正確性ゲートではない**（事実は factcheck、品質は refine/editorial）。方向がズレたまま factcheck に時間を溶かすのを防ぐ。
+
+```bash
+# 編集長が final.md を読んだ上で判定（OK なら factcheck へ）
+llm-task-router article:direction-check --run 2026-06-18-ai-ir --verdict ok
+
+# 要修正なら理由を添える（factcheck の前に revise で直す）
+llm-task-router article:direction-check --run 2026-06-18-ai-ir --verdict revise --note "導入が長い。経済地政学の節を前倒し"
+```
+
+- `runs/<id>/direction-check.md` に保存。**auto ブロック**（タイトル・分量・見出しアウトライン・verdict・指示）は CLI 駆動で毎回上書き、**`## 所感` の editor 欄**は編集長の自由記述でマーカー保護（再生成で残る）。
+- `--source draft` で `draft.md` を読む**早期プレビュー**もできる。ただし draft はこの後 refine/evaluate で final が変わるため**正式ゲートにはならない**（progress は非 canonical の `direction-draft` 記録。canonical の方向性ゲートは `--source final` のみ）。
+- `--verdict revise` のときは canonical `direction` を**未通過（error）として記録**し（`article:status` の現在地は direction に留まり factcheck に進まない）、stderr で「factcheck の前に revise」と警告する。revise で直して再度 `--verdict ok` を打つと done で上書きされる。**OK が出てから** factcheck（6章）に進む。
+- `--stdout` はファイルも progress も残さない確認用。これは強制ゲートではない（factcheck/verify-artifacts を direction-check の有無でブロックしない）。
+
+---
+
 ## 6. ファクトチェック（ツール外・必須）
 
 llm-task-router の審査は LLM-as-judge のみで **Web検証はしない**。ここは外側AIで埋める。
@@ -346,7 +365,7 @@ llm-task-router article:completion-report --run 2026-06-18-ai-ir
 
 ## 承認回数を減らす（Claude Code の permission）
 
-Claude Code で回すと Bash 実行のたびに承認を求められ、数が多いと中身を見ずに承認しがちになる。`init` は `.claude/settings.json` に **pipeline 系コマンドだけの allowlist** を入れて配るので、`create / refine / evaluate / revise / resume / review` は事前許可済み（プロンプトが出ない）。記録系の `article:status` / `article:progress:event` / `article:completion-report` も allowlist に入っており、進捗確認・記録・完成報告のたびに承認を求められることはない。
+Claude Code で回すと Bash 実行のたびに承認を求められ、数が多いと中身を見ずに承認しがちになる。`init` は `.claude/settings.json` に **pipeline 系コマンドだけの allowlist** を入れて配るので、`create / refine / evaluate / revise / resume / review` は事前許可済み（プロンプトが出ない）。記録系の `article:status` / `article:progress:event` / `article:completion-report` / `article:direction-check` も allowlist に入っており、進捗確認・記録・方向性ゲート・完成報告のたびに承認を求められることはない。
 
 意図的に**プロンプトを残している**のは次の2つ — ここは毎回中身を見て承認する：
 
@@ -375,6 +394,9 @@ llm-task-router article:refine --run 2026-06-18-ai-ir --max-rounds 3 --until cle
 # 4) 人が確認 → 必要なら修正
 llm-task-router article:evaluate --run 2026-06-18-ai-ir --min-severity minor
 llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/2026-06-18-ai-ir/revise-instruction.md
+
+# 4.5) 方向性ゲート（factcheck の前。OK で進む／要修正なら revise してから）
+llm-task-router article:direction-check --run 2026-06-18-ai-ir --verdict ok
 
 # 5) ファクトチェック（Claude Code 等）→ 結果受領時に編集長が進捗を記録 → 指摘があれば revise
 llm-task-router article:progress:event --run 2026-06-18-ai-ir --step factcheck --status done --note "BLOCKING 0"

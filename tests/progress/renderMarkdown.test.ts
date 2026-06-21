@@ -31,6 +31,7 @@ describe("renderProgressMarkdown", () => {
       "create",
       "refine",
       "evaluate",
+      "direction",
       "factcheck",
       "build-verify",
       "editorial",

@@ -24,6 +24,7 @@ model: opus
 1. 企画を確定（topics/<name>.txt、--profile、criteria）。弱ければユーザーに差し戻す。
 2. `llm-task-router article:create --topic-file ... --profile <profile>` → `llm-task-router article:refine --run <id>`（案件に応じ --max-rounds / --min-severity / --until を設定）。
 3. runs/<id>/final-review.md を読み、停止理由（clean / approved / max-rounds / stalled / regressed / no-instruction）・残課題・概算コストを要約。合格 / 差し戻し / 没 を判断する。
+3.7. **方向性ゲート（factcheck の前）**: 高コストな factcheck/build に入る前に `final.md` を読み、テーマ適合・構成・読者の観点で方向性を判定して `llm-task-router article:direction-check --run <id> --verdict ok|revise [--note ...]` を打つ（`runs/<id>/direction-check.md` に記録）。**正確性ゲートではない**（事実は factcheck）。`revise` のときは factcheck に進まず、まず revise で方向を直してから 3.7 をやり直す。`ok` で 4 に進む。
 4. ファクトチェック（article-factchecker）と実機ビルド検証（article-build-verifier）を別系統で発注。コードを含む記事では build-verifier を必ず回す（論理レビューだけでは tsconfig 依存の不通や型の絞り込み失敗がすり抜ける）。**それぞれの結果を受け取ったら `article:progress:event --step factcheck` / `--step build-verify` で done|skip|error を記録する**（理由は `--note`）。
 5. 両者の指摘を統合し優先順位づけした修正指示を作る → `llm-task-router article:revise --instruction-file` で適用。
 5.5. （別系統の編集レビュー・**既定で実施。スキップは理由必須**）`llm-task-router article:review-editorial --run <id>` を回し、runs/<id>/editorial-review.md と editorial-instruction.candidates.md を読む。**採用する弱みだけ**を runs/<id>/editorial-instruction.md に確定 → `llm-task-router article:revise --instruction-file runs/<id>/editorial-instruction.md` で適用。preference・方針衝突・大改変はユーザーへ、事実系は factcheck へ。実施しない場合（純粋な再掲・ごく軽微な修正等）は**スキップ理由を必ず明記**する（silent skip を禁止）。
@@ -67,6 +68,8 @@ model: opus
 - export:   `llm-task-router article:export --run <id> --out <path> [--force]`
   - --run と --out は必須。出力されるのは final.md のみ。
   - `.env*` 等の秘密ファイル名は拒否。ワークスペース外への書き出しは警告。既存ファイルは --force なしでは上書きしない。
+- direction-check: `llm-task-router article:direction-check --run <id> --verdict <ok|revise> [--note <text>] [--source final|draft]`
+  - factcheck 前の方向性ゲート（既定 final.md）。verdict は CLI が権威・所感欄はマーカー保護。`revise` は factcheck 前に直す。`--source draft` は早期プレビュー（canonical を満たさない）。
 - status:   `llm-task-router article:status --run <id> [--json]`
   - 現在地・所要・概算コスト合計を表示。各工程の後に確認する。
 - progress:event: `llm-task-router article:progress:event --run <id> --step <name> --status start|done|skip|error [--note <text>] [--output <path>]`

@@ -10,6 +10,7 @@ import {
   parseReason,
   type GateState,
 } from "./publicationCheck";
+import { AUTO_BEGIN, AUTO_END, mergeMarkered, type MergeResult } from "./markerMerge";
 
 // 完成報告（runs/<id>/completion-report.md）の生成。
 // - 機械由来（ゲート結果・コスト・GO/NO-GO 転記）はコードが <!-- auto:begin/end --> 内に書く。
@@ -18,9 +19,6 @@ import {
 
 export const COMPLETION_REPORT_FILE = "completion-report.md";
 export const COMPLETION_REPORT_BAK = "completion-report.bak.md";
-
-const AUTO_BEGIN = "<!-- auto:begin -->";
-const AUTO_END = "<!-- auto:end -->";
 
 export type GateInfo = { state: GateState; summary?: string };
 
@@ -233,29 +231,7 @@ export function renderCompletionReport(data: CompletionReportData): string {
   return `${renderHead(data)}\n${renderEditorTemplate()}`;
 }
 
-export type MergeResult = { content: string; recovered: boolean };
-
-// 再生成: auto 範囲だけを最新 data で差し替え、auto:end 以降（editor 欄）は既存をそのまま残す。
-// 既存にマーカーが無い/壊れている場合は recovered=true を返す（呼び出し側で bak を残してから書く）。
+// 再生成: auto 範囲だけを最新 data で差し替え、auto:end 以降（editor 欄）は既存を残す（共通実装）。
 export function mergeCompletionReport(data: CompletionReportData, existing: string | null): MergeResult {
-  if (existing === null) {
-    return { content: renderCompletionReport(data), recovered: false };
-  }
-  // begin/end が「ちょうど1つずつ・正順」でなければマーカー破損とみなす（欠落・逆順・重複を弾く）。
-  const beginFirst = existing.indexOf(AUTO_BEGIN);
-  const beginLast = existing.lastIndexOf(AUTO_BEGIN);
-  const endFirst = existing.indexOf(AUTO_END);
-  const endLast = existing.lastIndexOf(AUTO_END);
-  const wellFormed =
-    beginFirst >= 0 &&
-    beginFirst === beginLast && // begin は1つだけ
-    endFirst >= 0 &&
-    endFirst === endLast && // end は1つだけ
-    beginFirst < endFirst; // begin が end より前
-  if (!wellFormed) {
-    // マーカー破損: 安全側に倒して全面再生成（呼び出し側で bak 退避）。
-    return { content: renderCompletionReport(data), recovered: true };
-  }
-  const editorTail = existing.slice(endFirst + AUTO_END.length);
-  return { content: `${renderHead(data)}${editorTail}`, recovered: false };
+  return mergeMarkered(renderHead(data), renderCompletionReport(data), existing);
 }
