@@ -408,6 +408,21 @@ describe("verifyArtifacts", () => {
     expect(r.errors.join("\n")).toMatch(/参考ブロック内/);
   });
 
+  it("FAILs when the sources markers are malformed (only begin / reversed), not just warns", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-badmarker";
+    await seedComplete(store, runId);
+    // begin だけ残った壊れた参考ブロック＋偽 URL。warning 止まりにせず error にする。
+    await store.save(
+      runId,
+      "final.md",
+      "# T\n\n## 参考\n\n<!-- sources:begin -->\n- 偽\n  https://evil.example.com/fake\n"
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/マーカーが壊れて/);
+  });
+
   it("passes (with a warning) when a non-source link sits outside the 参考 block", async () => {
     const store = await newStore();
     const runId = "2026-06-20-bodylink";

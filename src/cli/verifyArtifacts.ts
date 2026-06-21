@@ -197,9 +197,20 @@ async function checkReferenceLinks(
   }
 
   // 参考マーカーブロックの範囲を特定（あれば）。
+  // article:references と同じく「begin/end がちょうど1組・正順」のみ正常。片方欠落・複数・逆順は
+  // 破損として error（warning 止まりだと偽 URL を見逃すため。生成側のガードと対称にする）。
+  const bCount = final.split(SOURCES_BEGIN).length - 1;
+  const eCount = final.split(SOURCES_END).length - 1;
   const bIdx = final.indexOf(SOURCES_BEGIN);
   const eIdx = final.indexOf(SOURCES_END);
-  const hasBlock = bIdx !== -1 && eIdx !== -1 && bIdx < eIdx;
+  const wellFormed = bCount === 1 && eCount === 1 && bIdx < eIdx;
+  if ((bCount > 0 || eCount > 0) && !wellFormed) {
+    errors.push(
+      "参考ブロックのマーカーが壊れています（begin/end が1組・正順ではありません）。article:references で再生成してください。"
+    );
+    return; // 破損時はリンク分類しない（偽判定を避ける）
+  }
+  const hasBlock = wellFormed;
   const inBlock = (pos: number): boolean => hasBlock && pos >= bIdx && pos < eIdx + SOURCES_END.length;
 
   const blockMissing = new Set<string>();
