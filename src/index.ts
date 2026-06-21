@@ -418,7 +418,7 @@ program
   });
 
 // アクションが集約した実績（progress の done イベントに載せる）。cost は判明分のみ。
-type ProgressTotals = { costUsd?: number; elapsedMs?: number };
+type ProgressTotals = { costUsd?: number; elapsedMs?: number; inputTokens?: number; outputTokens?: number };
 
 // 進捗は stderr に出す（stdout は runId / final パスのみに保ち、スクリプトでパースしやすくする）。
 // コストは usage トークン × models.yaml の prices によるローカル概算（追加APIコールは無し）。
@@ -431,6 +431,9 @@ function createProgressReporter(): {
   let totalCostUsd = 0;
   let hasCost = false;
   let totalElapsedMs = 0;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let hasTokens = false;
 
   const report = (event: WorkflowEvent): void => {
     switch (event.type) {
@@ -444,6 +447,11 @@ function createProgressReporter(): {
         if (event.costUsd !== undefined) {
           totalCostUsd += event.costUsd;
           hasCost = true;
+        }
+        if (event.inputTokens !== undefined || event.outputTokens !== undefined) {
+          totalInputTokens += event.inputTokens ?? 0;
+          totalOutputTokens += event.outputTokens ?? 0;
+          hasTokens = true;
         }
         totalElapsedMs += event.elapsedMs;
         const cost = event.costUsd !== undefined ? `, ~$${event.costUsd.toFixed(4)}` : "";
@@ -472,6 +480,8 @@ function createProgressReporter(): {
   const totals = (): ProgressTotals => ({
     costUsd: hasCost ? Number(totalCostUsd.toFixed(6)) : undefined,
     elapsedMs: totalElapsedMs,
+    inputTokens: hasTokens ? totalInputTokens : undefined,
+    outputTokens: hasTokens ? totalOutputTokens : undefined,
   });
 
   return { report, printTotal, totals };
@@ -510,6 +520,8 @@ async function runWithProgress<T>(args: {
         task: args.task,
         elapsedMs: t.elapsedMs,
         costUsd: t.costUsd,
+        inputTokens: t.inputTokens,
+        outputTokens: t.outputTokens,
         output: args.output?.(result),
       })
     );
@@ -754,10 +766,18 @@ function createRefineReporter(runId: string): {
   let total = 0;
   let hasCost = false;
   let totalElapsedMs = 0;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let hasTokens = false;
 
-  const accrue = (costUsd?: number, elapsedMs?: number): string => {
+  const accrue = (costUsd?: number, elapsedMs?: number, inputTokens?: number, outputTokens?: number): string => {
     if (elapsedMs !== undefined) {
       totalElapsedMs += elapsedMs;
+    }
+    if (inputTokens !== undefined || outputTokens !== undefined) {
+      totalInputTokens += inputTokens ?? 0;
+      totalOutputTokens += outputTokens ?? 0;
+      hasTokens = true;
     }
     if (costUsd !== undefined) {
       total += costUsd;
@@ -773,7 +793,7 @@ function createRefineReporter(runId: string): {
         process.stderr.write(`[refine] round ${event.round}/${event.maxRounds}\n`);
         break;
       case "eval:done": {
-        const cost = accrue(event.costUsd, event.elapsedMs);
+        const cost = accrue(event.costUsd, event.elapsedMs, event.inputTokens, event.outputTokens);
         process.stderr.write(
           `  evaluate - done via ${event.provider}/${event.model} (${event.elapsedMs}ms${cost}) — issues>=${event.minSeverity}: ${event.issueCount}, score: ${event.score}\n`
         );
@@ -785,7 +805,7 @@ function createRefineReporter(runId: string): {
         break;
       }
       case "revise:done": {
-        const cost = accrue(event.costUsd, event.elapsedMs);
+        const cost = accrue(event.costUsd, event.elapsedMs, event.inputTokens, event.outputTokens);
         process.stderr.write(
           `  revise - done via ${event.provider}/${event.model} (${event.elapsedMs}ms${cost})\n`
         );
@@ -817,6 +837,8 @@ function createRefineReporter(runId: string): {
   const totals = (): ProgressTotals => ({
     costUsd: hasCost ? Number(total.toFixed(6)) : undefined,
     elapsedMs: totalElapsedMs,
+    inputTokens: hasTokens ? totalInputTokens : undefined,
+    outputTokens: hasTokens ? totalOutputTokens : undefined,
   });
 
   return { report, totals };
@@ -1026,6 +1048,20 @@ program
     if (data.goNoGo) {
       console.log(`GO/NO-GO: ${data.goNoGo}`);
     }
+
+    // 完成報告の生成を進捗台帳に1行残す（GO/NO-GO 判断到達が status から分かるように）。
+    // canonical 工程ではなく editorial 等と同じマーカー的 done 行（末尾に追加アクションとして出る）。
+    // 完成報告本体は runs/ に閉じる方針のまま（export/index.json には混ぜない）。失敗は握って本処理継続。
+    await safeProgress(async () => {
+      const progress = new RunProgress(store, pkg.version);
+      await progress.append(options.run, {
+        step: "completion-report",
+        status: "done",
+        output: `runs/${options.run}/${COMPLETION_REPORT_FILE}`,
+        note: data.goNoGo ? `GO/NO-GO: ${data.goNoGo}` : undefined,
+      });
+      await progress.regenerate(options.run);
+    });
   });
 
 program
