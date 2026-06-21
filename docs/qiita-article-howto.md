@@ -155,9 +155,11 @@ llm-task-router article:status --run 2026-06-18-ai-ir          # 人が読む表
 llm-task-router article:status --run 2026-06-18-ai-ir --json   # スクリプト用
 ```
 
-工程は `create → refine → evaluate → direction（方向性ゲート）→ factcheck → build-verify → editorial → claims-normalize → verify-artifacts → export` の10段（標準工程順は `src/progress/stepOrder.ts`）。各工程の後に `article:status` を挟むと「今N/10工程目」が常に分かる。
+工程は `create → refine（評価・改稿）→ direction（方向性ゲート）→ factcheck → build-verify → editorial → claims-normalize → verify-artifacts → export` の**9段**（標準工程順は `src/progress/stepOrder.ts`）。各工程の後に `article:status` を挟むと「今N/9工程目」が常に分かる。
 
-**所要・コストの見方**: `article:status` の表に各工程の **所要(ms)・概算$** と末尾の **概算コスト合計**が出る（出どころは `progress.json`）。CLI 工程は自動、factcheck/build-verify は編集長の `progress:event` 記録分。概算コストは `models.yaml` の価格表に依存する**概算**（表にも「概算」と明記される）。
+> 「評価・改稿」は1段に統合（`article:refine` の評価→改稿ループでも `article:evaluate` 単独でも同じ枠を満たす）。現在地の分母は **canonical 工程数（9）**で、`revise` 等の追加実行（非 canonical）があっても膨らまない。
+
+**所要・コストの見方**: `article:status` の表に各工程の **所要(ms)・概算$** と末尾の **概算コスト合計**が出る（出どころは `progress.json`）。CLI 工程は自動、factcheck/build-verify は編集長の `progress:event` 記録分。概算コストは `models.yaml` の価格表に依存する**概算**（表にも「概算」と明記される）。**開始・終了・更新の時刻は表示上ローカルタイム**（`+09:00` 等のオフセット付き）。正本の `progress.events.jsonl` と `--json` 出力は UTC のまま。
 
 - factcheck / build-verify の**所要見積もり**（「約N分」）は、サブエージェントの作業時間が主で API ログ（`router.log`）に出ないため、現状は出さない。複数 run の `progress.json` 実績が溜まってからの将来拡張とする（憶測値を出さない）。
 - **Claude Code（外側AI）のトークン使用量**は `router.log` に含まれない（別系統・本ツール外）。必要なら編集長が Claude Code の `/cost` を完成報告（7.5）の `## 総評` に**手で転記**する（参考値。完全な課金額は取得不可）。

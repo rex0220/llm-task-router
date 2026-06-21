@@ -28,7 +28,7 @@ export type CompletionReportData = {
   profile?: string;
   finalAuthorModel?: string;
   reviewerModel?: string;
-  progress: { complete: boolean; currentIndex?: number; total: number };
+  progress: { complete: boolean; currentIndex?: number; canonicalTotal: number };
   totalCostUsd?: number;
   goNoGo?: string;
   reason?: string;
@@ -113,7 +113,11 @@ export async function collectCompletionReportData(
     profile: meta?.profile,
     finalAuthorModel: modelLabel(meta?.finalAuthorModel),
     reviewerModel: modelLabel(meta?.reviewerModel),
-    progress: { complete: snapshot.complete, currentIndex: snapshot.currentIndex, total: snapshot.total },
+    progress: {
+      complete: snapshot.complete,
+      currentIndex: snapshot.currentIndex,
+      canonicalTotal: snapshot.canonicalTotal,
+    },
     totalCostUsd: snapshot.totalCostUsd,
     goNoGo: parseGoNoGo(pc),
     reason: parseReason(pc),
@@ -153,8 +157,8 @@ function renderAutoSection(data: CompletionReportData): string {
   const position = data.progress.complete
     ? "全工程完了"
     : data.progress.currentIndex !== undefined
-      ? `${data.progress.currentIndex} / ${data.progress.total} 工程目`
-      : `${data.progress.total} 工程`;
+      ? `${data.progress.currentIndex} / ${data.progress.canonicalTotal} 工程目`
+      : `${data.progress.canonicalTotal} 工程`;
 
   const refineSummary = data.refine
     ? joinParts([

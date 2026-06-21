@@ -41,8 +41,9 @@ export type ProgressStep = {
 export type ProgressSnapshot = {
   runId: string;
   steps: ProgressStep[];
-  total: number; // 表示する工程数（canonical ＋ 追加工程）
-  currentIndex?: number; // 1-based。最初の未完（pending/start/error）工程。全て done/skip なら undefined（=完了）
+  total: number; // 表示する全行数（canonical ＋ 追加工程）
+  canonicalTotal: number; // canonical 工程数（現在地「N / M」の分母。非 canonical 追加工程で膨らまない）
+  currentIndex?: number; // 1-based。最初の未完 canonical 工程（pending/start/error）。全 canonical done/skip なら undefined（=完了）
   complete: boolean; // canonical 工程がすべて done/skip
   totalCostUsd?: number; // costUsd が判明した工程のみ合算（不明は除外）
   updatedAt: string;

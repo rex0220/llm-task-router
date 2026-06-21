@@ -7,8 +7,9 @@ export type CanonicalStep = { key: string; label: string };
 // 課題.md の7工程表に対応する高レベル工程（CLI/サブエージェントの記録粒度）。
 export const QIITA_CANONICAL_STEPS: CanonicalStep[] = [
   { key: "create", label: "create（企画→draft）" },
-  { key: "refine", label: "refine（評価→改稿ループ）" },
-  { key: "evaluate", label: "final-review（evaluate）" },
+  // 評価と改稿は同じ「final-review」段。article:refine（評価＋改稿ループ）と article:evaluate
+  // （採点のみ）は同一段の代替エントリなので1枠に統合する（evaluate は alias で refine へ畳む）。
+  { key: "refine", label: "評価・改稿（refine / evaluate）" },
   { key: "direction", label: "方向性ゲート（factcheck前）" },
   { key: "factcheck", label: "factcheck（Web裏取り）" },
   { key: "build-verify", label: "build-verify（実機）" },
@@ -31,6 +32,8 @@ export const STEP_ALIASES: Record<string, string> = {
   editorial_review: "editorial",
   "claims-recheck": "claims-normalize",
   "direction-check": "direction",
+  // 評価（article:evaluate）は改稿段に畳む（refine と同じ final-review 段）。
+  evaluate: "refine",
   // 注: direction-draft（早期プレビュー）は canonical direction に畳まない（非 canonical のまま）。
 };
 

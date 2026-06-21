@@ -67,9 +67,9 @@ describe("RunProgress", () => {
     await progress.append(RUN, { step: "create", status: "done" });
     await progress.regenerate(RUN);
     await sleep(10); // mtime に差をつける
-    await progress.append(RUN, { step: "evaluate", status: "done" });
+    await progress.append(RUN, { step: "factcheck", status: "done" });
     const snap = await progress.readSnapshot(RUN);
-    expect(snap.steps.find((s) => s.step === "evaluate")?.status).toBe("done");
+    expect(snap.steps.find((s) => s.step === "factcheck")?.status).toBe("done");
   });
 
   it("readSnapshot still works on an existing run with no events (all pending)", async () => {

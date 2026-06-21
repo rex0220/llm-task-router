@@ -84,7 +84,7 @@ function makeData(over: Partial<CompletionReportData> = {}): CompletionReportDat
   return {
     runId: "r",
     title: "タイトル",
-    progress: { complete: true, total: 9 },
+    progress: { complete: true, canonicalTotal: 9 },
     factcheck: { state: "done" },
     buildVerify: { state: "skipped" },
     editorial: { state: "done" },
