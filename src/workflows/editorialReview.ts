@@ -7,7 +7,21 @@ import { DEFAULT_PLATFORM } from "./qiitaSteps";
 
 // editorial-review-spec §5.2 のスキーマ（raw）。weakness に id は無い。
 type WeaknessSeverity = "major" | "minor" | "preference";
+// reviewer が返す状態（機械レビュー視点）。継続レビューの trackedWeaknesses もこの3値。
 type WeaknessStatus = "open" | "partial" | "resolved";
+// 編集長の採否（人間の編集判断）。reviewer の status とは別軸で記録する。
+// - accepted: 採用して revise 済み / waived: 不採用（媒体適性・preference 等で見送り）
+// - escalated: ユーザーへ上申中 / user-approved: 上申に対しユーザー承認が下りた
+export type WeaknessResolution = "accepted" | "waived" | "escalated" | "user-approved";
+
+const WEAKNESS_RESOLUTIONS: WeaknessResolution[] = ["accepted", "waived", "escalated", "user-approved"];
+
+export function parseWeaknessResolution(value: string): WeaknessResolution {
+  if ((WEAKNESS_RESOLUTIONS as string[]).includes(value)) {
+    return value as WeaknessResolution;
+  }
+  throw new Error(`Invalid resolution: ${value}（${WEAKNESS_RESOLUTIONS.join(" | ")}）`);
+}
 
 type RawWeakness = {
   severity: WeaknessSeverity;
@@ -42,6 +56,11 @@ type LedgerWeakness = RawWeakness & {
   firstRound: number;
   lastRound: number;
   evidence?: string;
+  // 編集長の採否（status とは別軸。article:editorial-resolve で書き戻す）。
+  resolution?: WeaknessResolution;
+  resolutionEvidence?: string;
+  resolvedAt?: string; // ISO8601
+  resolvedRound?: number;
 };
 type EditorialLedger = { round: number; lastSeq: number; weaknesses: LedgerWeakness[] };
 
@@ -159,6 +178,12 @@ function mergeFound(ledger: EditorialLedger, found: RawWeakness[], round: number
       existing.problem = fw.problem;
       existing.recommendation = fw.recommendation;
       existing.lastRound = round;
+      // reviewer が同じ問題を再検出した＝前回の編集判断（accepted 等）は陳腐化。resolution を消して
+      // 候補へ戻す（「採用済み」のラベルで未解決を隠さない）。再度の採否は編集長が打ち直す。
+      delete existing.resolution;
+      delete existing.resolutionEvidence;
+      delete existing.resolvedAt;
+      delete existing.resolvedRound;
     } else {
       ledger.lastSeq += 1;
       ledger.weaknesses.push({
@@ -175,10 +200,10 @@ function mergeFound(ledger: EditorialLedger, found: RawWeakness[], round: number
 
 // --- 出力整形 ---
 
-type PublicWeakness = { id: string; severity: WeaknessSeverity; location?: string; problem: string; recommendation: string; status: WeaknessStatus };
+type PublicWeakness = { id: string; severity: WeaknessSeverity; location?: string; problem: string; recommendation: string; status: WeaknessStatus; resolution?: WeaknessResolution };
 
 function toPublic(w: LedgerWeakness): PublicWeakness {
-  return { id: w.id, severity: w.severity, location: w.location, problem: w.problem, recommendation: w.recommendation, status: w.status };
+  return { id: w.id, severity: w.severity, location: w.location, problem: w.problem, recommendation: w.recommendation, status: w.status, resolution: w.resolution };
 }
 
 type RoundHead = { round: number; verdict: string; scores: { axis: string; score: number }[]; strengths: string[]; summary: string };
@@ -215,7 +240,8 @@ function buildSummary(head: RoundHead, weaknesses: PublicWeakness[]): string {
     lines.push(`### ${sev}${sev === "preference" ? "（好みレベル・自動適用しない）" : ""}`);
     for (const w of items) {
       const loc = w.location ? `（${w.location}）` : "";
-      lines.push(`- [${w.id}] (${w.status}) **${w.problem}**${loc}`);
+      const decided = w.resolution ? ` / 採否: ${w.resolution}` : "";
+      lines.push(`- [${w.id}] (${w.status}${decided}) **${w.problem}**${loc}`);
       lines.push(`  - 推奨: ${w.recommendation}`);
     }
     lines.push("");
@@ -226,8 +252,12 @@ function buildSummary(head: RoundHead, weaknesses: PublicWeakness[]): string {
 
 // ② 候補（severity major|minor かつ status open|partial。preference・resolved 除外）。
 function buildCandidates(weaknesses: PublicWeakness[]): { text: string; count: number } {
+  // 編集長が採否を決めた weakness（resolution あり）は候補から外す（再生成で蒸し返さない）。
   const applicable = weaknesses.filter(
-    (w) => (w.severity === "major" || w.severity === "minor") && (w.status === "open" || w.status === "partial")
+    (w) =>
+      (w.severity === "major" || w.severity === "minor") &&
+      (w.status === "open" || w.status === "partial") &&
+      w.resolution === undefined
   );
   const lines = [
     "# 編集レビュー 修正候補（②機械フィルタ / 未確定）",
@@ -388,18 +418,106 @@ async function finalize(
   ledger.round = round;
   await store.save(runId, LEDGER_FILE, JSON.stringify(ledger, null, 2));
 
-  const weaknesses = ledger.weaknesses.map(toPublic);
-  const reviewJson = buildReviewJson(head, weaknesses);
-  const reviewMd = buildSummary(head, weaknesses);
-  const candidates = buildCandidates(weaknesses);
-
-  // ラウンド別成果物
-  await store.save(runId, `editorial-r${round}-review.json`, reviewJson);
-  await store.save(runId, `editorial-r${round}-review.md`, reviewMd);
+  const out = renderLedgerOutputs(head, ledger);
+  // ラウンド別成果物（その round の reviewer 出力スナップショット）
+  await store.save(runId, `editorial-r${round}-review.json`, out.reviewJson);
+  await store.save(runId, `editorial-r${round}-review.md`, out.reviewMd);
   // 最新 alias（編集長が読む。継続でも現ラウンドで上書き）
-  await store.save(runId, "editorial-review.json", reviewJson);
-  await store.save(runId, "editorial-review.md", reviewMd);
-  await store.save(runId, "editorial-instruction.candidates.md", candidates.text);
+  await writeLatestArtifacts(store, runId, out);
 
-  return { runId, mode, round, reviewerModel, verdict: head.verdict, candidateCount: candidates.count };
+  return { runId, mode, round, reviewerModel, verdict: head.verdict, candidateCount: out.candidates.count };
+}
+
+// head（ラウンド情報）＋台帳から、編集長が読む3成果物を1か所で組み立てる（finalize / resolveWeakness で共有）。
+function renderLedgerOutputs(
+  head: RoundHead,
+  ledger: EditorialLedger
+): { reviewJson: string; reviewMd: string; candidates: { text: string; count: number } } {
+  const weaknesses = ledger.weaknesses.map(toPublic);
+  return {
+    reviewJson: buildReviewJson(head, weaknesses),
+    reviewMd: buildSummary(head, weaknesses),
+    candidates: buildCandidates(weaknesses),
+  };
+}
+
+async function writeLatestArtifacts(
+  store: RunStore,
+  runId: string,
+  out: ReturnType<typeof renderLedgerOutputs>
+): Promise<void> {
+  await store.save(runId, "editorial-review.json", out.reviewJson);
+  await store.save(runId, "editorial-review.md", out.reviewMd);
+  await store.save(runId, "editorial-instruction.candidates.md", out.candidates.text);
+}
+
+// 最新 alias（editorial-review.json）から head を復元する。resolveWeakness は新ラウンドを回さずに
+// 採否を反映するため、直近レビューの head を流用して reader 向け成果物だけ作り直す。
+async function readLatestHead(store: RunStore, runId: string): Promise<RoundHead | null> {
+  const raw = await store.read(runId, "editorial-review.json").then(
+    (c) => JSON.parse(c) as Partial<RoundHead>,
+    () => null
+  );
+  if (!raw || typeof raw.round !== "number") {
+    return null;
+  }
+  return {
+    round: raw.round,
+    verdict: raw.verdict ?? "",
+    scores: raw.scores ?? [],
+    strengths: raw.strengths ?? [],
+    summary: raw.summary ?? "",
+  };
+}
+
+export type ResolveWeaknessResult = {
+  runId: string;
+  id: string;
+  resolution: WeaknessResolution;
+  severity: WeaknessSeverity;
+};
+
+// 編集長の採否を台帳へ書き戻す（reviewer の status は触らない）。reviewer の機械状態と
+// 編集判断を別軸で残すことで、unresolved の機械集計が「open/partial かつ resolution 未設定」で取れる。
+export async function resolveWeakness(
+  store: RunStore,
+  runId: string,
+  id: string,
+  resolution: WeaknessResolution,
+  evidence: string
+): Promise<ResolveWeaknessResult> {
+  if (evidence.trim().length === 0) {
+    throw new Error("--evidence は空にできません（採否の根拠を監査台帳に残すため）。");
+  }
+  const ledger = await readLedger(store, runId);
+  if (!ledger) {
+    throw new Error(
+      `Run ${runId} に編集レビュー台帳（${LEDGER_FILE}）がありません。先に article:review-editorial を回してください。`
+    );
+  }
+  const entry = ledger.weaknesses.find((w) => w.id === id);
+  if (!entry) {
+    const known = ledger.weaknesses.map((w) => w.id).join(", ") || "(なし)";
+    throw new Error(`weakness id "${id}" が台帳にありません。既知の id: ${known}`);
+  }
+  entry.resolution = resolution;
+  entry.resolutionEvidence = evidence.trim();
+  entry.resolvedAt = new Date().toISOString();
+  entry.resolvedRound = ledger.round;
+  await store.save(runId, LEDGER_FILE, JSON.stringify(ledger, null, 2));
+
+  // reader 向け成果物（candidates / review.md・json）も即時更新する。これをしないと採用済み
+  // weakness が候補に残り続け、次回レビューを回すまで stale になる（直近レビューの head を流用）。
+  const head = await readLatestHead(store, runId);
+  if (head) {
+    await writeLatestArtifacts(store, runId, renderLedgerOutputs(head, ledger));
+  }
+  return { runId, id, resolution, severity: entry.severity };
+}
+
+// 未解決の weakness 数（open/partial かつ編集長の採否が未設定）。preference は除外可。
+export function countUnresolved(weaknesses: { status: WeaknessStatus; severity: WeaknessSeverity; resolution?: WeaknessResolution }[]): number {
+  return weaknesses.filter(
+    (w) => (w.status === "open" || w.status === "partial") && w.resolution === undefined
+  ).length;
 }

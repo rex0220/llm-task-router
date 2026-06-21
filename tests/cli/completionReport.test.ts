@@ -9,6 +9,7 @@ import {
   type CompletionReportData,
 } from "../../src/cli/completionReport";
 import { RunStore } from "../../src/storage/RunStore";
+import { RunProgress } from "../../src/progress/RunProgress";
 
 async function newStore(): Promise<RunStore> {
   return new RunStore(await mkdtemp(join(tmpdir(), "cr-runs-")));
@@ -78,6 +79,44 @@ describe("collectCompletionReportData", () => {
     expect(data.claims).toBeNull();
     expect(data.buildReport).toBeNull();
   });
+
+  it("reads verify-artifacts/export status from progress snapshot (latest event wins)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-21-vae";
+    await seed(store, runId);
+    // verify-artifacts は初回 error → 修正後 done。export は承認後 done。
+    await new RunProgress(store).appendMany(runId, [
+      { step: "verify-artifacts", status: "error", note: "FAIL (2 件)" },
+      { step: "verify-artifacts", status: "done", note: "OK" },
+      { step: "export", status: "done", output: "export/x.md", note: "ユーザー承認済み" },
+    ]);
+    const data = await collectCompletionReportData(store, runId, PC);
+    expect(data.verifyArtifacts).toEqual({ status: "done", note: "OK" });
+    expect(data.exported).toEqual({ status: "done", output: "export/x.md", note: "ユーザー承認済み" });
+  });
+
+  it("shows the latest verify-artifacts event (done→error regression is not masked by aggregate priority)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-21-regress";
+    await seed(store, runId);
+    // done の後に error（退行）。aggregate の集約 status は done>error で done を返すが、
+    // 完成報告は最後のイベント＝error を表示しなければならない。
+    await new RunProgress(store).appendMany(runId, [
+      { step: "verify-artifacts", status: "done", note: "OK" },
+      { step: "verify-artifacts", status: "error", note: "FAIL (再発)" },
+    ]);
+    const data = await collectCompletionReportData(store, runId, PC);
+    expect(data.verifyArtifacts).toEqual({ status: "error", note: "FAIL (再発)" });
+  });
+
+  it("treats verify-artifacts as pending and export as null when no such events exist", async () => {
+    const store = await newStore();
+    const runId = "2026-06-21-noevents";
+    await seed(store, runId);
+    const data = await collectCompletionReportData(store, runId, PC);
+    expect(data.verifyArtifacts.status).toBe("pending");
+    expect(data.exported).toBeNull();
+  });
 });
 
 function makeData(over: Partial<CompletionReportData> = {}): CompletionReportData {
@@ -88,6 +127,8 @@ function makeData(over: Partial<CompletionReportData> = {}): CompletionReportDat
     factcheck: { state: "done" },
     buildVerify: { state: "skipped" },
     editorial: { state: "done" },
+    verifyArtifacts: { status: "done", note: "OK" },
+    exported: null,
     claims: { total: 1, sources: 1, blocking: 0 },
     buildReport: null,
     goNoGo: "GO",
@@ -110,6 +151,22 @@ describe("renderCompletionReport", () => {
   it("escapes pipes in cell values", () => {
     const md = renderCompletionReport(makeData({ title: "a | b" }));
     expect(md).toContain("a \\| b");
+  });
+
+  it("renders verify-artifacts row from snapshot status (no more 'publication-check では判定不可')", () => {
+    const md = renderCompletionReport(makeData({ verifyArtifacts: { status: "done", note: "OK" } }));
+    expect(md).toContain("| verify-artifacts | done | OK |");
+    expect(md).not.toContain("publication-check では判定不可");
+  });
+
+  it("shows export state in the auto block (done with path, and 未実行 default)", () => {
+    const done = renderCompletionReport(
+      makeData({ exported: { status: "done", output: "export/x.md", note: "承認済み" } })
+    );
+    expect(done).toContain("- export: done / export/x.md / 承認済み");
+
+    const notYet = renderCompletionReport(makeData({ exported: null }));
+    expect(notYet).toContain("- export: 未実行");
   });
 
   it("shows the generating tool version in the auto block, and omits the line when absent", () => {

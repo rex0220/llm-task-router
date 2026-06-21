@@ -15,7 +15,7 @@
 - **参考章のリンクは `sources.json` から機械生成**（`llm-task-router article:references`）。normalize 後に、present かつ verified な claim が参照する検証済み source のみを参考章へ付与する（**LLM に URL を書かせない＝偽 URL 防止**）。実行時に **LLM が本文に書いた参考リスト節（`## 参考リンク`/`## 出典` 等・URL 入り）は除去**し、機械生成の `## 参考` に一本化する（二重化と台帳照合外の未検証 URL を残さない）。verify-artifacts が参考ブロック内リンクの台帳一致を検査する。
 - 公開相当の `llm-task-router article:export` は編集長が GO/NO-GO を出し、**ユーザー承認後に実行**する。自走で公開しない。**承認・条件付き GO の条件解決は `--note` で台帳（export イベント）に残す**（例 `--note "ユーザー承認済み（条件: Qiita媒体適性OK）"`）。
 - **完成報告は `runs/<runId>/completion-report.md` に残す**（`llm-task-router article:completion-report`）。ゲート結果・コスト・GO/NO-GO は機械生成、構成/上申/総評は編集長が editor 欄に記入。`export/index.json`（公開台帳）には混ぜない。
-- **編集レビュー**（読者・編集視点の批評）は `/review-editorial <run>`（`llm-task-router article:review-editorial`）。本文の書き手と別 provider のモデルが担当し、**採否は編集長が判断・preference と最終可否は筆者・事実は factcheck 優先**。正確性ゲートではない。
+- **編集レビュー**（読者・編集視点の批評）は `/review-editorial <run>`（`llm-task-router article:review-editorial`）。本文の書き手と別 provider のモデルが担当し、**採否は編集長が判断・preference と最終可否は筆者・事実は factcheck 優先**。正確性ゲートではない。**採否を決めたら `article:editorial-resolve --run <id> --id <Wxxx> --resolution accepted|waived|escalated|user-approved --evidence ...` で台帳（editorial-ledger.json）に書き戻す**（reviewer の `status` は触らず編集判断を別軸 `resolution` で記録。`escalated` は上申、ユーザー承認が下りたら `user-approved` で再度打つ）。**weakness を `open` のまま残さない**（未処理＝open/partial かつ resolution 未設定。完成報告前に 0 にする）。
 - **公開済み記事の更新**は `/update-article <slug>` で行う。import を起点に `update-base.md`（版の正本）を固定し、変更点だけを revise → `article:update-diff` で差分集中の2検証 → 承認後に `article:export` ＋ `article:record-publication`（同一 URL の更新。`published` と `export/index.json` を記録）。全面リライトはしない。
 
 ## 手順書

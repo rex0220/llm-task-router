@@ -1,5 +1,6 @@
 import type { RunStore } from "../storage/RunStore";
 import { RunProgress } from "../progress/RunProgress";
+import type { ProgressEvent, ProgressStepStatus } from "../progress/types";
 import { BuildVerifyReportSchema, ClaimsSchema, SourcesSchema } from "../schemas/ClaimsSchema";
 import { CLAIMS_FILE, SOURCES_FILE, isBlocking } from "./claimsNormalize";
 import { firstH1 } from "./export";
@@ -37,6 +38,12 @@ export type CompletionReportData = {
   factcheck: GateInfo;
   buildVerify: GateInfo;
   editorial: GateInfo;
+  // verify-artifacts は publication-check に状態が出ない（exit code を読めない）ため、progress
+  // snapshot の最新イベント由来で表示する。未実施なら status="pending"。
+  verifyArtifacts: { status: ProgressStepStatus; note?: string };
+  // export（公開相当）の実行状態。完成報告が export 前（GO/NO-GO レポート）に生成されたか、
+  // export 後に再生成されたかを読み手が判別できるようにする。未実行なら null。
+  exported: { status: ProgressStepStatus; output?: string; note?: string } | null;
   // claims.json があれば件数、無ければ null（factcheck=done なら verify-artifacts が別途弾く）。
   claims: { total: number; sources: number; blocking: number } | null;
   // build-verify-report.json があれば status と件数、無ければ null。
@@ -48,6 +55,17 @@ async function readOrNull(store: RunStore, runId: string, file: string): Promise
     (c) => c,
     () => null
   );
+}
+
+// readEvents は at 昇順なので、該当 step の末尾要素が最新イベント（同時刻は append 順で安定）。
+function lastEventOf(events: ProgressEvent[], step: string): ProgressEvent | undefined {
+  let found: ProgressEvent | undefined;
+  for (const e of events) {
+    if (e.step === step) {
+      found = e;
+    }
+  }
+  return found;
 }
 
 function safeJson(text: string): unknown {
@@ -77,7 +95,14 @@ export async function collectCompletionReportData(
   const title =
     (finalMd ? firstH1(finalMd) : undefined) ?? meta?.articleTitle?.trim() ?? runId;
 
-  const snapshot = await new RunProgress(store).readSnapshot(runId);
+  const progress = new RunProgress(store);
+  const snapshot = await progress.readSnapshot(runId);
+  // verify-artifacts / export は「最後のイベント」で表示する。snapshot の集約 status は done>error の
+  // 優先度（リトライ成功向け）なので、done→error の最新失敗を隠す。完成報告の gate は現在地が重要なため
+  // raw events から該当 step の末尾イベントを採る。
+  const events = await progress.readEvents(runId);
+  const verifyEvent = lastEventOf(events, "verify-artifacts");
+  const exportEvent = lastEventOf(events, "export");
 
   const claimsRaw = await readOrNull(store, runId, CLAIMS_FILE);
   let claims: CompletionReportData["claims"] = null;
@@ -133,6 +158,11 @@ export async function collectCompletionReportData(
     factcheck: { state: gateState(pc, "factcheck"), summary: parseGateSummary(pc, "factcheck") },
     buildVerify: { state: gateState(pc, "build-verify"), summary: parseGateSummary(pc, "build-verify") },
     editorial: { state: gateState(pc, "editorial-review"), summary: parseGateSummary(pc, "editorial-review") },
+    verifyArtifacts: { status: verifyEvent?.status ?? "pending", note: verifyEvent?.note },
+    // export イベントが無ければ「未実行」として null（completion-report は既定で export 前に生成される）。
+    exported: exportEvent
+      ? { status: exportEvent.status, output: exportEvent.output, note: exportEvent.note }
+      : null,
     claims,
     buildReport,
   };
@@ -144,6 +174,22 @@ function escapeCell(text: string): string {
 
 function gateStateLabel(state: GateState): string {
   return state === "missing" ? "未宣言" : state;
+}
+
+function stepStatusLabel(status: ProgressStepStatus): string {
+  return status === "pending" ? "未実施" : status;
+}
+
+// export 行の表示。完成報告は既定で export 前（GO/NO-GO レポート）に生成されるため、未実行が通常。
+// export 後に再生成すると done と出力先が出る（公開前/後を読み手が判別できる）。
+function exportLabel(exported: CompletionReportData["exported"]): string {
+  if (exported === null) {
+    return "未実行（完成報告は公開前の GO/NO-GO レポート。export 後に再生成すると反映）";
+  }
+  if (exported.status === "done") {
+    return joinParts(["done", exported.output, exported.note]);
+  }
+  return joinParts([stepStatusLabel(exported.status), exported.note]);
 }
 
 function joinParts(parts: (string | undefined)[]): string {
@@ -199,6 +245,7 @@ function renderAutoSection(data: CompletionReportData): string {
     `- 概算コスト合計: ${cost}`,
     `- GO/NO-GO: ${data.goNoGo ?? "（publication-check 未記入）"}`,
     `- reason: ${data.reason ?? "（publication-check 未記入）"}`,
+    `- export: ${escapeCell(exportLabel(data.exported))}`,
     "",
     "## ゲート結果",
     "| ゲート | 状態 | 要約 |",
@@ -208,7 +255,7 @@ function renderAutoSection(data: CompletionReportData): string {
     `| build-verify | ${gateStateLabel(data.buildVerify.state)} | ${escapeCell(buildSummary || "n/a")} |`,
     `| editorial-review | ${gateStateLabel(data.editorial.state)} | ${escapeCell(editorialSummary || "n/a")} |`,
     `| claims-normalize | ${escapeCell(claimsState)} | ${escapeCell(claimsSummary)} |`,
-    `| verify-artifacts | publication-check では判定不可 | exit code を別途確認（推奨） |`,
+    `| verify-artifacts | ${escapeCell(stepStatusLabel(data.verifyArtifacts.status))} | ${escapeCell(data.verifyArtifacts.note ?? "n/a")} |`,
     AUTO_END,
   ].join("\n");
 }
