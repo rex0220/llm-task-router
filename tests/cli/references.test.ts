@@ -7,6 +7,7 @@ import {
   renderReferencesBlock,
   replaceMarkedBlock,
   selectReferenceSources,
+  stripLlmReferenceSections,
   SOURCES_BEGIN,
   SOURCES_END,
 } from "../../src/cli/references";
@@ -101,6 +102,59 @@ describe("replaceMarkedBlock", () => {
     expect(() => replaceMarkedBlock(`x ${SOURCES_BEGIN} y`, SOURCES_BEGIN, SOURCES_END, block)).toThrow();
     expect(() => replaceMarkedBlock(`x ${SOURCES_END} y`, SOURCES_BEGIN, SOURCES_END, block)).toThrow();
     expect(() => replaceMarkedBlock(`${SOURCES_END}\n${SOURCES_BEGIN}`, SOURCES_BEGIN, SOURCES_END, block)).toThrow();
+  });
+});
+
+describe("stripLlmReferenceSections", () => {
+  it("removes an LLM 参考リンク section with URLs but keeps the machine ## 参考 block", () => {
+    const body = [
+      "# 記事",
+      "本文。",
+      "",
+      "## 参考リンク",
+      "",
+      "- 電通「2025年 日本の広告費」",
+      "  https://www.dentsu.co.jp/news/release/2026/0305-011003.html",
+      "- 電通 ニュース一覧",
+      "  https://www.dentsu.co.jp/news/",
+      "",
+      "## 参考",
+      "",
+      SOURCES_BEGIN,
+      "- [S001] 2025年 日本の広告費（primary, retrieved: 2026-06-21）",
+      "  https://www.dentsu.co.jp/news/release/2026/0305-011003.html",
+      SOURCES_END,
+      "",
+    ].join("\n");
+    const r = stripLlmReferenceSections(body);
+    expect(r.removed).toEqual(["参考リンク"]);
+    expect(r.body).not.toContain("## 参考リンク");
+    expect(r.body).not.toContain("ニュース一覧"); // LLM 製 nav リンクも消える
+    expect(r.body).toContain("## 参考"); // 機械見出しは残る
+    expect(r.body).toContain(SOURCES_BEGIN); // 機械ブロックは無傷
+    expect(r.body).toContain("[S001]");
+  });
+
+  it("matches 出典 / References / 参考文献 (case-insensitive) when they contain URLs", () => {
+    const body = ["## 出典", "- 例 https://example.com/a", "", "## 本論", "本文"].join("\n");
+    const r = stripLlmReferenceSections(body);
+    expect(r.removed).toEqual(["出典"]);
+    expect(r.body).toContain("## 本論");
+    expect(r.body).not.toContain("https://example.com/a");
+  });
+
+  it("does NOT remove a reference-titled section that has no URL (prose only)", () => {
+    const body = ["## 参考リンク", "（後日追記予定。リンクなし）", "", "## 次"].join("\n");
+    const r = stripLlmReferenceSections(body);
+    expect(r.removed).toEqual([]);
+    expect(r.body).toContain("## 参考リンク");
+  });
+
+  it("never strips the machine ## 参考 block itself", () => {
+    const body = ["## 参考", SOURCES_BEGIN, "- [S001] x", "  https://example.com/a", SOURCES_END].join("\n");
+    const r = stripLlmReferenceSections(body);
+    expect(r.removed).toEqual([]);
+    expect(r.body).toContain(SOURCES_BEGIN);
   });
 });
 

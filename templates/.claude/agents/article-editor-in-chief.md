@@ -66,7 +66,7 @@ model: opus
 - claims-normalize: `llm-task-router article:claims-normalize --run <id> [--scope full|diff]`
   - factchecker の claims.raw.json/sources.raw.json を id 付き claims.json/sources.json に正規化。新規記事は full、更新リライトの差分再検証は diff。
 - references: `llm-task-router article:references --run <id> [--stdout]`
-  - normalize 後に参考章へ検証済みリンクを機械付与（present かつ verified の cited source のみ・sources.json 正本）。final.md を機械更新（`final.references.bak.md` 退避）。検証済み 0件はエラー。
+  - normalize 後に参考章へ検証済みリンクを機械付与（present かつ verified の cited source のみ・sources.json 正本）。LLM が書いた参考リスト節（`## 参考リンク`/`## 出典` 等・URL 入り）は除去して機械生成 `## 参考` に一本化（二重化＋未検証 URL 防止）。final.md を機械更新（`final.references.bak.md` 退避）。検証済み 0件はエラー。
 - verify-artifacts: `llm-task-router article:verify-artifacts --run <id>`
   - 公開前ゲートの機械チェック（外部通信なし）。FAIL は exit 1。GO の前に必ず回す。
 - export:   `llm-task-router article:export --run <id> --out <path> [--force]`
