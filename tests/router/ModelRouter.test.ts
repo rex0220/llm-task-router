@@ -98,6 +98,34 @@ describe("ModelRouter", () => {
     expect(JSON.parse(result.text).title).toBe("T");
   });
 
+  it("sums usage/cost of the failed first response and the repair call", async () => {
+    // 初回応答は schema 検証に失敗（usage あり）→ 同一 provider で repair（usage あり）。
+    // 返る usage/cost は2回分の合算でなければならない（progress/router.log の実使用量集計のため）。
+    const primary = new QueueProvider([
+      { text: "not json", usage: { inputTokens: 100, outputTokens: 50, costUsd: 0.01 } },
+      {
+        text: JSON.stringify({
+          title: "T",
+          tags: ["TypeScript"],
+          targetReaders: ["engineer"],
+          goal: ["learn"],
+          mainClaim: "claim",
+          sections: [{ heading: "H", points: ["P"] }],
+          codeExamples: [{ language: "ts", purpose: "demo" }],
+        }),
+        usage: { inputTokens: 200, outputTokens: 80, costUsd: 0.02 },
+      },
+    ]);
+    const router = new ModelRouter({ primary }, testConfig(), new RunLogger(tmpLogPath()));
+
+    const result = await router.run({ task: "article_brief", input: "topic", schemaName: "ArticleBrief" });
+
+    expect(primary.calls).toHaveLength(2);
+    expect(result.usage?.inputTokens).toBe(300);
+    expect(result.usage?.outputTokens).toBe(130);
+    expect(result.usage?.costUsd).toBeCloseTo(0.03, 6);
+  });
+
   it("surfaces a truncation hint when validation keeps failing on truncated output", async () => {
     // {} はJSONとしては有効だが必須フィールドを欠く。truncated=true で打ち切り由来を示す。
     const truncatedInvalid: ProviderResponse = { text: "{}", truncated: true };

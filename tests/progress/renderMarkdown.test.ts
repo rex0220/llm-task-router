@@ -18,10 +18,35 @@ describe("renderProgressMarkdown", () => {
     const snap = aggregate("2026-06-21-x", [ev({ step: "create", status: "done", elapsedMs: 1200, costUsd: 0.5 })]);
     const md = renderProgressMarkdown(snap);
     expect(md).toContain("# 進捗: 2026-06-21-x");
+    // トークン未記録の工程のみ → 列は出ない（従来の列構成を保つ）。トークン列は専用テストで確認。
     expect(md).toContain("| # | 工程 | 状態 | 開始 | 終了 | 所要 | 概算$ | 根拠/補足 |");
+    expect(md).not.toContain("トークン(in/out)");
     expect(md).toContain("~$0.5000");
     expect(md).toContain("概算コスト合計");
     expect(md).toContain("1200ms");
+  });
+
+  it("sums tokens across steps (and across multiple invocations of one step) and shows a total line", () => {
+    const snap = aggregate("r", [
+      ev({ step: "create", status: "done", inputTokens: 1000, outputTokens: 2000 }),
+      // 同一工程の複数 invocation は積算される（cost と同じ挙動）。
+      ev({ step: "revise", status: "done", inputTokens: 300, outputTokens: 400 }),
+      ev({ step: "revise", status: "done", inputTokens: 30, outputTokens: 40 }),
+    ]);
+    expect(snap.totalInputTokens).toBe(1330);
+    expect(snap.totalOutputTokens).toBe(2440);
+    const md = renderProgressMarkdown(snap);
+    expect(md).toContain("| # | 工程 | 状態 | 開始 | 終了 | 所要 | 概算$ | トークン(in/out) | 根拠/補足 |");
+    expect(md).toContain("トークン合計: 入力 1,330 / 出力 2,440（合計 3,770 / LLM工程のみ）");
+    expect(md).toContain("330/440"); // revise 行（複数 invocation 積算）
+  });
+
+  it("omits the token total line and leaves token cells blank when no step reports tokens", () => {
+    const snap = aggregate("r", [ev({ step: "factcheck", status: "skip", note: "no facts" })]);
+    expect(snap.totalInputTokens).toBeUndefined();
+    const md = renderProgressMarkdown(snap);
+    expect(md).not.toContain("トークン合計");
+    expect(md).not.toContain("undefined");
   });
 
   it("leaves cost/elapsed cells blank when unknown (no n/a noise)", () => {
@@ -84,6 +109,23 @@ describe("renderProgressMarkdown", () => {
     ]);
     // create done → 現在地は refine(2) / 分母は canonical 9（revise で 10 にならない）。
     expect(renderProgressMarkdown(snap)).toContain("2 / 9 工程目");
+  });
+
+  it("separates non-canonical extras with a divider row and a note (A+C)", () => {
+    const md = renderProgressMarkdown(
+      aggregate("r", [
+        ev({ step: "create", status: "done" }),
+        ev({ step: "revise", status: "done" }),
+      ])
+    );
+    expect(md).toContain("追加アクション（工程外"); // 区切り行（A）
+    expect(md).toContain("#10 以降は工程ではない追加アクション"); // 注記（C）
+    expect(md).toContain("実行時刻順ではありません");
+  });
+
+  it("omits the divider/note when there are no non-canonical extras", () => {
+    const md = renderProgressMarkdown(aggregate("r", [ev({ step: "create", status: "done" })]));
+    expect(md).not.toContain("追加アクション");
   });
 });
 

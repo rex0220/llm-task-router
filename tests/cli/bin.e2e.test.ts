@@ -1,7 +1,10 @@
 import { execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { RunStore } from "../../src/storage/RunStore";
 
 const root = process.cwd();
 const bin = join(root, "dist", "llm-task-router.js");
@@ -144,6 +147,39 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
       expect(out).toContain("--article-id");
       // 公開版番号は --article-version（CLI 全体の -v/--version との衝突回避）。
       expect(out).toContain("--article-version");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:completion-report records a progress event into progress.events.jsonl",
+    async () => {
+      // temp cwd に runs/ を seed して bin を cwd=temp で実行（実 runs/ を汚さず実アクションを通す）。
+      const cwd = await mkdtemp(join(tmpdir(), "cr-e2e-"));
+      const runId = "2026-06-21-cr-e2e";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      await store.save(runId, "final.md", "# タイトル\n本文\n");
+      await store.save(
+        runId,
+        "publication-check.md",
+        ["# Publication Check", "- GO/NO-GO: GO", "- reason: 全ゲート通過", ""].join("\n")
+      );
+
+      execFileSync(process.execPath, [bin, "article:completion-report", "--run", runId], {
+        cwd,
+        encoding: "utf8",
+        timeout: E2E_TIMEOUT,
+      });
+
+      const events = readFileSync(join(cwd, "runs", runId, "progress.events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { step: string; status: string; note?: string });
+      const cr = events.find((e) => e.step === "completion-report");
+      expect(cr).toBeDefined();
+      expect(cr?.status).toBe("done");
+      expect(cr?.note).toBe("GO/NO-GO: GO");
     },
     E2E_TIMEOUT
   );

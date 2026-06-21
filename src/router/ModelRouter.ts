@@ -6,7 +6,7 @@ import { estimateCostUsd } from "../utils/cost";
 import { parseJsonObject } from "../utils/json";
 import { withAbortableTimeout } from "../utils/timeout";
 import { normalizeProviderError, RouterError, shouldFallback } from "./errors";
-import type { ModelCandidate, ModelRequest, ModelResponse, RouterConfig, SchemaName } from "./types";
+import type { ModelCandidate, ModelRequest, ModelResponse, ModelUsage, RouterConfig, SchemaName } from "./types";
 
 export class ModelRouter {
   constructor(
@@ -133,8 +133,17 @@ export class ModelRouter {
     const repaired = await this.callProvider(provider, repairRequest);
     const repairedResponse = this.toModelResponse(candidate, repaired, Date.now() - startedAt);
 
+    // 修復を行ったときは「初回（検証失敗）＋修復」の2回分を消費している。返り値の usage/elapsed は
+    // 両方の合算にする（progress のトークン/コスト集計・router.log の logSuccess が実使用量を反映するため）。
+    const combinedResponse: ModelResponse = {
+      ...repairedResponse,
+      elapsedMs: response.elapsedMs + repairedResponse.elapsedMs,
+      truncated: response.truncated || repairedResponse.truncated,
+      usage: sumUsage(response.usage, repairedResponse.usage),
+    };
+
     try {
-      return this.validateResponse(repairedResponse, schemaName);
+      return this.validateResponse(combinedResponse, schemaName);
     } catch (repairError) {
       const reason = normalizeProviderError(repairError).message;
       // 打ち切りが原因なら、修復を何度試しても直らない。実際の対処（max_tokens増）へ誘導する。
@@ -207,6 +216,21 @@ function formatZodIssues(error: z.ZodError): string {
   });
   const extra = error.issues.length > 3 ? ` (+${error.issues.length - 3} more)` : "";
   return `${issues.join("; ")}${extra}`;
+}
+
+// 初回応答と修復応答の usage を合算する（どちらかしか無ければそれを採用。両方 undefined なら undefined）。
+// costUsd は toModelResponse で各々概算済みなので、そのまま足し合わせれば 2 回分の概算合計になる。
+function sumUsage(a?: ModelUsage, b?: ModelUsage): ModelUsage | undefined {
+  if (!a && !b) {
+    return undefined;
+  }
+  const add = (x?: number, y?: number): number | undefined =>
+    x === undefined && y === undefined ? undefined : (x ?? 0) + (y ?? 0);
+  return {
+    inputTokens: add(a?.inputTokens, b?.inputTokens),
+    outputTokens: add(a?.outputTokens, b?.outputTokens),
+    costUsd: add(a?.costUsd, b?.costUsd),
+  };
 }
 
 function buildRepairPrompt(schemaName: SchemaName, invalidOutput: string): string {

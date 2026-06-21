@@ -22,6 +22,8 @@ export type WorkflowEvent =
       model: string;
       elapsedMs: number;
       costUsd?: number;
+      inputTokens?: number;
+      outputTokens?: number;
       truncated?: boolean;
       warnings?: string[];
     };
@@ -75,6 +77,8 @@ export type ReviseResult = QiitaWorkflowResult & {
   model: string;
   elapsedMs: number;
   costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
   truncated?: boolean;
   warnings?: string[];
 };
@@ -126,6 +130,8 @@ export async function reviseQiitaFinal(
     model: response.model,
     elapsedMs: response.elapsedMs,
     costUsd: response.usage?.costUsd,
+    inputTokens: response.usage?.inputTokens,
+    outputTokens: response.usage?.outputTokens,
     truncated: response.truncated,
     warnings,
   });
@@ -136,6 +142,8 @@ export async function reviseQiitaFinal(
     model: response.model,
     elapsedMs: response.elapsedMs,
     costUsd: response.usage?.costUsd,
+    inputTokens: response.usage?.inputTokens,
+    outputTokens: response.usage?.outputTokens,
     truncated: response.truncated,
     warnings,
   };
@@ -199,6 +207,8 @@ export type FinalEvaluation = {
   model: string;
   elapsedMs: number;
   costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
   truncated?: boolean;
   rawReviewJson: string; // response.text（生）。保存はそのまま store.save する
   review: ReviewResultJson; // parse 済み
@@ -237,6 +247,8 @@ export async function runFinalEvaluation(
     model: response.model,
     elapsedMs: response.elapsedMs,
     costUsd: response.usage?.costUsd,
+    inputTokens: response.usage?.inputTokens,
+    outputTokens: response.usage?.outputTokens,
     truncated: response.truncated,
     rawReviewJson: response.text,
     review,
@@ -268,6 +280,8 @@ export async function evaluateQiitaFinal(
     model: evaluation.model,
     elapsedMs: evaluation.elapsedMs,
     costUsd: evaluation.costUsd,
+    inputTokens: evaluation.inputTokens,
+    outputTokens: evaluation.outputTokens,
     truncated: evaluation.truncated,
   });
 
@@ -307,6 +321,8 @@ export type RefineEvent =
       model: string;
       elapsedMs: number;
       costUsd?: number;
+      inputTokens?: number;
+      outputTokens?: number;
       truncated?: boolean;
       issueCount: number;
       score: number;
@@ -319,6 +335,8 @@ export type RefineEvent =
       model: string;
       elapsedMs: number;
       costUsd?: number;
+      inputTokens?: number;
+      outputTokens?: number;
       truncated?: boolean;
       warnings?: string[];
     }
@@ -462,6 +480,8 @@ export async function refineQiitaFinal(
       model: ev.model,
       elapsedMs: ev.elapsedMs,
       costUsd: ev.costUsd,
+      inputTokens: ev.inputTokens,
+      outputTokens: ev.outputTokens,
       truncated: ev.truncated,
       issueCount: ev.issueCount,
       score: ev.score,
@@ -531,6 +551,8 @@ export async function refineQiitaFinal(
       model: rev.model,
       elapsedMs: rev.elapsedMs,
       costUsd: rev.costUsd,
+      inputTokens: rev.inputTokens,
+      outputTokens: rev.outputTokens,
       truncated: rev.truncated,
       warnings: rev.warnings,
     });
@@ -725,6 +747,8 @@ export async function runQiitaArticle(
       model: response.model,
       elapsedMs: response.elapsedMs,
       costUsd: response.usage?.costUsd,
+      inputTokens: response.usage?.inputTokens,
+      outputTokens: response.usage?.outputTokens,
       truncated: response.truncated,
       warnings: isProse ? detectWrapText(text) : undefined,
     });

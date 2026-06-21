@@ -24,6 +24,8 @@ type Accumulated = {
   // 小さい done が create 本体の費用を消してしまい、合計コストが過小表示になる。
   costUsd?: number;
   elapsedMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
 };
 
 // events 列 → ProgressSnapshot への純関数（I/O なし）。
@@ -57,6 +59,13 @@ export function aggregate(
     if (ev.elapsedMs !== undefined) {
       a.elapsedMs = (a.elapsedMs ?? 0) + ev.elapsedMs;
     }
+    // トークンも cost と同様に append 単位で積算（複数 invocation を畳む工程で総量を保つ）。
+    if (ev.inputTokens !== undefined) {
+      a.inputTokens = (a.inputTokens ?? 0) + ev.inputTokens;
+    }
+    if (ev.outputTokens !== undefined) {
+      a.outputTokens = (a.outputTokens ?? 0) + ev.outputTokens;
+    }
 
     // 最高優先度を最終状態に。同優先度は後勝ち（リトライ後の done/error を採用）。
     // note/output/provider/model は「代表イベント（＝最終状態を決めたイベント）」に紐づける。
@@ -82,6 +91,8 @@ export function aggregate(
       finishedAt: isTerminal(a.finalStatus) ? rep?.at : undefined,
       elapsedMs: a.elapsedMs,
       costUsd: a.costUsd,
+      inputTokens: a.inputTokens,
+      outputTokens: a.outputTokens,
       output: rep?.output,
       note: rep?.note,
       provider: rep?.provider,
@@ -121,6 +132,12 @@ export function aggregate(
   const costs = steps.map((s) => s.costUsd).filter((c): c is number => c !== undefined);
   const totalCostUsd = costs.length > 0 ? Number(costs.reduce((sum, c) => sum + c, 0).toFixed(6)) : undefined;
 
+  // トークン合計（判明した工程＝LLM 工程のみ。1つも無ければ undefined で列ごと出さない）。
+  const inTokens = steps.map((s) => s.inputTokens).filter((t): t is number => t !== undefined);
+  const outTokens = steps.map((s) => s.outputTokens).filter((t): t is number => t !== undefined);
+  const totalInputTokens = inTokens.length > 0 ? inTokens.reduce((sum, t) => sum + t, 0) : undefined;
+  const totalOutputTokens = outTokens.length > 0 ? outTokens.reduce((sum, t) => sum + t, 0) : undefined;
+
   // 記録したツール版は「version を持ち at 最大のイベント」から採る（配列順ではなく時刻基準。
   // aggregate は純関数で未ソート配列が来うるため）。
   const versioned = events.filter((e) => e.version !== undefined);
@@ -136,6 +153,8 @@ export function aggregate(
     currentIndex: currentRow?.index,
     complete,
     totalCostUsd,
+    totalInputTokens,
+    totalOutputTokens,
     updatedAt: new Date().toISOString(),
   };
 }

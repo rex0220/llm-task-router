@@ -18,6 +18,8 @@ export type ProgressEvent = {
   model?: string;
   elapsedMs?: number;
   costUsd?: number;
+  inputTokens?: number; // モデル呼び出しの入力トークン（LLM 工程のみ。集約は append 単位で積算）
+  outputTokens?: number; // モデル呼び出しの出力トークン
   output?: string; // 主な出力パス（runs/<id>/... など）
   note?: string; // skip 理由・補足（silent skip 禁止）
 };
@@ -33,6 +35,8 @@ export type ProgressStep = {
   finishedAt?: string;
   elapsedMs?: number;
   costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
   output?: string;
   note?: string;
   provider?: string;
@@ -48,5 +52,7 @@ export type ProgressSnapshot = {
   currentIndex?: number; // 1-based。最初の未完 canonical 工程（pending/start/error）。全 canonical done/skip なら undefined（=完了）
   complete: boolean; // canonical 工程がすべて done/skip
   totalCostUsd?: number; // costUsd が判明した工程のみ合算（不明は除外）
+  totalInputTokens?: number; // トークンが判明した工程のみ合算（LLM 工程のみ。無ければ undefined）
+  totalOutputTokens?: number;
   updatedAt: string;
 };

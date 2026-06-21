@@ -25,6 +25,14 @@ export function renderProgressMarkdown(snapshot: ProgressSnapshot): string {
   if (snapshot.totalCostUsd !== undefined) {
     lines.push(`- 概算コスト合計: ~$${snapshot.totalCostUsd.toFixed(4)}（概算 / 不明分は除外）`);
   }
+  // トークン合計（LLM 工程のみ。料金とは別に「使用量」を把握できるように出す。不明分は除外）。
+  if (snapshot.totalInputTokens !== undefined || snapshot.totalOutputTokens !== undefined) {
+    const inTok = snapshot.totalInputTokens ?? 0;
+    const outTok = snapshot.totalOutputTokens ?? 0;
+    lines.push(
+      `- トークン合計: 入力 ${fmtTokens(inTok)} / 出力 ${fmtTokens(outTok)}（合計 ${fmtTokens(inTok + outTok)} / LLM工程のみ）`
+    );
+  }
   lines.push(`- 更新: ${fmtDateTime(snapshot.updatedAt)}`);
   if (snapshot.toolVersion !== undefined) {
     lines.push(`- 生成ツール: llm-task-router ${snapshot.toolVersion}`);
@@ -33,22 +41,58 @@ export function renderProgressMarkdown(snapshot: ProgressSnapshot): string {
   lines.push("> 時刻はローカルタイム表示（events / progress.json は UTC）。");
   lines.push("");
 
-  lines.push("| # | 工程 | 状態 | 開始 | 終了 | 所要 | 概算$ | 根拠/補足 |");
-  lines.push("|---|---|---|---|---|---|---|---|");
+  // トークン列はトークンを記録した工程が1つでもあるときだけ出す（未記録の旧 run は従来の列構成を保つ）。
+  const showTokens = snapshot.totalInputTokens !== undefined || snapshot.totalOutputTokens !== undefined;
+  const head = ["#", "工程", "状態", "開始", "終了", "所要", "概算$", ...(showTokens ? ["トークン(in/out)"] : []), "根拠/補足"];
+  lines.push(`| ${head.join(" | ")} |`);
+  lines.push(`|${head.map(() => "---").join("|")}|`);
+  const firstExtra = snapshot.steps.find((s) => !s.canonical);
+  let dividerEmitted = false;
   for (const s of snapshot.steps) {
+    // canonical 工程と「工程外の追加アクション」の境目に区切り行を1本入れる（A）。列数は head に追従。
+    if (!s.canonical && !dividerEmitted) {
+      const cells = head.map((_, i) => (i === 1 ? "**— 追加アクション（工程外・実行時刻順）—**" : ""));
+      lines.push(`| ${cells.join(" | ")} |`);
+      dividerEmitted = true;
+    }
     const elapsed = s.elapsedMs !== undefined ? `${s.elapsedMs}ms` : "";
     const cost = s.costUsd !== undefined ? `~$${s.costUsd.toFixed(4)}` : "";
+    const tokens =
+      s.inputTokens !== undefined || s.outputTokens !== undefined
+        ? `${fmtTokens(s.inputTokens ?? 0)}/${fmtTokens(s.outputTokens ?? 0)}`
+        : "";
     const note = [s.output, s.note].filter((v) => v !== undefined && v !== "").join(" / ");
-    lines.push(
-      `| ${s.index} | ${s.label} | ${STATUS_LABEL[s.status]} | ${fmtTime(s.startedAt)} | ${fmtTime(s.finishedAt)} | ${elapsed} | ${cost} | ${escapeCell(note)} |`
-    );
+    const cells = [
+      String(s.index),
+      s.label,
+      STATUS_LABEL[s.status],
+      fmtTime(s.startedAt),
+      fmtTime(s.finishedAt),
+      elapsed,
+      cost,
+      ...(showTokens ? [tokens] : []),
+      escapeCell(note),
+    ];
+    lines.push(`| ${cells.join(" | ")} |`);
   }
   lines.push("");
+  // 追加アクションがあるときだけ注記（C）。表の位置＝工程順で、実行時刻順ではない旨。
+  if (firstExtra) {
+    lines.push(
+      `> ※ #${firstExtra.index} 以降は工程ではない追加アクション（revise 等は複数工程に跨るため末尾にまとめています）。表の位置は工程順で、実行時刻順ではありません。`
+    );
+    lines.push("");
+  }
   return lines.join("\n");
 }
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
+}
+
+// トークン数を桁区切りで表示（ランタイム locale 非依存に固定）。
+function fmtTokens(n: number): string {
+  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
 // ローカルタイムの HH:MM:SS。UTC との取り違えを避けるため表示はローカルに寄せる
