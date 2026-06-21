@@ -241,11 +241,21 @@ export function mergeCompletionReport(data: CompletionReportData, existing: stri
   if (existing === null) {
     return { content: renderCompletionReport(data), recovered: false };
   }
-  const endIdx = existing.indexOf(AUTO_END);
-  if (endIdx < 0) {
+  // begin/end が「ちょうど1つずつ・正順」でなければマーカー破損とみなす（欠落・逆順・重複を弾く）。
+  const beginFirst = existing.indexOf(AUTO_BEGIN);
+  const beginLast = existing.lastIndexOf(AUTO_BEGIN);
+  const endFirst = existing.indexOf(AUTO_END);
+  const endLast = existing.lastIndexOf(AUTO_END);
+  const wellFormed =
+    beginFirst >= 0 &&
+    beginFirst === beginLast && // begin は1つだけ
+    endFirst >= 0 &&
+    endFirst === endLast && // end は1つだけ
+    beginFirst < endFirst; // begin が end より前
+  if (!wellFormed) {
     // マーカー破損: 安全側に倒して全面再生成（呼び出し側で bak 退避）。
     return { content: renderCompletionReport(data), recovered: true };
   }
-  const editorTail = existing.slice(endIdx + AUTO_END.length);
+  const editorTail = existing.slice(endFirst + AUTO_END.length);
   return { content: `${renderHead(data)}${editorTail}`, recovered: false };
 }

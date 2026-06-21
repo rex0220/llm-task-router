@@ -139,4 +139,16 @@ describe("mergeCompletionReport (marker protection)", () => {
     expect(recovered).toBe(true);
     expect(content).toContain("<!-- auto:begin -->");
   });
+
+  it("flags recovered for malformed markers (missing begin / reversed / duplicated)", () => {
+    const onlyEnd = "ゴミ\n<!-- auto:end -->\n## 構成\n本文\n";
+    expect(mergeCompletionReport(makeData(), onlyEnd).recovered).toBe(true);
+
+    const reversed = "<!-- auto:end -->\n間\n<!-- auto:begin -->\n";
+    expect(mergeCompletionReport(makeData(), reversed).recovered).toBe(true);
+
+    const duplicated =
+      "<!-- auto:begin -->\nA\n<!-- auto:end -->\n<!-- auto:begin -->\nB\n<!-- auto:end -->\n";
+    expect(mergeCompletionReport(makeData(), duplicated).recovered).toBe(true);
+  });
 });

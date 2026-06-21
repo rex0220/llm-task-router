@@ -1,7 +1,7 @@
 import type { RunStore } from "../storage/RunStore";
 import { BuildVerifyReportSchema, ClaimsSchema, SourcesSchema } from "../schemas/ClaimsSchema";
 import { CLAIMS_FILE, SOURCES_FILE, isBlocking } from "./claimsNormalize";
-import { gateState, hasSkipReason } from "./publicationCheck";
+import { gateState, hasSkipReason, parseGoNoGo } from "./publicationCheck";
 
 // 公開前ゲート: 成果物の揃い・スキーマ・blocking を機械的にチェックする（外部通信なし）。
 // 各検証の中身は再判定しない（factcheck/build/editorial の判断は各担当に委ねる）。
@@ -39,7 +39,8 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
   const publicationCheck = await readOrNull(store, runId, "publication-check.md");
   if (publicationCheck === null) {
     errors.push("publication-check.md が存在しません（編集長が GO/NO-GO 前に作成する）。");
-  } else if (!/^-\s*GO\/NO-GO:\s*\S.*$/im.test(publicationCheck)) {
+  } else if (parseGoNoGo(publicationCheck) === undefined) {
+    // 共通パーサに寄せる（旧 regex の \s* は改行を食い、空欄 GO/NO-GO を「記載あり」と誤判定した）。
     errors.push("publication-check.md に GO/NO-GO の記載がありません。");
   }
 
