@@ -1,6 +1,6 @@
 import type { RunStore } from "../storage/RunStore";
 import { BuildVerifyReportSchema, ClaimsSchema, SourcesSchema } from "../schemas/ClaimsSchema";
-import { CLAIMS_FILE, SOURCES_FILE, isBlocking, canonicalUrl } from "./claimsNormalize";
+import { CLAIMS_FILE, SOURCES_FILE, isBlocking, canonicalUrl, collectCitedSourceIds } from "./claimsNormalize";
 import { gateState, hasSkipReason, parseGoNoGo } from "./publicationCheck";
 import { SOURCES_BEGIN, SOURCES_END } from "./references";
 
@@ -160,6 +160,9 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
   // - ブロック外の本文リンクで sources.json に無いものは warning（GitHub・公式 doc・画像等の正当リンクを壊さない）。
   await checkReferenceLinks(store, runId, errors, warnings);
 
+  // sources の到達性／差し替え／cited 焼き込みの整合性（read-only・外部通信なし）。
+  await checkSourceMeta(store, runId, errors);
+
   return { runId, ok: errors.length === 0, errors, warnings };
 }
 
@@ -189,10 +192,14 @@ async function checkReferenceLinks(
     return; // sources スキーマ不適合は上で別途 error 済み
   }
   const known = new Set<string>();
+  const deadByUrl = new Set<string>(); // 正規化 URL → reachable:"dead" な source の URL
   for (const s of sources.data) {
     const n = normalizeForCompare(s.url);
     if (n) {
       known.add(n);
+      if (s.reachable === "dead") {
+        deadByUrl.add(n);
+      }
     }
   }
 
@@ -214,6 +221,7 @@ async function checkReferenceLinks(
   const inBlock = (pos: number): boolean => hasBlock && pos >= bIdx && pos < eIdx + SOURCES_END.length;
 
   const blockMissing = new Set<string>();
+  const blockDead = new Set<string>();
   const bodyUnknown = new Set<string>();
   for (const m of final.matchAll(URL_RE)) {
     const raw = m[0].replace(/[.,;]+$/, "");
@@ -224,6 +232,8 @@ async function checkReferenceLinks(
     if (inBlock(m.index ?? 0)) {
       if (!known.has(norm)) {
         blockMissing.add(raw);
+      } else if (deadByUrl.has(norm)) {
+        blockDead.add(raw);
       }
     } else if (!known.has(norm)) {
       bodyUnknown.add(raw);
@@ -235,10 +245,67 @@ async function checkReferenceLinks(
       `参考ブロック内に sources.json に無いリンクがあります（偽/未登録 URL）: ${[...blockMissing].join(", ")}`
     );
   }
+  if (blockDead.size > 0) {
+    errors.push(
+      `参考ブロック内に reachable=dead の source へのリンクがあります（死リンクを公開しない）: ${[...blockDead].join(", ")}`
+    );
+  }
   if (bodyUnknown.size > 0) {
     warnings.push(
       `本文（参考ブロック外）に sources.json 未登録のリンクがあります（出典なら参考章へ）: ${[...bodyUnknown].join(", ")}`
     );
+  }
+}
+
+// sources の到達性／差し替え／cited 焼き込みの整合性（read-only・外部通信しない）。
+// メタ無し（旧 run）は新エラーを出さない: dead/replacedBy が明示されたとき・cited 不一致時のみ発火。
+async function checkSourceMeta(store: RunStore, runId: string, errors: string[]): Promise<void> {
+  const claimsJson = await readOrNull(store, runId, CLAIMS_FILE);
+  const sourcesJson = await readOrNull(store, runId, SOURCES_FILE);
+  if (claimsJson === null || sourcesJson === null) {
+    return; // 不在は他チェックが扱う
+  }
+  const claims = ClaimsSchema.safeParse(safeJson(claimsJson));
+  const sources = SourcesSchema.safeParse(safeJson(sourcesJson));
+  if (!claims.success || !sources.success) {
+    return; // スキーマ不適合は上で別途 error 済み
+  }
+
+  const ids = new Set(sources.data.map((s) => s.id));
+  // cited の正本は claims（焼き込み値ではなく再導出を使う）。
+  const derived = collectCitedSourceIds(claims.data);
+
+  // 1. claims が引用しているのに dead（死リンクを引用している台帳不整合）。
+  // 焼き込み cited(optional) ではなく claims 再導出で判定する（cited 未 materialize でも検出する）。
+  const deadCited = sources.data.filter((s) => derived.has(s.id) && s.reachable === "dead").map((s) => s.id);
+  if (deadCited.length > 0) {
+    errors.push(
+      `claims が引用しているのに reachable=dead の source があります（claim を到達可能な代替へ張り替えてください）: ${deadCited.join(", ")}`
+    );
+  }
+
+  // 2. replacedBy の自己参照 / dangling。
+  for (const s of sources.data) {
+    if (s.replacedBy === undefined) {
+      continue;
+    }
+    if (s.replacedBy === s.id) {
+      errors.push(`source ${s.id} の replacedBy が自己参照です。`);
+    } else if (!ids.has(s.replacedBy)) {
+      errors.push(`source ${s.id} の replacedBy=${s.replacedBy} が sources.json に存在しません（dangling）。`);
+    }
+  }
+
+  // 3. cited 焼き込みと claims 再導出の一致（cited を正本扱いしない担保／焼き込みの手編集 drift 検出）。
+  // cited が materialize された新 run のみ検査（旧 run は cited 未記録なので対象外＝back-compat）。
+  const materialized = sources.data.some((s) => s.cited !== undefined);
+  if (materialized) {
+    const mismatched = sources.data.filter((s) => (s.cited ?? false) !== derived.has(s.id)).map((s) => s.id);
+    if (mismatched.length > 0) {
+      errors.push(
+        `sources.json の cited が claims から再導出した集合と不一致です（article:claims-normalize を再実行してください）: ${mismatched.join(", ")}`
+      );
+    }
   }
 }
 

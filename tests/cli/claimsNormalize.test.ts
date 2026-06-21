@@ -246,3 +246,100 @@ describe("normalizeClaims", () => {
     await expect(normalizeClaims(store, runId, "full")).rejects.toThrow();
   });
 });
+
+describe("normalizeClaims: 到達性／差し替え／cited メタ", () => {
+  const liveSrc = (key: string, over: Record<string, unknown> = {}) => ({
+    key,
+    url: `https://example.com/${key}`,
+    title: key,
+    retrievedAt: "2026-06-20",
+    sourceType: "primary",
+    summary: "",
+    ...over,
+  });
+
+  it("propagates reachable (recorded only) and recomputes cited from present+verified claims", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-meta-a";
+    await seed(
+      store,
+      runId,
+      [
+        rawClaim({ claim: "cited one", status: "verified", sourceRefs: ["s1"] }),
+        rawClaim({ claim: "unverified one", status: "unverified", sourceRefs: ["s2"] }),
+      ],
+      [liveSrc("s1", { reachable: "ok" }), liveSrc("s2") /* reachable 未記録 */]
+    );
+    await normalizeClaims(store, runId, "full");
+    const sources = SourcesSchema.parse(JSON.parse(await store.read(runId, "sources.json")));
+    const s1 = sources.find((s) => s.id === "S001")!;
+    const s2 = sources.find((s) => s.id === "S002")!;
+    expect(s1.reachable).toBe("ok");
+    expect(s2.reachable).toBeUndefined(); // 未記録は省略
+    expect(s1.cited).toBe(true); // present+verified が参照
+    expect(s2.cited).toBe(false); // unverified 参照のみ
+  });
+
+  it("resolves replacedByKey to SNNN even when the replacement appears later (2-pass)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-meta-b";
+    await seed(
+      store,
+      runId,
+      [rawClaim({ claim: "x", status: "verified", sourceRefs: ["live"] })],
+      [
+        liveSrc("dead", { reachable: "dead", replacedByKey: "live" }), // 代替が配列上で後ろ
+        liveSrc("live", { reachable: "ok" }),
+      ]
+    );
+    await normalizeClaims(store, runId, "full");
+    const sources = SourcesSchema.parse(JSON.parse(await store.read(runId, "sources.json")));
+    const dead = sources.find((s) => s.url.endsWith("/dead"))!;
+    const live = sources.find((s) => s.url.endsWith("/live"))!;
+    expect(dead.reachable).toBe("dead");
+    expect(dead.replacedBy).toBe(live.id);
+    expect(dead.cited).toBe(false);
+    expect(live.cited).toBe(true);
+  });
+
+  it("rejects a self-referential replacedByKey", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-meta-c";
+    await seed(
+      store,
+      runId,
+      [rawClaim({ claim: "x", status: "unverified", sourceRefs: [] })],
+      [liveSrc("d", { reachable: "dead", replacedByKey: "d" })]
+    );
+    await expect(normalizeClaims(store, runId, "full")).rejects.toThrow(/自己参照/);
+  });
+
+  it("rejects a replacedByKey that resolves to no source", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-meta-d";
+    await seed(
+      store,
+      runId,
+      [rawClaim({ claim: "x", status: "unverified", sourceRefs: [] })],
+      [liveSrc("d", { reachable: "dead", replacedByKey: "ghost" })]
+    );
+    await expect(normalizeClaims(store, runId, "full")).rejects.toThrow(/replacedByKey/);
+  });
+
+  it("stays backward compatible: raw sources without meta produce cited but no reachable/replacedBy", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-meta-e";
+    await seed(
+      store,
+      runId,
+      [rawClaim({ claim: "x", status: "verified", sourceRefs: ["s1"] })],
+      [liveSrc("s1")]
+    );
+    await normalizeClaims(store, runId, "full");
+    const sources = SourcesSchema.parse(JSON.parse(await store.read(runId, "sources.json")));
+    const s1 = sources[0];
+    expect(s1.reachable).toBeUndefined();
+    expect(s1.replacedBy).toBeUndefined();
+    expect(s1.cited).toBe(true); // normalize は常に cited を出す
+  });
+});

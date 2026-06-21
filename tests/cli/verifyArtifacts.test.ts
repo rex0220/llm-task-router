@@ -437,3 +437,124 @@ describe("verifyArtifacts", () => {
     expect(r.warnings.join("\n")).toMatch(/参考ブロック外/);
   });
 });
+
+describe("verifyArtifacts: sources 到達性／差し替え／cited 整合（read-only）", () => {
+  it("FAILs when a cited source is reachable:dead", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-citeddead";
+    await seedComplete(store, runId);
+    await store.save(runId, "claims.json", CLAIMS_OK); // C001 verified present [S001]
+    await store.save(
+      runId,
+      "sources.json",
+      JSON.stringify([
+        { id: "S001", url: "https://example.com/doc", title: "Doc", retrievedAt: "2026-06-20", sourceType: "primary", summary: "", reachable: "dead", cited: true },
+      ])
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/reachable=dead の source があります/);
+  });
+
+  it("FAILs on a dead source cited by claims even when cited is not materialized (claims is the source of truth)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-deadnocited";
+    await seedComplete(store, runId);
+    await store.save(runId, "claims.json", CLAIMS_OK); // C001 verified present [S001]
+    // reachable:dead は明示、cited は省略（未 materialize）。claims 再導出で S001 は cited。
+    await store.save(
+      runId,
+      "sources.json",
+      JSON.stringify([
+        { id: "S001", url: "https://example.com/doc", title: "Doc", retrievedAt: "2026-06-20", sourceType: "primary", summary: "", reachable: "dead" },
+      ])
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/reachable=dead の source があります/);
+  });
+
+  it("FAILs when the 参考 block links to a reachable:dead source", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-blockdead";
+    await seedComplete(store, runId);
+    await store.save(runId, "claims.json", CLAIMS_OK); // cited = S001
+    await store.save(
+      runId,
+      "sources.json",
+      JSON.stringify([
+        { id: "S001", url: "https://example.com/doc", title: "Doc", retrievedAt: "2026-06-20", sourceType: "primary", summary: "", reachable: "ok", cited: true },
+        { id: "S002", url: "https://dead.example/x", title: "Dead", retrievedAt: "2026-06-20", sourceType: "secondary", summary: "", reachable: "dead", cited: false },
+      ])
+    );
+    // 手編集で死リンク(S002)が参考ブロックに混入した状態。
+    await store.save(
+      runId,
+      "final.md",
+      "# T\n\n## 参考\n\n<!-- sources:begin -->\n- [S002] Dead（secondary, retrieved: 2026-06-20）\n  https://dead.example/x\n<!-- sources:end -->\n"
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/reachable=dead の source へのリンク/);
+  });
+
+  it("FAILs on a dangling replacedBy", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-dangling";
+    await seedComplete(store, runId);
+    await store.save(runId, "claims.json", CLAIMS_OK);
+    await store.save(
+      runId,
+      "sources.json",
+      JSON.stringify([
+        { id: "S001", url: "https://example.com/doc", title: "Doc", retrievedAt: "2026-06-20", sourceType: "primary", summary: "", reachable: "ok", cited: true, replacedBy: "S999" },
+      ])
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/dangling/);
+  });
+
+  it("FAILs on a self-referential replacedBy (hand-edit detection)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-selfref";
+    await seedComplete(store, runId);
+    await store.save(runId, "claims.json", CLAIMS_OK);
+    await store.save(
+      runId,
+      "sources.json",
+      JSON.stringify([
+        { id: "S001", url: "https://example.com/doc", title: "Doc", retrievedAt: "2026-06-20", sourceType: "primary", summary: "", reachable: "ok", cited: true, replacedBy: "S001" },
+      ])
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/自己参照/);
+  });
+
+  it("FAILs when cited materialization disagrees with claims (drift)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-citedrift";
+    await seedComplete(store, runId);
+    await store.save(runId, "claims.json", CLAIMS_OK); // 再導出 cited = {S001}
+    await store.save(
+      runId,
+      "sources.json",
+      JSON.stringify([
+        { id: "S001", url: "https://example.com/doc", title: "Doc", retrievedAt: "2026-06-20", sourceType: "primary", summary: "", cited: false },
+      ])
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/cited が claims から再導出した集合と不一致/);
+  });
+
+  it("stays PASS for an old run whose sources.json has no reachability/cited meta", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-oldmeta";
+    await seedComplete(store, runId); // SOURCES_OK: cited 無し・reachable 無し
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+  });
+});

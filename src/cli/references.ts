@@ -1,6 +1,6 @@
 import type { RunStore } from "../storage/RunStore";
 import { ClaimsSchema, SourcesSchema, type Claim, type Source } from "../schemas/ClaimsSchema";
-import { CLAIMS_FILE, SOURCES_FILE } from "./claimsNormalize";
+import { CLAIMS_FILE, SOURCES_FILE, collectCitedSourceIds } from "./claimsNormalize";
 
 // 参考章に「検証済みソースのリンク」を機械生成する（優先度: 記事出力の検証経路を読者へ）。
 // - リンクは sources.json（検証済み）が正本。LLM に URL を書かせない（偽 URL 捏造防止）。
@@ -49,21 +49,15 @@ export function stripLlmReferenceSections(body: string): { body: string; removed
 const SOURCE_TYPE_ORDER: Record<Source["sourceType"], number> = { primary: 0, secondary: 1 };
 
 // present かつ verified な claim が参照する source だけを、primary→secondary・id 昇順で返す（重複排除）。
+// 防御として reachable:"dead" は参考章に出さない（死リンクを焼かない。台帳不整合の検出は verify-artifacts）。
 export function selectReferenceSources(claims: Claim[], sources: Source[]): Source[] {
-  const citedIds = new Set<string>();
-  for (const c of claims) {
-    if (c.lifecycle === "present" && c.status === "verified") {
-      for (const sid of c.sourceIds) {
-        citedIds.add(sid);
-      }
-    }
-  }
+  const citedIds = collectCitedSourceIds(claims);
   const byId = new Map(sources.map((s) => [s.id, s] as const));
   const picked: Source[] = [];
   const seen = new Set<string>();
   for (const id of citedIds) {
     const s = byId.get(id);
-    if (s && !seen.has(s.id)) {
+    if (s && !seen.has(s.id) && s.reachable !== "dead") {
       seen.add(s.id);
       picked.push(s);
     }
@@ -145,16 +139,21 @@ export function replaceMarkedBlock(body: string, begin: string, end: string, blo
 export async function prepareReferencesBlock(
   store: RunStore,
   runId: string
-): Promise<{ block: string; count: number }> {
+): Promise<{ block: string; count: number; warnings: string[] }> {
   const claims = await readLedger(store, runId, CLAIMS_FILE, ClaimsSchema);
   const sources = await readLedger(store, runId, SOURCES_FILE, SourcesSchema);
   const selected = selectReferenceSources(claims, sources);
+  // cited だが reachable:"dead" で参考章から防御的に除外したものを warn として返す（CLI が stderr 出力）。
+  const citedIds = collectCitedSourceIds(claims);
+  const warnings = sources
+    .filter((s) => citedIds.has(s.id) && s.reachable === "dead")
+    .map((s) => `参考章から除外（reachable=dead）: ${s.id} ${s.url}`);
   if (selected.length === 0) {
     throw new Error(
-      "参考に載せる検証済み source がありません（present かつ verified の claim が参照する source なし）。factcheck / article:claims-normalize を確認してください。"
+      "参考に載せる検証済み source がありません（present かつ verified の claim が参照する source なし／到達可能なもの無し）。factcheck / article:claims-normalize を確認してください。"
     );
   }
-  return { block: renderReferencesBlock(selected), count: selected.length };
+  return { block: renderReferencesBlock(selected), count: selected.length, warnings };
 }
 
 async function readLedger<T>(

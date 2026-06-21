@@ -8,6 +8,9 @@ export const CLAIM_STATUSES = ["unverified", "verified", "needs-source", "incorr
 export const CLAIM_LIFECYCLES = ["present", "removed"] as const;
 export const SEVERITIES = ["critical", "major", "minor", "suggestion"] as const;
 export const SOURCE_TYPES = ["primary", "secondary"] as const;
+// 到達性。"ok"=到達確認OK / "dead"=到達不能（404/403等） / "unknown"=確認したが不明。
+// 省略（未記録）と "unknown"（確認したが不明）を区別するため default は付けない。
+export const REACHABILITY = ["ok", "dead", "unknown"] as const;
 
 export const CLAIM_ID_RE = /^C\d{3}-[0-9a-f]{8}$/;
 export const SOURCE_ID_RE = /^S\d{3}$/;
@@ -38,6 +41,10 @@ export const RawSourceSchema = z.object({
   retrievedAt: z.string().regex(DATE_RE),
   sourceType: z.enum(SOURCE_TYPES).default("secondary"),
   summary: z.string().default(""),
+  // 到達性。未記録は省略（default なし）。factchecker が死リンクに気づいたら "dead" を記録。
+  reachable: z.enum(REACHABILITY).optional(),
+  // 死リンクを置換した後継 source の raw key（normalize で SNNN へ解決する）。
+  replacedByKey: z.string().min(1).optional(),
 });
 
 export const RawClaimsSchema = z.array(RawClaimSchema);
@@ -89,6 +96,14 @@ export const SourceSchema = z.object({
   retrievedAt: z.string().regex(DATE_RE),
   sourceType: z.enum(SOURCE_TYPES),
   summary: z.string(),
+  // 到達性。省略=旧run/未記録、"unknown"=確認したが不明（default を付けない）。
+  reachable: z.enum(REACHABILITY).optional(),
+  // 死リンクの後継 source id（normalize が replacedByKey から解決）。
+  replacedBy: z.string().regex(SOURCE_ID_RE).optional(),
+  // 参考章に出る（present かつ verified の claim が参照する）か。normalize が毎回再計算して焼き込む。
+  // 正本は claims。verify-artifacts が claims 再導出との一致を検査する（手編集 drift 検出）。
+  // optional（default なし）＝旧 run（未 materialize）と新 run を区別し、旧 run を整合チェックで fail させない。
+  cited: z.boolean().optional(),
 });
 
 export const ClaimsSchema = z.array(ClaimSchema);
