@@ -65,6 +65,8 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
       const out = run(["article:create", "--help"]);
       expect(out).toContain("--topic");
       expect(out).toContain("--profile");
+      // 編集長モデルは作成時に固定する（progress.md ヘッダに出る）。
+      expect(out).toContain("--editor-model");
     },
     E2E_TIMEOUT
   );
@@ -248,7 +250,7 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
       );
 
       const md = readFileSync(join(cwd, "runs", runId, "progress.md"), "utf8");
-      expect(md).toContain("- 編集長（AIモデル）: claude-opus-4-8");
+      expect(md).toContain("- 編集長（AIモデル・自己申告）: claude-opus-4-8");
       const events = readFileSync(join(cwd, "runs", runId, "progress.events.jsonl"), "utf8")
         .trim()
         .split("\n")

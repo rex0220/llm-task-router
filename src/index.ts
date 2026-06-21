@@ -107,6 +107,7 @@ program
   .option("--profile <name>", "Article profile under config/profiles/ (platform + style)", "qiita")
   .option("--platform <name>", "Override the platform label from the profile")
   .option("--run <runId>", "Run id")
+  .option("--editor-model <id>", "Editor-in-chief AI model id (e.g. claude-opus-4-8). Fixed at creation, shown in progress.md header")
   .option("--config <path>", "Path to models.yaml", "config/models.yaml")
   .action(
     async (options: {
@@ -115,6 +116,7 @@ program
       profile: string;
       platform?: string;
       run?: string;
+      editorModel?: string;
       config: string;
     }) => {
       const topic = await resolveText(options.topic, options.topicFile, "topic", "--topic", "--topic-file");
@@ -131,6 +133,7 @@ program
         step: "create",
         task: "create",
         totals: reporter.totals,
+        editorModel: options.editorModel,
         output: (r) => `runs/${r.runId}/final.md`,
         run: () =>
           createQiitaArticle(
@@ -500,11 +503,15 @@ async function runWithProgress<T>(args: {
   run: () => Promise<T>;
   // create 以外は run の存在を先に確認してから記録する（runId typo で架空 run を作らない）。
   ensureRun?: () => Promise<void>;
+  // 編集長（駆動する Claude）の AI モデル。create 等で渡すと start から progress.md に出る。
+  editorModel?: string;
 }): Promise<T> {
   if (args.ensureRun) {
     await args.ensureRun();
   }
-  await safeProgress(() => args.progress.append(args.runId, { step: args.step, status: "start", task: args.task }));
+  await safeProgress(() =>
+    args.progress.append(args.runId, { step: args.step, status: "start", task: args.task, editorModel: args.editorModel })
+  );
   // start 直後に progress.json / progress.md を生成する。create/refine など長い工程でも
   // 「開始時点」で進捗ファイルが出る（done まで待たない＝folder 作成直後に見える）。
   await safeProgress(async () => {
@@ -523,6 +530,7 @@ async function runWithProgress<T>(args: {
         inputTokens: t.inputTokens,
         outputTokens: t.outputTokens,
         output: args.output?.(result),
+        editorModel: args.editorModel,
       })
     );
     await safeProgress(async () => {

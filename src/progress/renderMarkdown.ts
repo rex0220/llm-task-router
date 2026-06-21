@@ -35,7 +35,8 @@ export function renderProgressMarkdown(snapshot: ProgressSnapshot): string {
   }
   lines.push(`- 更新: ${fmtDateTime(snapshot.updatedAt)}`);
   if (snapshot.editorModel !== undefined) {
-    lines.push(`- 編集長（AIモデル）: ${snapshot.editorModel}`);
+    // 自己申告値（自動検出ではなく作成時に編集長が宣言）。監査値ではない旨を表記で明示する。
+    lines.push(`- 編集長（AIモデル・自己申告）: ${snapshot.editorModel}`);
   }
   if (snapshot.toolVersion !== undefined) {
     lines.push(`- 生成ツール: llm-task-router ${snapshot.toolVersion}`);
