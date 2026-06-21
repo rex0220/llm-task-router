@@ -11,6 +11,41 @@ export const SOURCES_BEGIN = "<!-- sources:begin -->";
 export const SOURCES_END = "<!-- sources:end -->";
 const REFERENCES_HEADING_RE = /^##\s+参考\s*$/;
 
+// LLM が本文に書きがちな参考リスト見出し（機械生成の `## 参考` とは別物）。
+// references は sources.json から `## 参考` を機械生成するので、これら LLM 製の参考リスト節は
+// 「二重化＋台帳照合されない未検証 URL の温床」になる（偽 URL 防止の趣旨を骨抜きにする）。
+const LLM_REFERENCE_HEADING_RE =
+  /^##\s+(参考リンク|参考文献|参考資料|参考URL|出典|参照|References?|Reference Links?|Sources?)\s*$/i;
+
+// LLM 製の参考リスト節（上記見出し＋URL を含む）を除去する。`## 参考`（機械生成）は対象外。
+// URL を含まない同名見出しの散文節は誤除去しない（hasUrl ガード）。sources マーカーを含む節も触らない。
+export function stripLlmReferenceSections(body: string): { body: string; removed: string[] } {
+  const lines = body.split("\n");
+  const out: string[] = [];
+  const removed: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (LLM_REFERENCE_HEADING_RE.test(lines[i])) {
+      // 節の範囲＝見出し直下〜次の見出し（# または ##）/ EOF。
+      let j = i + 1;
+      while (j < lines.length && !/^#{1,2}\s+/.test(lines[j])) {
+        j++;
+      }
+      const section = lines.slice(i, j);
+      const hasUrl = section.some((l) => /https?:\/\//.test(l));
+      const isMachineBlock = section.some((l) => l.includes(SOURCES_BEGIN));
+      if (hasUrl && !isMachineBlock) {
+        removed.push(lines[i].replace(/^##\s+/, "").trim());
+        i = j; // 節をまるごと飛ばす
+        continue;
+      }
+    }
+    out.push(lines[i]);
+    i++;
+  }
+  return { body: out.join("\n"), removed };
+}
+
 const SOURCE_TYPE_ORDER: Record<Source["sourceType"], number> = { primary: 0, secondary: 1 };
 
 // present かつ verified な claim が参照する source だけを、primary→secondary・id 昇順で返す（重複排除）。

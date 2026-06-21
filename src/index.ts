@@ -41,6 +41,7 @@ import {
 import {
   prepareReferencesBlock,
   replaceMarkedBlock,
+  stripLlmReferenceSections,
   SOURCES_BEGIN,
   SOURCES_END,
 } from "./cli/references";
@@ -1222,11 +1223,23 @@ program
     if (final === null) {
       throw new Error(`final.md がありません（runs/${options.run}/）。`);
     }
+    // LLM が書いた参考リスト節（参考リンク/出典 等・URL 入り）を先に除去する。機械生成の `## 参考`
+    // と二重化させない＝偽 URL 防止（台帳照合外の LLM 製 URL を本文に残さない）。
+    const stripped = stripLlmReferenceSections(final);
     // 反映を先に計算（マーカー破損ならここで throw＝書き込まない）→ bak 退避 → 書き込み。
-    const { content, status } = replaceMarkedBlock(final, SOURCES_BEGIN, SOURCES_END, block);
+    const { content, status } = replaceMarkedBlock(stripped.body, SOURCES_BEGIN, SOURCES_END, block);
     await store.save(options.run, "final.references.bak.md", final);
     await store.save(options.run, "final.md", content);
-    console.log(`references: runs/${options.run}/final.md (${count} sources, ${status}) / backup: final.references.bak.md`);
+    const strippedNote =
+      stripped.removed.length > 0 ? ` / LLM 参考節を除去: ${stripped.removed.join(", ")}` : "";
+    console.log(
+      `references: runs/${options.run}/final.md (${count} sources, ${status}) / backup: final.references.bak.md${strippedNote}`
+    );
+    if (stripped.removed.length > 0) {
+      process.stderr.write(
+        `  ⚠ LLM が書いた参考リスト節を除去しました（機械生成の ## 参考 に一本化）: ${stripped.removed.join(", ")}\n`
+      );
+    }
   });
 
 if (process.argv.slice(2).length === 0) {
