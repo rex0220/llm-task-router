@@ -329,9 +329,24 @@ llm-task-router article:export --run 2026-06-18-ai-ir \
 
 ---
 
+## 7.5 完成報告（completion-report.md）
+
+完成報告を `runs/<id>/completion-report.md` に残す。チャットに流すだけでなく、ゲート結果・概算コスト・GO/NO-GO を run 内に証跡として閉じる（`export/index.json`＝公開台帳には混ぜない）。
+
+```bash
+llm-task-router article:completion-report --run 2026-06-18-ai-ir
+```
+
+- **機械生成**（`<!-- auto:begin/end -->` 内）: 記事タイトル・profile・進捗・概算コスト合計・GO/NO-GO/reason（`publication-check.md` から転記）・ゲート結果表（factcheck/build-verify/editorial の宣言＋ claims/build-report の件数）。
+- **編集長が記入**（auto 範囲の外）: `## 構成`（構成ナラティブ）・`## 上申事項`（ユーザー判断を要する論点）・`## 総評`。コードは作文せずプレースホルダだけ置く。
+- 入力は `progress.json`（コスト・進捗）と `publication-check.md`（ゲート宣言・GO/NO-GO）。**`publication-check.md` は必須**（無ければエラー）。`verify-artifacts` は推奨だが未実行/失敗でも生成できる（NO-GO の差し戻し報告も作れる）。
+- **再生成は安全**: 既定では auto 範囲だけ最新化し、編集長が書いた `## 構成`/`## 上申事項`/`## 総評` は保持する。editor 欄ごと初期化したいときだけ `--reset-editor`（既存は `completion-report.bak.md` に退避）。ファイルを書かず確認だけなら `--stdout`。
+
+---
+
 ## 承認回数を減らす（Claude Code の permission）
 
-Claude Code で回すと Bash 実行のたびに承認を求められ、数が多いと中身を見ずに承認しがちになる。`init` は `.claude/settings.json` に **pipeline 系コマンドだけの allowlist** を入れて配るので、`create / refine / evaluate / revise / resume / review` は事前許可済み（プロンプトが出ない）。記録系の `article:status` / `article:progress:event` も allowlist に入っており、進捗確認・記録のたびに承認を求められることはない。
+Claude Code で回すと Bash 実行のたびに承認を求められ、数が多いと中身を見ずに承認しがちになる。`init` は `.claude/settings.json` に **pipeline 系コマンドだけの allowlist** を入れて配るので、`create / refine / evaluate / revise / resume / review` は事前許可済み（プロンプトが出ない）。記録系の `article:status` / `article:progress:event` / `article:completion-report` も allowlist に入っており、進捗確認・記録・完成報告のたびに承認を求められることはない。
 
 意図的に**プロンプトを残している**のは次の2つ — ここは毎回中身を見て承認する：
 
@@ -382,6 +397,9 @@ llm-task-router article:verify-artifacts --run 2026-06-18-ai-ir
 
 # 5.95) 現在地・概算コストを確認
 llm-task-router article:status --run 2026-06-18-ai-ir
+
+# 5.97) 完成報告を生成（構成/上申/総評の editor 欄は編集長が記入）
+llm-task-router article:completion-report --run 2026-06-18-ai-ir
 
 # 6) 書き出し（GO ＋ ユーザー承認後）
 llm-task-router article:export   --run 2026-06-18-ai-ir --out ../qiita-content/ai-ir.md

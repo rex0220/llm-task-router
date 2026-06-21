@@ -1,6 +1,7 @@
 import type { RunStore } from "../storage/RunStore";
 import { BuildVerifyReportSchema, ClaimsSchema, SourcesSchema } from "../schemas/ClaimsSchema";
 import { CLAIMS_FILE, SOURCES_FILE, isBlocking } from "./claimsNormalize";
+import { gateState, hasSkipReason } from "./publicationCheck";
 
 // 公開前ゲート: 成果物の揃い・スキーマ・blocking を機械的にチェックする（外部通信なし）。
 // 各検証の中身は再判定しない（factcheck/build/editorial の判断は各担当に委ねる）。
@@ -17,29 +18,11 @@ export type VerifyArtifactsResult = {
   warnings: string[];
 };
 
-type GateState = "done" | "skipped" | "missing";
-
 async function readOrNull(store: RunStore, runId: string, file: string): Promise<string | null> {
   return store.read(runId, file).then(
     (c) => c,
     () => null
   );
-}
-
-function gateState(publicationCheck: string, gate: string): GateState {
-  // 値は done か skipped の単独のみ有効。未記入テンプレの "done / skipped" を done と
-  // 誤読しないよう行末を固定する（no silent skip: 編集長に明示の選択を強制）。
-  const m = new RegExp(`^-\\s*${gate}:\\s*(done|skipped)\\s*$`, "im").exec(publicationCheck);
-  if (!m) {
-    return "missing";
-  }
-  return m[1].toLowerCase() === "done" ? "done" : "skipped";
-}
-
-// skipped ゲートのスキップ理由（publication-check の "<gate> summary:" 行）が埋まっているか。
-function hasSkipReason(publicationCheck: string, gate: string): boolean {
-  const m = new RegExp(`^-\\s*${gate} summary:\\s*(\\S.*)$`, "im").exec(publicationCheck);
-  return m !== null;
 }
 
 export async function verifyArtifacts(store: RunStore, runId: string): Promise<VerifyArtifactsResult> {

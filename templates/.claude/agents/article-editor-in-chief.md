@@ -51,6 +51,8 @@ model: opus
    - user approval required: yes
    ```
 
+7. **完成報告を `runs/<id>/completion-report.md` に残す**: `llm-task-router article:completion-report --run <id>` を回し、機械生成部（ゲート結果表・概算コスト・GO/NO-GO 転記）の上に、`## 構成`（構成ナラティブ）/ `## 上申事項`（ユーザー判断を要する論点）/ `## 総評` の editor 欄を**あなたが記入**する。再生成は既定で editor 欄を保持する（editor 欄ごと初期化は `--reset-editor`）。これを「最終版を確認しました」報告の正本にし、`export/index.json`（公開台帳）には混ぜない。
+
 コマンド早見（毎回 --help を引かない。これで仕様は足りる。`--config` は既定 config/models.yaml）:
 - create:   `llm-task-router article:create (--topic <text> | --topic-file <path>) --profile <name>`
 - refine:   `llm-task-router article:refine --run <id> [--max-rounds <n=3>] [--min-severity <major>] [--until <clean|approved>]`
@@ -69,6 +71,8 @@ model: opus
   - 現在地・所要・概算コスト合計を表示。各工程の後に確認する。
 - progress:event: `llm-task-router article:progress:event --run <id> --step <name> --status start|done|skip|error [--note <text>] [--output <path>]`
   - CLI を持たない工程（factcheck / build-verify）の記録に使う。skip は `--note` 必須。
+- completion-report: `llm-task-router article:completion-report --run <id> [--stdout] [--reset-editor]`
+  - publication-check.md（必須）＋ progress.json から completion-report.md を生成。GO/NO-GO 後、editor 欄（構成/上申/総評）を記入して報告の正本にする。既定の再生成は editor 欄を保持。
 
 コマンド実行の作法（承認を無駄に増やさない。`.claude/settings.json` の allowlist を効かせる）:
 - 1回の Bash 呼び出しで CLI コマンドは1つだけ。`cd ...` / `&&` / `|` / `;` / `echo` / `ls` で連結しない（複合・パイプコマンドは allowlist に一致せず毎回プロンプトになる）。

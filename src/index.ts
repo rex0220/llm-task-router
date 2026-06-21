@@ -13,6 +13,13 @@ import { normalizeClaims } from "./cli/claimsNormalize";
 import { verifyArtifacts } from "./cli/verifyArtifacts";
 import { writeClaimsRecheck } from "./cli/claimsRecheck";
 import { getRunStatus } from "./cli/status";
+import {
+  collectCompletionReportData,
+  mergeCompletionReport,
+  renderCompletionReport,
+  COMPLETION_REPORT_FILE,
+  COMPLETION_REPORT_BAK,
+} from "./cli/completionReport";
 import { runEditorialReview } from "./workflows/editorialReview";
 import { initConfig } from "./cli/init";
 import { ExportIndex } from "./storage/ExportIndex";
@@ -915,6 +922,54 @@ program
       );
     }
   );
+
+program
+  .command("article:completion-report")
+  .description("Generate runs/<id>/completion-report.md from progress.json + publication-check.md (closed to runs/, never touches export/index.json)")
+  .requiredOption("--run <runId>", "Run id")
+  .option("--stdout", "Print to stdout without writing the file (dry run)")
+  .option("--reset-editor", "Reset the editor sections to the template (backs up the existing file first)")
+  .action(async (options: { run: string; stdout?: boolean; resetEditor?: boolean }) => {
+    const store = new RunStore();
+    await assertRunExists(store, options.run);
+
+    const publicationCheck = await store.read(options.run, "publication-check.md").catch(() => null);
+    if (publicationCheck === null) {
+      throw new Error(
+        `publication-check.md がありません（runs/${options.run}/）。先に編集長が GO/NO-GO チェックリストを作成してください（verify-artifacts は推奨だが必須ではありません）。`
+      );
+    }
+
+    const data = await collectCompletionReportData(store, options.run, publicationCheck);
+
+    // 既定: auto 範囲だけ再生成し editor 欄は保持。--reset-editor のときだけ全面初期化。
+    const existing = options.resetEditor
+      ? null
+      : await store.read(options.run, COMPLETION_REPORT_FILE).catch(() => null);
+    const { content, recovered } = mergeCompletionReport(data, existing);
+
+    if (options.stdout) {
+      process.stdout.write(content.endsWith("\n") ? content : `${content}\n`);
+      return;
+    }
+
+    // reset-editor / マーカー破損のときは既存を bak へ退避してから書く（編集を飛ばさない）。
+    if (options.resetEditor || recovered) {
+      const prev = await store.read(options.run, COMPLETION_REPORT_FILE).catch(() => null);
+      if (prev !== null) {
+        await store.save(options.run, COMPLETION_REPORT_BAK, prev);
+        process.stderr.write(
+          `  ⚠ 既存の completion-report.md を ${COMPLETION_REPORT_BAK} に退避しました${recovered ? "（auto マーカーが見つからないため再生成）" : ""}。\n`
+        );
+      }
+    }
+
+    await store.save(options.run, COMPLETION_REPORT_FILE, content);
+    console.log(`completion-report: runs/${options.run}/${COMPLETION_REPORT_FILE}`);
+    if (data.goNoGo) {
+      console.log(`GO/NO-GO: ${data.goNoGo}`);
+    }
+  });
 
 if (process.argv.slice(2).length === 0) {
   // サブコマンド未指定ならヘルプを表示する。

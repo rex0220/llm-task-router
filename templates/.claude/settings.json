@@ -15,6 +15,7 @@
       "Bash(llm-task-router article:review-editorial:*)",
       "Bash(llm-task-router article:status:*)",
       "Bash(llm-task-router article:progress:event:*)",
+      "Bash(llm-task-router article:completion-report:*)",
       "Bash(llm-task-router --help)",
       "Bash(llm-task-router -v)"
     ]
