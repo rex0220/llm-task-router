@@ -34,6 +34,9 @@ export function renderProgressMarkdown(snapshot: ProgressSnapshot): string {
     );
   }
   lines.push(`- 更新: ${fmtDateTime(snapshot.updatedAt)}`);
+  if (snapshot.editorModel !== undefined) {
+    lines.push(`- 編集長（AIモデル）: ${snapshot.editorModel}`);
+  }
   if (snapshot.toolVersion !== undefined) {
     lines.push(`- 生成ツール: llm-task-router ${snapshot.toolVersion}`);
   }

@@ -968,6 +968,7 @@ program
   .option("--output <path>", "Main output path for this step")
   .option("--elapsed-ms <n>", "Elapsed milliseconds")
   .option("--cost-usd <n>", "Estimated cost in USD")
+  .option("--editor-model <id>", "Editor-in-chief AI model id (e.g. claude-opus-4-8). Shown in progress.md header")
   .action(
     async (options: {
       run: string;
@@ -977,6 +978,7 @@ program
       output?: string;
       elapsedMs?: string;
       costUsd?: string;
+      editorModel?: string;
     }) => {
       const status = parseProgressStatus(options.status);
       if (status === "skip" && !options.note) {
@@ -992,6 +994,7 @@ program
         output: options.output,
         elapsedMs: parseOptionalNumber(options.elapsedMs, "--elapsed-ms"),
         costUsd: parseOptionalNumber(options.costUsd, "--cost-usd"),
+        editorModel: options.editorModel,
       };
       await progress.append(options.run, event);
       const snapshot = await progress.regenerate(options.run);

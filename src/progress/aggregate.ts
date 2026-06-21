@@ -144,12 +144,19 @@ export function aggregate(
   const toolVersion =
     versioned.length > 0 ? versioned.reduce((a, b) => (a.at >= b.at ? a : b)).version : undefined;
 
+  // 編集長（駆動する Claude）の AI モデルは、editorModel を持つ at 最大のイベントから採る
+  // （toolVersion と同じく run 単位の属性。編集長が記録するイベントの一部にだけ載りうる）。
+  const edited = events.filter((e) => e.editorModel !== undefined);
+  const editorModel =
+    edited.length > 0 ? edited.reduce((a, b) => (a.at >= b.at ? a : b)).editorModel : undefined;
+
   return {
     runId,
     steps,
     total: steps.length,
     canonicalTotal: canonicalSteps2.length, // 現在地の分母（canonical のみ）
     toolVersion,
+    editorModel,
     currentIndex: currentRow?.index,
     complete,
     totalCostUsd,

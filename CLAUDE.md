@@ -8,7 +8,7 @@
 - 記事本文は手書きしない。llm-task-router の CLI パイプライン（create / refine / evaluate / revise）で生成・修正する。
 - `final.md` を直接編集しない。修正は `llm-task-router article:revise --instruction-file` 経由で戻す（runs/ に集約し `final.bak.md` を残すため）。
 - 作成・進行・品質判断は **article-editor-in-chief**（編集長）、Web裏取りは **article-factchecker**、コードの実機ビルド/実行は **article-build-verifier** に委譲する。コードを含む記事は事実検証と実機検証の両方を回す。サブエージェントから結果を受け取ったら、編集長が工程の出口で進捗イベントを記録する（`done|skip|error` は必須、入口 `start` は任意。skip は理由必須＝silent skip 禁止）。
-- **各工程の進捗は `progress.events.jsonl`（正本）に記録する**。CLI 工程は実行するだけで自動記録、CLI を持たない工程（factcheck / build-verify）は編集長が `llm-task-router article:progress:event` で記録する。現在地・所要・概算コストの確認は `llm-task-router article:status --run <id>`。
+- **各工程の進捗は `progress.events.jsonl`（正本）に記録する**。CLI 工程は実行するだけで自動記録、CLI を持たない工程（factcheck / build-verify）は編集長が `llm-task-router article:progress:event` で記録する。このとき編集長は自分の AI モデル ID を `--editor-model <id>`（例 `claude-opus-4-8`）で渡す（progress.md ヘッダに「編集長（AIモデル）」として表示。最新イベントの値が採用される）。現在地・所要・概算コストの確認は `llm-task-router article:status --run <id>`。
 - **factcheck の前に方向性ゲート**（`llm-task-router article:direction-check --run <id> --verdict ok|revise`）を通す（任意の推奨ステップ）。高コストな factcheck/build の前にテーマ適合・構成・読者を編集長が判定する軽量ゲート（正確性ゲートではない）。`--verdict ok` で factcheck へ、`revise` なら直してから。`runs/<id>/direction-check.md` に閉じる。
 - **再 factcheck は差分で要否判定**（二度手間回避）。初回 factcheck 後に `llm-task-router article:factcheck-stamp --accepted-after factcheck --note ...` で baseline を受理し、以降は `article:factcheck-scope` で `full|skip|diff` を判定（差分ゼロなら skip）。`factcheck-stamp` は信頼状態を変えるので factcheck 前に打たない（プロンプト維持）。
 - **参考章のリンクは `sources.json` から機械生成**（`llm-task-router article:references`）。normalize 後に、present かつ verified な claim が参照する検証済み source のみを参考章へ付与する（**LLM に URL を書かせない＝偽 URL 防止**）。verify-artifacts が参考ブロック内リンクの台帳一致を検査する。
