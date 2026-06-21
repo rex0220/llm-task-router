@@ -94,18 +94,18 @@ describe("renderProgressMarkdown", () => {
     expect(renderProgressMarkdown(snap)).toContain("+09:00");
   });
 
-  it("shows the editor-in-chief AI model from the latest event carrying editorModel, and omits when absent", () => {
+  it("fixes the editor-in-chief AI model from the earliest event carrying it (first-write-wins), and omits when absent", () => {
     const withEditor = aggregate("r", [
-      ev({ step: "factcheck", status: "done", at: "2026-06-21T07:38:00.000Z", editorModel: "claude-opus-4-7" }),
-      // より新しいイベントの editorModel が勝つ（toolVersion と同じ at 最大ルール）。
-      ev({ step: "editorial", status: "done", at: "2026-06-21T07:43:00.000Z", editorModel: "claude-opus-4-8" }),
+      // create 時に申告した最古の値が固定される。後続イベントの別値では上書きされない（遡及防止）。
+      ev({ step: "create", status: "start", at: "2026-06-21T07:30:00.000Z", editorModel: "claude-opus-4-8" }),
+      ev({ step: "editorial", status: "done", at: "2026-06-21T07:43:00.000Z", editorModel: "claude-opus-4-7" }),
     ]);
     expect(withEditor.editorModel).toBe("claude-opus-4-8");
-    expect(renderProgressMarkdown(withEditor)).toContain("- 編集長（AIモデル）: claude-opus-4-8");
+    expect(renderProgressMarkdown(withEditor)).toContain("- 編集長（AIモデル・自己申告）: claude-opus-4-8");
 
     const noEditor = aggregate("r", [ev({ step: "create", status: "done" })]);
     expect(noEditor.editorModel).toBeUndefined();
-    expect(renderProgressMarkdown(noEditor)).not.toContain("編集長（AIモデル）");
+    expect(renderProgressMarkdown(noEditor)).not.toContain("編集長（AIモデル");
   });
 
   it("shows the generating tool version when present, and omits the line when absent", () => {

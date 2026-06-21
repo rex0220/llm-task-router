@@ -144,11 +144,12 @@ export function aggregate(
   const toolVersion =
     versioned.length > 0 ? versioned.reduce((a, b) => (a.at >= b.at ? a : b)).version : undefined;
 
-  // 編集長（駆動する Claude）の AI モデルは、editorModel を持つ at 最大のイベントから採る
-  // （toolVersion と同じく run 単位の属性。編集長が記録するイベントの一部にだけ載りうる）。
+  // 編集長（駆動する Claude）の AI モデルは run 単位の不変属性。create 時に1回固定する想定なので、
+  // editorModel を持つ「at 最小（＝最初に申告された）」イベントから採る（first-write-wins）。
+  // 後続イベントや旧 run への追記、別セッションの値で run の編集長が遡及・上書きされないようにする。
   const edited = events.filter((e) => e.editorModel !== undefined);
   const editorModel =
-    edited.length > 0 ? edited.reduce((a, b) => (a.at >= b.at ? a : b)).editorModel : undefined;
+    edited.length > 0 ? edited.reduce((a, b) => (a.at <= b.at ? a : b)).editorModel : undefined;
 
   return {
     runId,

@@ -22,7 +22,7 @@ model: opus
 
 進行:
 1. 企画を確定（topics/<name>.txt、--profile、criteria）。弱ければユーザーに差し戻す。
-2. `llm-task-router article:create --topic-file ... --profile <profile>` → `llm-task-router article:refine --run <id>`（案件に応じ --max-rounds / --min-severity / --until を設定）。
+2. `llm-task-router article:create --topic-file ... --profile <profile> --editor-model <自分のモデルID>`（例 `claude-opus-4-8`。progress.md ヘッダに編集長として固定表示）→ `llm-task-router article:refine --run <id>`（案件に応じ --max-rounds / --min-severity / --until を設定）。
 3. runs/<id>/final-review.md を読み、停止理由（clean / approved / max-rounds / stalled / regressed / no-instruction）・残課題・概算コストを要約。合格 / 差し戻し / 没 を判断する。
 3.7. **方向性ゲート（factcheck の前）**: 高コストな factcheck/build に入る前に `final.md` を読み、テーマ適合・構成・読者の観点で方向性を判定して `llm-task-router article:direction-check --run <id> --verdict ok|revise [--note ...]` を打つ（`runs/<id>/direction-check.md` に記録）。**正確性ゲートではない**（事実は factcheck）。`revise` のときは factcheck に進まず、まず revise で方向を直してから 3.7 をやり直す。`ok` で 4 に進む。
 4. ファクトチェック（article-factchecker）と実機ビルド検証（article-build-verifier）を別系統で発注。コードを含む記事では build-verifier を必ず回す（論理レビューだけでは tsconfig 依存の不通や型の絞り込み失敗がすり抜ける）。**それぞれの結果を受け取ったら `article:progress:event --step factcheck` / `--step build-verify` で done|skip|error を記録する**（理由は `--note`）。**初回 factcheck 後は `article:factcheck-stamp --accepted-after factcheck --note ...` で baseline を受理**する。**2回目以降の factcheck は、先に `article:factcheck-scope` で要否を判定**（`skip` なら progress に skip 記録／`diff` なら factchecker に変更セクションだけ渡す）。再検証または「非事実差分として受理」したら再度 `factcheck-stamp`。**stamp は factcheck の前に打たない**（未検証 final を baseline 化しない。プロンプトが出る＝意図確認）。
@@ -56,7 +56,8 @@ model: opus
 7. **完成報告を `runs/<id>/completion-report.md` に残す**: `llm-task-router article:completion-report --run <id>` を回し、機械生成部（ゲート結果表・概算コスト・GO/NO-GO 転記）の上に、`## 構成`（構成ナラティブ）/ `## 上申事項`（ユーザー判断を要する論点）/ `## 総評` の editor 欄を**あなたが記入**する。再生成は既定で editor 欄を保持する（editor 欄ごと初期化は `--reset-editor`）。これを「最終版を確認しました」報告の正本にし、`export/index.json`（公開台帳）には混ぜない。**外側AI（Claude Code）の使用量を残すなら**、`/cost` 等の参考値を `## 総評` に手で転記する（`router.log` には出ない別系統。完全な課金額は取得不可＝参考値）。
 
 コマンド早見（毎回 --help を引かない。これで仕様は足りる。`--config` は既定 config/models.yaml）:
-- create:   `llm-task-router article:create (--topic <text> | --topic-file <path>) --profile <name>`
+- create:   `llm-task-router article:create (--topic <text> | --topic-file <path>) --profile <name> --editor-model <自分のモデルID>`
+  - `--editor-model`（例 `claude-opus-4-8`）で編集長の AI モデルを作成時に固定（progress.md ヘッダに「編集長（AIモデル・自己申告）」表示／first-write-wins）。
 - refine:   `llm-task-router article:refine --run <id> [--max-rounds <n=3>] [--min-severity <major>] [--until <clean|approved>]`
 - evaluate: `llm-task-router article:evaluate --run <id> [--min-severity <suggestion>] [--criteria-file <path>]`
 - revise:   `llm-task-router article:revise --run <id> (--instruction <text> | --instruction-file <path>)`
@@ -74,7 +75,7 @@ model: opus
 - direction-check: `llm-task-router article:direction-check --run <id> --verdict <ok|revise> [--note <text>] [--source final|draft]`
   - factcheck 前の方向性ゲート（既定 final.md）。verdict は CLI が権威・所感欄はマーカー保護。`revise` は factcheck 前に直す。`--source draft` は早期プレビュー（canonical を満たさない）。
 - factcheck-scope: `llm-task-router article:factcheck-scope --run <id> [--json|--stdout]`
-  - 前回 baseline（factcheck.snapshot.md）と final の差分で再 factcheck の要否を判定（full|skip|diff）。progress は書かない（判定後に自分で progress:event を記録）。
+  - 前回 baseline（factcheck.snapshot.md）と final の差分で再 factcheck の要否を判定（full|skip|diff）。既定（ファイル書き込み）では判定を `factcheck-scope` の progress イベントに自動記録する（`--json`/`--stdout` のドライランでは記録しない）。
 - factcheck-stamp: `llm-task-router article:factcheck-stamp --run <id> --accepted-after <factcheck|non-factual-diff> --note <text>`
   - 現 final を factcheck 済み baseline として受理（必須フラグ＋プロンプト維持）。factcheck の前には打たない。
 - status:   `llm-task-router article:status --run <id> [--json]`
