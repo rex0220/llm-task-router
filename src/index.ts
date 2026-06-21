@@ -1228,6 +1228,14 @@ program
     const store = new RunStore();
     await assertRunExists(store, options.run);
     const meta = await stampSnapshot(store, options.run, acceptedAfter, options.note);
+    // 正本は factcheck.snapshot.meta.json のままだが、baseline 受理を progress.md でも追えるように
+    // 追加アクションとして1行残す（progress.md だけ読むと受理が見えず誤解を生むため）。canonical 工程ではない。
+    await recordProgress(store, options.run, {
+      step: "factcheck-stamp",
+      status: "done",
+      output: `runs/${options.run}/factcheck.snapshot.meta.json`,
+      note: `accepted-after=${meta.acceptedAfter}`,
+    });
     console.log(
       `factcheck baseline updated: runs/${options.run}/factcheck.snapshot.md (accepted-after=${meta.acceptedAfter})`
     );

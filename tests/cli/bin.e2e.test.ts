@@ -316,6 +316,34 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
   );
 
   it(
+    "article:factcheck-stamp records the baseline acceptance as a progress event",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "fcstamp-e2e-"));
+      const runId = "2026-06-21-fcstamp-e2e";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      await store.save(runId, "final.md", "# タイトル\n本文\n");
+
+      execFileSync(
+        process.execPath,
+        [bin, "article:factcheck-stamp", "--run", runId, "--accepted-after", "non-factual-diff", "--note", "参考章注入のみ・非事実差分として受理"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+
+      const events = readFileSync(join(cwd, "runs", runId, "progress.events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { step: string; status: string; note?: string });
+      const stamp = events.find((e) => e.step === "factcheck-stamp");
+      expect(stamp?.status).toBe("done");
+      expect(stamp?.note).toBe("accepted-after=non-factual-diff");
+      // 正本の meta も書かれている。
+      expect(existsSync(join(cwd, "runs", runId, "factcheck.snapshot.meta.json"))).toBe(true);
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
     "article:factcheck-scope --stdout does not record a progress event (dry run)",
     async () => {
       const cwd = await mkdtemp(join(tmpdir(), "fcs-dry-"));
