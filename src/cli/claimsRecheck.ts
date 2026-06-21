@@ -36,8 +36,8 @@ export type RecheckResult = {
   discoverySections: string[];
 };
 
-// 見出しの表記ゆれを吸収（先頭の # と前後空白を落とす）。
-function normalizeHeading(heading: string): string {
+// 見出しの表記ゆれを吸収（先頭の # と前後空白を落とす）。factcheck-scope からも使うため export。
+export function normalizeHeading(heading: string): string {
   return heading.replace(/^#+\s*/, "").trim();
 }
 
@@ -150,7 +150,8 @@ export async function writeClaimsRecheck(store: RunStore, runId: string): Promis
 
 // 追加行があるセクションは、既存 claims.json に無い新規 claim が生まれ得る。
 // CLI は真偽や claim 抽出を判断せず、factchecker が見るべき変更セクションを明示する。
-function selectDiscoverySections(changed: ChangedSection[]): string[] {
+// factcheck-scope（優先度4）からも再利用するため export する。
+export function selectDiscoverySections(changed: ChangedSection[]): string[] {
   const headings = new Set<string>();
   for (const section of changed) {
     if (section.added > 0) {

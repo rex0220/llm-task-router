@@ -29,6 +29,15 @@ import {
   type DirectionSource,
   type Verdict,
 } from "./cli/directionCheck";
+import {
+  collectFactcheckScope,
+  renderFactcheckScope,
+  stampSnapshot,
+  FACTCHECK_SCOPE_FILE,
+  FACTCHECK_SCOPE_JSON,
+  type AcceptedAfter,
+  type FactcheckScope,
+} from "./cli/factcheckScope";
 import { runEditorialReview } from "./workflows/editorialReview";
 import { initConfig } from "./cli/init";
 import { ExportIndex } from "./storage/ExportIndex";
@@ -879,6 +888,20 @@ function parseDirectionSource(value: string): DirectionSource {
   return value;
 }
 
+function parseAcceptedAfter(value: string): AcceptedAfter {
+  if (value !== "factcheck" && value !== "non-factual-diff") {
+    throw new Error(`Invalid --accepted-after: ${value} (use factcheck|non-factual-diff)`);
+  }
+  return value;
+}
+
+function scopeSummary(scope: FactcheckScope): string {
+  if (scope.mode === "diff") {
+    return `diff (changed ${scope.changedSections.length} sections / ${scope.recheckClaims.length} claims)`;
+  }
+  return scope.mode; // full | skip
+}
+
 async function createRuntime(configPath: string): Promise<{ router: ModelRouter; store: RunStore }> {
   const config = await loadRouterConfig(configPath);
   const providers = createProviders(config);
@@ -1055,6 +1078,54 @@ program
     if (verdict === "revise") {
       process.stderr.write("  ⚠ 方向性 要修正: factcheck の前に revise で直してください（factcheck に進まない）。\n");
     }
+  });
+
+program
+  .command("article:factcheck-scope")
+  .description("Decide whether a re-factcheck is needed by diffing the last baseline (factcheck.snapshot.md) against final.md")
+  .requiredOption("--run <runId>", "Run id")
+  .option("--json", "Print the scope as JSON to stdout (no file write)")
+  .option("--stdout", "Print the scope markdown to stdout (no file write)")
+  .action(async (options: { run: string; json?: boolean; stdout?: boolean }) => {
+    if (options.json && options.stdout) {
+      throw new Error("--json と --stdout は同時に指定できません（どちらの dry run か曖昧）。");
+    }
+    const store = new RunStore();
+    await assertRunExists(store, options.run);
+    const scope = await collectFactcheckScope(store, options.run);
+
+    if (options.json) {
+      console.log(JSON.stringify(scope, null, 2));
+      return;
+    }
+    const markdown = renderFactcheckScope(scope, options.run);
+    if (options.stdout) {
+      process.stdout.write(markdown.endsWith("\n") ? markdown : `${markdown}\n`);
+      return;
+    }
+    // 既定: md ＋ json を保存し、1行サマリを stdout に。progress は書かない（編集長が記録）。
+    await store.save(options.run, FACTCHECK_SCOPE_FILE, markdown);
+    await store.save(options.run, FACTCHECK_SCOPE_JSON, JSON.stringify(scope, null, 2));
+    console.log(`factcheck-scope: ${scopeSummary(scope)} -> runs/${options.run}/${FACTCHECK_SCOPE_FILE}`);
+  });
+
+program
+  .command("article:factcheck-stamp")
+  .description("Accept current final.md as the fact-checked baseline (factcheck.snapshot.md). Run after factcheck (or after judging a diff non-factual).")
+  .requiredOption("--run <runId>", "Run id")
+  .requiredOption("--accepted-after <factcheck|non-factual-diff>", "Why the baseline is accepted (audit)")
+  .requiredOption("--note <text>", "Acceptance note (audit)")
+  .action(async (options: { run: string; acceptedAfter: string; note: string }) => {
+    const acceptedAfter = parseAcceptedAfter(options.acceptedAfter);
+    if (options.note.trim().length === 0) {
+      throw new Error("--note は空にできません（baseline 受理の理由を監査メタに残すため）。");
+    }
+    const store = new RunStore();
+    await assertRunExists(store, options.run);
+    const meta = await stampSnapshot(store, options.run, acceptedAfter, options.note);
+    console.log(
+      `factcheck baseline updated: runs/${options.run}/factcheck.snapshot.md (accepted-after=${meta.acceptedAfter})`
+    );
   });
 
 if (process.argv.slice(2).length === 0) {

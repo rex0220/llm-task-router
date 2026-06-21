@@ -253,6 +253,23 @@ llm-task-router article:progress:event --run 2026-06-18-ai-ir --step factcheck -
 
 工程後に `article:status --run <id>` で記録と現在地を確認する。
 
+### 再 factcheck の差分スキップ（二度手間を避ける）
+
+編集レビュー等で本文を直すたびに全文を再 factcheck するのは無駄。**前回 factcheck した版（baseline）と現 final.md の差分**で、再検証の要否と範囲を判定する。
+
+```bash
+# 初回 factcheck が終わったら baseline を受理（snapshot を取る）。理由を必ず添える（監査）
+llm-task-router article:factcheck-stamp --run 2026-06-18-ai-ir --accepted-after factcheck --note "BLOCKING 0"
+
+# 以降、再 factcheck の前に差分で要否を判定（full / skip / diff）
+llm-task-router article:factcheck-scope --run 2026-06-18-ai-ir
+```
+
+- **判定**: baseline 無し→`full`（全文）／差分ゼロ→`skip`（再検証不要・前回結果を流用）／差分あり→`diff`（変更セクション・影響 claim・新規抽出セクションを `factcheck-scope.md` に出力。factchecker はそこだけ見る）。
+- `claims.json` が無くても差分判定は成立する（変更セクションだけで出力。claim 突き合わせは省略）。
+- 判定結果を見て、**編集長が `article:progress:event --step factcheck --status skip|done` を記録**する（`factcheck-scope` 自体は progress を書かない）。
+- 再検証（または「非事実差分だから受理」と判断）したら、再び `article:factcheck-stamp` で baseline を更新する。**`factcheck-stamp` は factcheck の前に打たない**（未検証の final を「検証済み」にしてしまう）。承認プロンプトが出るのは正しい挙動。
+
 ---
 
 ## 6.5 ビルド検証（コードを含む記事は必須）
@@ -365,11 +382,12 @@ llm-task-router article:completion-report --run 2026-06-18-ai-ir
 
 ## 承認回数を減らす（Claude Code の permission）
 
-Claude Code で回すと Bash 実行のたびに承認を求められ、数が多いと中身を見ずに承認しがちになる。`init` は `.claude/settings.json` に **pipeline 系コマンドだけの allowlist** を入れて配るので、`create / refine / evaluate / revise / resume / review` は事前許可済み（プロンプトが出ない）。記録系の `article:status` / `article:progress:event` / `article:completion-report` / `article:direction-check` も allowlist に入っており、進捗確認・記録・方向性ゲート・完成報告のたびに承認を求められることはない。
+Claude Code で回すと Bash 実行のたびに承認を求められ、数が多いと中身を見ずに承認しがちになる。`init` は `.claude/settings.json` に **pipeline 系コマンドだけの allowlist** を入れて配るので、`create / refine / evaluate / revise / resume / review` は事前許可済み（プロンプトが出ない）。記録系の `article:status` / `article:progress:event` / `article:completion-report` / `article:direction-check` / `article:factcheck-scope` も allowlist に入っており、進捗確認・記録・方向性ゲート・完成報告・再 factcheck 判定のたびに承認を求められることはない。
 
-意図的に**プロンプトを残している**のは次の2つ — ここは毎回中身を見て承認する：
+意図的に**プロンプトを残している**のは次の3つ — ここは毎回中身を見て承認する：
 
 - `article:export`（公開相当の操作）
+- `article:factcheck-stamp`（factcheck baseline＝信頼状態の更新。factcheck 前の誤実行で未検証 final を「検証済み」にしないため）
 - `article-build-verifier` の `npm install` / `tsc` / `node`（記事内の**未知コードを実行**する部分）
 
 許可を足したい/外したい場合は `.claude/settings.json` の `permissions.allow` を編集する。設定変更は次回セッション開始時に反映される。
@@ -401,6 +419,8 @@ llm-task-router article:direction-check --run 2026-06-18-ai-ir --verdict ok
 # 5) ファクトチェック（Claude Code 等）→ 結果受領時に編集長が進捗を記録 → 指摘があれば revise
 llm-task-router article:progress:event --run 2026-06-18-ai-ir --step factcheck --status done --note "BLOCKING 0"
 llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/2026-06-18-ai-ir/factcheck-instruction.md
+# 初回 factcheck 後に baseline 受理（以降の再 factcheck は factcheck-scope で要否判定）
+llm-task-router article:factcheck-stamp --run 2026-06-18-ai-ir --accepted-after factcheck --note "BLOCKING 0"
 
 # 5.5) ビルド検証（コードを含む記事）→ 結果受領時に編集長が進捗を記録 → 指摘があれば revise
 llm-task-router article:progress:event --run 2026-06-18-ai-ir --step build-verify --status done --note "report status=passed"

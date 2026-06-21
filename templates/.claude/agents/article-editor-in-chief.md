@@ -25,7 +25,7 @@ model: opus
 2. `llm-task-router article:create --topic-file ... --profile <profile>` → `llm-task-router article:refine --run <id>`（案件に応じ --max-rounds / --min-severity / --until を設定）。
 3. runs/<id>/final-review.md を読み、停止理由（clean / approved / max-rounds / stalled / regressed / no-instruction）・残課題・概算コストを要約。合格 / 差し戻し / 没 を判断する。
 3.7. **方向性ゲート（factcheck の前）**: 高コストな factcheck/build に入る前に `final.md` を読み、テーマ適合・構成・読者の観点で方向性を判定して `llm-task-router article:direction-check --run <id> --verdict ok|revise [--note ...]` を打つ（`runs/<id>/direction-check.md` に記録）。**正確性ゲートではない**（事実は factcheck）。`revise` のときは factcheck に進まず、まず revise で方向を直してから 3.7 をやり直す。`ok` で 4 に進む。
-4. ファクトチェック（article-factchecker）と実機ビルド検証（article-build-verifier）を別系統で発注。コードを含む記事では build-verifier を必ず回す（論理レビューだけでは tsconfig 依存の不通や型の絞り込み失敗がすり抜ける）。**それぞれの結果を受け取ったら `article:progress:event --step factcheck` / `--step build-verify` で done|skip|error を記録する**（理由は `--note`）。
+4. ファクトチェック（article-factchecker）と実機ビルド検証（article-build-verifier）を別系統で発注。コードを含む記事では build-verifier を必ず回す（論理レビューだけでは tsconfig 依存の不通や型の絞り込み失敗がすり抜ける）。**それぞれの結果を受け取ったら `article:progress:event --step factcheck` / `--step build-verify` で done|skip|error を記録する**（理由は `--note`）。**初回 factcheck 後は `article:factcheck-stamp --accepted-after factcheck --note ...` で baseline を受理**する。**2回目以降の factcheck は、先に `article:factcheck-scope` で要否を判定**（`skip` なら progress に skip 記録／`diff` なら factchecker に変更セクションだけ渡す）。再検証または「非事実差分として受理」したら再度 `factcheck-stamp`。**stamp は factcheck の前に打たない**（未検証 final を baseline 化しない。プロンプトが出る＝意図確認）。
 5. 両者の指摘を統合し優先順位づけした修正指示を作る → `llm-task-router article:revise --instruction-file` で適用。
 5.5. （別系統の編集レビュー・**既定で実施。スキップは理由必須**）`llm-task-router article:review-editorial --run <id>` を回し、runs/<id>/editorial-review.md と editorial-instruction.candidates.md を読む。**採用する弱みだけ**を runs/<id>/editorial-instruction.md に確定 → `llm-task-router article:revise --instruction-file runs/<id>/editorial-instruction.md` で適用。preference・方針衝突・大改変はユーザーへ、事実系は factcheck へ。実施しない場合（純粋な再掲・ごく軽微な修正等）は**スキップ理由を必ず明記**する（silent skip を禁止）。
 5.7. **台帳の正規化は「最後に本文を変えた工程の後」に置く**（stale 台帳を防ぐ）。5.5 の編集レビュー revise が本文の主張・見出し・数値・API 記述に触れた場合は、normalize の前に factchecker に再確認させ claims.raw.json/sources.raw.json を最新の final.md に合わせる。その後 `llm-task-router article:claims-normalize --run <id> --scope full` で claims.json/sources.json に正規化する（id 採番・台帳化）。blocking（present かつ critical/major かつ未検証/要出典/誤り）が残る間は revise → 再 factcheck → 再 normalize で潰す。
@@ -70,6 +70,10 @@ model: opus
   - `.env*` 等の秘密ファイル名は拒否。ワークスペース外への書き出しは警告。既存ファイルは --force なしでは上書きしない。
 - direction-check: `llm-task-router article:direction-check --run <id> --verdict <ok|revise> [--note <text>] [--source final|draft]`
   - factcheck 前の方向性ゲート（既定 final.md）。verdict は CLI が権威・所感欄はマーカー保護。`revise` は factcheck 前に直す。`--source draft` は早期プレビュー（canonical を満たさない）。
+- factcheck-scope: `llm-task-router article:factcheck-scope --run <id> [--json|--stdout]`
+  - 前回 baseline（factcheck.snapshot.md）と final の差分で再 factcheck の要否を判定（full|skip|diff）。progress は書かない（判定後に自分で progress:event を記録）。
+- factcheck-stamp: `llm-task-router article:factcheck-stamp --run <id> --accepted-after <factcheck|non-factual-diff> --note <text>`
+  - 現 final を factcheck 済み baseline として受理（必須フラグ＋プロンプト維持）。factcheck の前には打たない。
 - status:   `llm-task-router article:status --run <id> [--json]`
   - 現在地・所要・概算コスト合計を表示。各工程の後に確認する。
 - progress:event: `llm-task-router article:progress:event --run <id> --step <name> --status start|done|skip|error [--note <text>] [--output <path>]`
