@@ -495,6 +495,11 @@ async function runWithProgress<T>(args: {
     await args.ensureRun();
   }
   await safeProgress(() => args.progress.append(args.runId, { step: args.step, status: "start", task: args.task }));
+  // start 直後に progress.json / progress.md を生成する。create/refine など長い工程でも
+  // 「開始時点」で進捗ファイルが出る（done まで待たない＝folder 作成直後に見える）。
+  await safeProgress(async () => {
+    await args.progress.regenerate(args.runId);
+  });
   try {
     const result = await args.run();
     const t = args.totals();

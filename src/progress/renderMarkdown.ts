@@ -35,7 +35,14 @@ export function renderProgressMarkdown(snapshot: ProgressSnapshot): string {
 
   lines.push("| # | 工程 | 状態 | 開始 | 終了 | 所要 | 概算$ | 根拠/補足 |");
   lines.push("|---|---|---|---|---|---|---|---|");
+  const firstExtra = snapshot.steps.find((s) => !s.canonical);
+  let dividerEmitted = false;
   for (const s of snapshot.steps) {
+    // canonical 工程と「工程外の追加アクション」の境目に区切り行を1本入れる（A）。
+    if (!s.canonical && !dividerEmitted) {
+      lines.push("| | **— 追加アクション（工程外・実行時刻順）—** | | | | | | |");
+      dividerEmitted = true;
+    }
     const elapsed = s.elapsedMs !== undefined ? `${s.elapsedMs}ms` : "";
     const cost = s.costUsd !== undefined ? `~$${s.costUsd.toFixed(4)}` : "";
     const note = [s.output, s.note].filter((v) => v !== undefined && v !== "").join(" / ");
@@ -44,6 +51,13 @@ export function renderProgressMarkdown(snapshot: ProgressSnapshot): string {
     );
   }
   lines.push("");
+  // 追加アクションがあるときだけ注記（C）。表の位置＝工程順で、実行時刻順ではない旨。
+  if (firstExtra) {
+    lines.push(
+      `> ※ #${firstExtra.index} 以降は工程ではない追加アクション（revise 等は複数工程に跨るため末尾にまとめています）。表の位置は工程順で、実行時刻順ではありません。`
+    );
+    lines.push("");
+  }
   return lines.join("\n");
 }
 

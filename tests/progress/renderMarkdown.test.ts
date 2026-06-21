@@ -85,6 +85,23 @@ describe("renderProgressMarkdown", () => {
     // create done → 現在地は refine(2) / 分母は canonical 9（revise で 10 にならない）。
     expect(renderProgressMarkdown(snap)).toContain("2 / 9 工程目");
   });
+
+  it("separates non-canonical extras with a divider row and a note (A+C)", () => {
+    const md = renderProgressMarkdown(
+      aggregate("r", [
+        ev({ step: "create", status: "done" }),
+        ev({ step: "revise", status: "done" }),
+      ])
+    );
+    expect(md).toContain("追加アクション（工程外"); // 区切り行（A）
+    expect(md).toContain("#10 以降は工程ではない追加アクション"); // 注記（C）
+    expect(md).toContain("実行時刻順ではありません");
+  });
+
+  it("omits the divider/note when there are no non-canonical extras", () => {
+    const md = renderProgressMarkdown(aggregate("r", [ev({ step: "create", status: "done" })]));
+    expect(md).not.toContain("追加アクション");
+  });
 });
 
 describe("local time formatters (TZ=Asia/Tokyo)", () => {
