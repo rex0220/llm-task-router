@@ -192,7 +192,8 @@ function renderAutoSection(data: CompletionReportData): string {
     `- 記事: ${escapeCell(data.title)}`,
     "- ファイル: final.md",
     `- profile: ${data.profile ?? "n/a"}`,
-    `- 生成ツール: llm-task-router ${data.toolVersion ?? "n/a"}`,
+    // 生成ツール版は progress.md と同じく「あるときだけ」出す（既存 run は省略）。
+    ...(data.toolVersion ? [`- 生成ツール: llm-task-router ${data.toolVersion}`] : []),
     `- 最終モデル: ${data.finalAuthorModel ?? "n/a"}`,
     `- 進捗: ${position}`,
     `- 概算コスト合計: ${cost}`,

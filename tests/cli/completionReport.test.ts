@@ -112,9 +112,12 @@ describe("renderCompletionReport", () => {
     expect(md).toContain("a \\| b");
   });
 
-  it("shows the generating tool version in the auto block", () => {
-    const md = renderCompletionReport(makeData({ toolVersion: "0.2.23" }));
-    expect(md).toContain("- 生成ツール: llm-task-router 0.2.23");
+  it("shows the generating tool version in the auto block, and omits the line when absent", () => {
+    expect(renderCompletionReport(makeData({ toolVersion: "0.2.23" }))).toContain(
+      "- 生成ツール: llm-task-router 0.2.23"
+    );
+    // version 無し（既存 run）は行を出さない（progress.md と挙動を揃える）。
+    expect(renderCompletionReport(makeData())).not.toContain("生成ツール");
   });
 });
 
