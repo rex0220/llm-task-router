@@ -23,7 +23,14 @@ describe("renderProgressMarkdown", () => {
     expect(md).not.toContain("トークン(in/out)");
     expect(md).toContain("~$0.5000");
     expect(md).toContain("概算コスト合計");
-    expect(md).toContain("1200ms");
+    // 所要は人が読みやすい M:SS.mmm（1200ms → 0:01.200）。
+    expect(md).toContain("0:01.200");
+    expect(md).not.toContain("1200ms");
+  });
+
+  it("formats elapsed as M:SS.mmm (minutes example)", () => {
+    const md = renderProgressMarkdown(aggregate("r", [ev({ step: "create", status: "done", elapsedMs: 241362 })]));
+    expect(md).toContain("4:01.362"); // 241362ms = 4分1秒362
   });
 
   it("sums tokens across steps (and across multiple invocations of one step) and shows a total line", () => {
