@@ -51,7 +51,7 @@ Each stage maps a Claude Code operation to the CLI command it drives:
 | Draft the topic file | `/draft-topic` | writes `topics/<slug>.txt` (no body yet) |
 | Create → refine → gate | `/write-article` → `article-editor-in-chief` | `article:create` → `article:refine` |
 | Fact-check (Web) | `article-factchecker` (separate external check) | findings → `article:revise --instruction-file` |
-| Build-verify code | `article-build-verifier` (real `tsc` / run) | findings → `article:revise --instruction-file` |
+| Type/syntax-check code | `article-build-verifier` (`tsc --noEmit` static check; **does not run the code**) | findings → `article:revise --instruction-file` |
 | Editorial review | `/review-editorial` | `article:review-editorial` → `article:revise` |
 | Publication decision | editor-in-chief writes `runs/<id>/publication-check.md` and recommends GO/NO-GO | **user approves**, then `article:export` |
 | Update a published article | `/update-article` | `article:import` → `article:update-diff` → `article:export` + `article:record-publication` |
@@ -174,8 +174,8 @@ It stops with one of: `clean`, `approved`, `max-rounds`, `stalled` (quality scor
 For **re-publishing an already-public article** (keeping the same URL and skeleton, changing only what went stale), import is also the starting point of a dedicated update flow driven by the `/update-article` skill. It pins **three sources of truth**: the version baseline (`update-base.md`, the body fixed at import time), the publication target (`meta.published`), and the run lineage (`meta.lineage`).
 
 - `article:import --from export/<slug>.md --supersedes <prev-run> --root <root-run>` saves `update-base.md` and records `lineage` in `meta.json`.
-- `article:update-diff --run <id>` diffs `update-base.md` against the current `final.md` and writes `update-diff.md` (a unified-style diff) and `changed-sections.json` (per-heading add/remove counts), so the fact-checker / build-verifier can review **only the changed sections** instead of the whole article.
-- `article:record-publication --run <id> --slug <slug> --url <url> --article-id <id> --article-version <n>` updates `meta.published` and the `export/index.json` ledger (slug → latest run / URL) **together**. This is deliberately separate from `export` (which only copies `final.md`): export does a local write, `record-publication` records the publication. It guards against version regressions for the same slug (an identical re-run is a no-op; an intentional correction needs `--force`). The flag is `--article-version` (not `--version`, which is the CLI's own version flag). Like `export`, it is a publish-equivalent step and is **not** added to the editor-in-chief allowlist, so it always prompts.
+- `article:update-diff --run <id>` diffs `update-base.md` against the current `final.md` and writes `update-diff.md` (a unified-style diff) and `changed-sections.json` (per-heading add/remove counts), so the fact-checker / code type-checker can review **only the changed sections** instead of the whole article.
+- `article:record-publication --run <id> --slug <slug> --url <url> --article-id <id> --article-version <n>` updates `meta.published` and the `export/index.json` ledger (slug → latest run / URL) **together**. This is deliberately separate from `export` (which only copies `final.md`): export does a local write, `record-publication` records the publication. It guards against version regressions for the same slug (an identical re-run is a no-op; an intentional correction needs `--force`). The flag is `--article-version` (not `--version`, which is the CLI's own version flag). Like `export`, it is a publish-equivalent step; since v0.2.31 it **is** in the editor-in-chief allowlist (no command-execution prompt), but publishing still requires the editor-in-chief's GO/NO-GO and your approval — confirm the target URL before running.
 
 ### Editorial review (independent reviewer lens)
 

@@ -273,7 +273,7 @@ llm-task-router article:revise --run <id> \
 
     ただし deny の**中間フラグ一致・引数順依存**で `--run X --allow-same-model` の並びを取りこぼし得る。採用前に**実機確認**。確実さを優先するなら「allowlist に入れない」を採る。
 
-どちらの運用でも、**公開相当（`export` / `record-publication`）は allowlist に入れない**（従来どおり）。
+なお公開相当（`export` / `record-publication`）は **v0.2.31 で allowlist 化**され、コマンド実行プロンプトは出ない（公開可否は編集長 GO/NO-GO ＋ユーザー承認で担保。本節執筆時点の「allowlist に入れない」は失効）。
 
 ## 13. API 呼び出し設定（models.yaml / .env）への影響
 
