@@ -151,6 +151,9 @@ export function aggregate(
   const editorModel =
     edited.length > 0 ? edited.reduce((a, b) => (a.at <= b.at ? a : b)).editorModel : undefined;
 
+  // run の開始時刻＝全イベントの at 最小（未ソート配列が来うるので min を取る）。
+  const startedAt = events.length > 0 ? events.reduce((min, e) => (e.at < min ? e.at : min), events[0].at) : undefined;
+
   return {
     runId,
     steps,
@@ -163,6 +166,7 @@ export function aggregate(
     totalCostUsd,
     totalInputTokens,
     totalOutputTokens,
+    startedAt,
     updatedAt: new Date().toISOString(),
   };
 }

@@ -101,6 +101,16 @@ describe("renderProgressMarkdown", () => {
     expect(renderProgressMarkdown(snap)).toContain("+09:00");
   });
 
+  it("shows a 開始 line from the earliest event time (local time with offset)", () => {
+    const snap = aggregate("r", [
+      ev({ step: "refine", status: "done", at: "2026-06-21T07:30:00.000Z" }),
+      ev({ step: "create", status: "start", at: "2026-06-21T07:24:17.000Z" }), // 最古
+    ]);
+    expect(snap.startedAt).toBe("2026-06-21T07:24:17.000Z");
+    // UTC 07:24:17 → JST 16:24:17。開始行が出る。
+    expect(renderProgressMarkdown(snap)).toContain("- 開始: 2026-06-21 16:24:17 +09:00");
+  });
+
   it("fixes the editor-in-chief AI model from the earliest event carrying it (first-write-wins), and omits when absent", () => {
     const withEditor = aggregate("r", [
       // create 時に申告した最古の値が固定される。後続イベントの別値では上書きされない（遡及防止）。

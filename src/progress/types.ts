@@ -56,5 +56,6 @@ export type ProgressSnapshot = {
   totalCostUsd?: number; // costUsd が判明した工程のみ合算（不明は除外）
   totalInputTokens?: number; // トークンが判明した工程のみ合算（LLM 工程のみ。無ければ undefined）
   totalOutputTokens?: number;
+  startedAt?: string; // run の開始時刻（全イベントの at 最小。イベントが無ければ undefined）
   updatedAt: string;
 };
