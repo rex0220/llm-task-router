@@ -117,6 +117,26 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
   );
 
   it(
+    "article:references --help shows --run and --stdout",
+    () => {
+      const out = run(["article:references", "--help"]);
+      expect(out).toContain("--run");
+      expect(out).toContain("--stdout");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:references fails on a non-existent run",
+    () => {
+      const { status, stderr } = runFail(["article:references", "--run", "no-such-run"]);
+      expect(status).toBe(1);
+      expect(stderr).toMatch(/no-such-run/);
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
     "article:record-publication --help shows --article-version (not the reserved --version)",
     () => {
       const out = run(["article:record-publication", "--help"]);

@@ -29,6 +29,7 @@ model: opus
 5. 両者の指摘を統合し優先順位づけした修正指示を作る → `llm-task-router article:revise --instruction-file` で適用。
 5.5. （別系統の編集レビュー・**既定で実施。スキップは理由必須**）`llm-task-router article:review-editorial --run <id>` を回し、runs/<id>/editorial-review.md と editorial-instruction.candidates.md を読む。**採用する弱みだけ**を runs/<id>/editorial-instruction.md に確定 → `llm-task-router article:revise --instruction-file runs/<id>/editorial-instruction.md` で適用。preference・方針衝突・大改変はユーザーへ、事実系は factcheck へ。実施しない場合（純粋な再掲・ごく軽微な修正等）は**スキップ理由を必ず明記**する（silent skip を禁止）。
 5.7. **台帳の正規化は「最後に本文を変えた工程の後」に置く**（stale 台帳を防ぐ）。5.5 の編集レビュー revise が本文の主張・見出し・数値・API 記述に触れた場合は、normalize の前に factchecker に再確認させ claims.raw.json/sources.raw.json を最新の final.md に合わせる。その後 `llm-task-router article:claims-normalize --run <id> --scope full` で claims.json/sources.json に正規化する（id 採番・台帳化）。blocking（present かつ critical/major かつ未検証/要出典/誤り）が残る間は revise → 再 factcheck → 再 normalize で潰す。
+5.8. **参考章に検証済みリンクを付与**（normalize の後）。`llm-task-router article:references --run <id>` で `sources.json`（検証済み URL）から参考章を機械生成する（present かつ verified の claim が参照する source のみ・LLM に URL を書かせない）。`final.md` は機械更新され直前版は `final.references.bak.md` に退避。検証済み source 0件はエラー（factcheck/normalize を確認）。これで読者が元情報を辿れる。
 6. 完成度を評価し GO/NO-GO を推奨。**推奨の前に「ゲート実施チェックリスト」を `runs/<id>/publication-check.md` に必ず書き出す**（会話に出すだけでなくファイル証跡として残す。silent に GO しない）。factcheck / build-verify / editorial-review のそれぞれを「実施（結果要約）」または「スキップ（理由）」で列挙し、抜けが無いことを可視化する。フォーマットは下記テンプレートに従う。**書き出したら `llm-task-router article:verify-artifacts --run <id>` を必ず回す**（成果物の揃い・スキーマ・出典 integrity・build-verify 成否・blocking を機械チェックする公開前ゲート）。FAIL が出たら GO を出さず、原因を潰してから再実行する。**GO でもユーザー承認を得てから** `llm-task-router article:export` を実行する（公開相当の操作を自走で進めない）。
 
    `runs/<id>/publication-check.md` テンプレート:
@@ -63,6 +64,8 @@ model: opus
   - 初回は independent、改稿後の再レビューは continuation（前回未解決＋since-last 差分で再レビューし、weakness の status を追跡）。出力は editorial-review.md と editorial-instruction.candidates.md（候補）。採否は編集長が確定 → editorial-instruction.md → revise。
 - claims-normalize: `llm-task-router article:claims-normalize --run <id> [--scope full|diff]`
   - factchecker の claims.raw.json/sources.raw.json を id 付き claims.json/sources.json に正規化。新規記事は full、更新リライトの差分再検証は diff。
+- references: `llm-task-router article:references --run <id> [--stdout]`
+  - normalize 後に参考章へ検証済みリンクを機械付与（present かつ verified の cited source のみ・sources.json 正本）。final.md を機械更新（`final.references.bak.md` 退避）。検証済み 0件はエラー。
 - verify-artifacts: `llm-task-router article:verify-artifacts --run <id>`
   - 公開前ゲートの機械チェック（外部通信なし）。FAIL は exit 1。GO の前に必ず回す。
 - export:   `llm-task-router article:export --run <id> --out <path> [--force]`

@@ -1,7 +1,8 @@
 import type { RunStore } from "../storage/RunStore";
 import { BuildVerifyReportSchema, ClaimsSchema, SourcesSchema } from "../schemas/ClaimsSchema";
-import { CLAIMS_FILE, SOURCES_FILE, isBlocking } from "./claimsNormalize";
+import { CLAIMS_FILE, SOURCES_FILE, isBlocking, canonicalUrl } from "./claimsNormalize";
 import { gateState, hasSkipReason, parseGoNoGo } from "./publicationCheck";
+import { SOURCES_BEGIN, SOURCES_END } from "./references";
 
 // 公開前ゲート: 成果物の揃い・スキーマ・blocking を機械的にチェックする（外部通信なし）。
 // 各検証の中身は再判定しない（factcheck/build/editorial の判断は各担当に委ねる）。
@@ -154,7 +155,91 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
     }
   }
 
+  // 参考章のリンク検査（過剰にしない）:
+  // - 参考マーカーブロック内のリンクは sources.json と完全一致を必須（偽 URL を弾く）。
+  // - ブロック外の本文リンクで sources.json に無いものは warning（GitHub・公式 doc・画像等の正当リンクを壊さない）。
+  await checkReferenceLinks(store, runId, errors, warnings);
+
   return { runId, ok: errors.length === 0, errors, warnings };
+}
+
+const URL_RE = /https?:\/\/[^\s)<>"'`\]]+/g;
+
+function normalizeForCompare(url: string): string | null {
+  try {
+    return canonicalUrl(url.replace(/[.,;]+$/, "")); // 末尾句読点を除いて正規化
+  } catch {
+    return null;
+  }
+}
+
+async function checkReferenceLinks(
+  store: RunStore,
+  runId: string,
+  errors: string[],
+  warnings: string[]
+): Promise<void> {
+  const final = await readOrNull(store, runId, "final.md");
+  const sourcesJson = await readOrNull(store, runId, SOURCES_FILE);
+  if (final === null || sourcesJson === null) {
+    return; // final/sources が無ければリンク検査はスキップ（他チェックが別途扱う）
+  }
+  const sources = SourcesSchema.safeParse(safeJson(sourcesJson));
+  if (!sources.success) {
+    return; // sources スキーマ不適合は上で別途 error 済み
+  }
+  const known = new Set<string>();
+  for (const s of sources.data) {
+    const n = normalizeForCompare(s.url);
+    if (n) {
+      known.add(n);
+    }
+  }
+
+  // 参考マーカーブロックの範囲を特定（あれば）。
+  // article:references と同じく「begin/end がちょうど1組・正順」のみ正常。片方欠落・複数・逆順は
+  // 破損として error（warning 止まりだと偽 URL を見逃すため。生成側のガードと対称にする）。
+  const bCount = final.split(SOURCES_BEGIN).length - 1;
+  const eCount = final.split(SOURCES_END).length - 1;
+  const bIdx = final.indexOf(SOURCES_BEGIN);
+  const eIdx = final.indexOf(SOURCES_END);
+  const wellFormed = bCount === 1 && eCount === 1 && bIdx < eIdx;
+  if ((bCount > 0 || eCount > 0) && !wellFormed) {
+    errors.push(
+      "参考ブロックのマーカーが壊れています（begin/end が1組・正順ではありません）。手でマーカーを修復してから article:references を再実行してください。"
+    );
+    return; // 破損時はリンク分類しない（偽判定を避ける）
+  }
+  const hasBlock = wellFormed;
+  const inBlock = (pos: number): boolean => hasBlock && pos >= bIdx && pos < eIdx + SOURCES_END.length;
+
+  const blockMissing = new Set<string>();
+  const bodyUnknown = new Set<string>();
+  for (const m of final.matchAll(URL_RE)) {
+    const raw = m[0].replace(/[.,;]+$/, "");
+    const norm = normalizeForCompare(raw);
+    if (norm === null) {
+      continue;
+    }
+    if (inBlock(m.index ?? 0)) {
+      if (!known.has(norm)) {
+        blockMissing.add(raw);
+      }
+    } else if (!known.has(norm)) {
+      bodyUnknown.add(raw);
+    }
+  }
+
+  if (blockMissing.size > 0) {
+    errors.push(
+      `参考ブロック内に sources.json に無いリンクがあります（偽/未登録 URL）: ${[...blockMissing].join(", ")}`
+    );
+  }
+  if (bodyUnknown.size > 0) {
+    warnings.push(
+      `本文（参考ブロック外）に sources.json 未登録のリンクがあります（出典なら参考章へ）: ${[...bodyUnknown].join(", ")}`
+    );
+  }
 }
 
 // ゲート宣言の検査を共通化する: missing は常に error、done は成果物検査、skipped は理由必須。

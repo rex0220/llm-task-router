@@ -392,4 +392,48 @@ describe("verifyArtifacts", () => {
     expect(r.ok).toBe(true);
     expect(r.warnings.join("\n")).toMatch(/skipped/);
   });
+
+  it("FAILs when the 参考 block has a link not in sources.json (fabricated URL)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-fakelink";
+    await seedComplete(store, runId);
+    // 参考ブロック内に sources.json(=example.com/doc) に無い URL を混ぜる。
+    await store.save(
+      runId,
+      "final.md",
+      "# T\n本文\n\n## 参考\n\n<!-- sources:begin -->\n- [S001] Doc（primary, retrieved: 2026-06-20）\n  https://example.com/doc\n- [S999] 偽\n  https://evil.example.com/fake\n<!-- sources:end -->\n"
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/参考ブロック内/);
+  });
+
+  it("FAILs when the sources markers are malformed (e.g. begin without end), not just warns", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-badmarker";
+    await seedComplete(store, runId);
+    // begin だけ残った壊れた参考ブロック＋偽 URL。warning 止まりにせず error にする。
+    await store.save(
+      runId,
+      "final.md",
+      "# T\n\n## 参考\n\n<!-- sources:begin -->\n- 偽\n  https://evil.example.com/fake\n"
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/マーカーが壊れて/);
+  });
+
+  it("passes (with a warning) when a non-source link sits outside the 参考 block", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-bodylink";
+    await seedComplete(store, runId);
+    await store.save(
+      runId,
+      "final.md",
+      "# T\n本文に GitHub リンク https://github.com/foo/bar あり。\n\n## 参考\n\n<!-- sources:begin -->\n- [S001] Doc（primary, retrieved: 2026-06-20）\n  https://example.com/doc\n<!-- sources:end -->\n"
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(true); // ブロック外の一般リンクは warning 止まり
+    expect(r.warnings.join("\n")).toMatch(/参考ブロック外/);
+  });
 });
