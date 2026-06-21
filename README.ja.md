@@ -51,7 +51,7 @@ APIキーは作業ディレクトリの `.env` に置きます。`config/models.
 | 指示ファイル起案 | `/draft-topic` | `topics/<slug>.txt` を作る（本文は書かない） |
 | 作成 → 底上げ → ゲート | `/write-article` → `article-editor-in-chief` | `article:create` → `article:refine` |
 | ファクトチェック（Web） | `article-factchecker`（本文と別系統の外部チェック） | 指摘 → `article:revise --instruction-file` |
-| ビルド検証 | `article-build-verifier`（実機 `tsc` / 実行） | 指摘 → `article:revise --instruction-file` |
+| 構文/型チェック | `article-build-verifier`（`tsc --noEmit` で静的検証・**コードは実行しない**） | 指摘 → `article:revise --instruction-file` |
 | 編集レビュー | `/review-editorial` | `article:review-editorial` → `article:revise` |
 | 公開判断 | 編集長が `runs/<id>/publication-check.md` を書き出し GO/NO-GO を推奨 | **ユーザー承認後**に `article:export` |
 | 公開済み記事の更新 | `/update-article` | `article:import` → `article:update-diff` → `article:export` + `article:record-publication` |
@@ -174,8 +174,8 @@ llm-task-router article:evaluate --run <runId> --min-severity minor
 **公開済み記事の更新リライト**（同一 URL・骨格を保ち、陳腐化した差分だけ直す）では、import を起点に `/update-article` スキルが専用フローを駆動します。**正本を3つ固定**するのが肝です: 版＝`update-base.md`（import 直後に固定する本文）/ 公開先＝`meta.published` / 系譜＝`meta.lineage`。
 
 - `article:import --from export/<slug>.md --supersedes <前の run> --root <根 run>` で `update-base.md` を固定保存し、`lineage` を `meta.json` に記録します。
-- `article:update-diff --run <id>` は `update-base.md` と現 `final.md` を比較し、`update-diff.md`（unified 風の差分）と `changed-sections.json`（見出しごとの追加/削除行数）を書き出します。ファクトチェック／ビルド検証が**変更セクションだけ**を見られるようになります。
-- `article:record-publication --run <id> --slug <slug> --url <url> --article-id <id> --article-version <n>` は `meta.published` と `export/index.json` 台帳（slug → 最新 run / URL）を**同時に**更新します。`export`（`final.md` をコピーするだけ）とは意図的に別ステップで、export はローカル書き出し、`record-publication` は公開の記録です。同一 slug の version 退行を防ぎます（完全一致の再実行は no-op、意図的な訂正は `--force`）。フラグは `--article-version`（CLI 全体の version フラグ `--version` との衝突を避けるため）。`export` と同様に公開相当の操作なので編集長 allowlist に**入れず**、毎回プロンプトが出ます。
+- `article:update-diff --run <id>` は `update-base.md` と現 `final.md` を比較し、`update-diff.md`（unified 風の差分）と `changed-sections.json`（見出しごとの追加/削除行数）を書き出します。ファクトチェック／構文・型チェックが**変更セクションだけ**を見られるようになります。
+- `article:record-publication --run <id> --slug <slug> --url <url> --article-id <id> --article-version <n>` は `meta.published` と `export/index.json` 台帳（slug → 最新 run / URL）を**同時に**更新します。`export`（`final.md` をコピーするだけ）とは意図的に別ステップで、export はローカル書き出し、`record-publication` は公開の記録です。同一 slug の version 退行を防ぎます（完全一致の再実行は no-op、意図的な訂正は `--force`）。フラグは `--article-version`（CLI 全体の version フラグ `--version` との衝突を避けるため）。`export` と同様に公開相当の操作で、v0.2.31 以降は編集長 allowlist に**入り**コマンド実行プロンプトは出ませんが、公開可否は編集長 GO/NO-GO ＋ユーザー承認で担保します（実行前に対象 URL を確認）。
 
 ### 編集レビュー（独立したレビュアーの目）
 
