@@ -453,7 +453,25 @@ describe("verifyArtifacts: sources 到達性／差し替え／cited 整合（rea
     );
     const r = await verifyArtifacts(store, runId);
     expect(r.ok).toBe(false);
-    expect(r.errors.join("\n")).toMatch(/cited なのに reachable=dead/);
+    expect(r.errors.join("\n")).toMatch(/reachable=dead の source があります/);
+  });
+
+  it("FAILs on a dead source cited by claims even when cited is not materialized (claims is the source of truth)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-deadnocited";
+    await seedComplete(store, runId);
+    await store.save(runId, "claims.json", CLAIMS_OK); // C001 verified present [S001]
+    // reachable:dead は明示、cited は省略（未 materialize）。claims 再導出で S001 は cited。
+    await store.save(
+      runId,
+      "sources.json",
+      JSON.stringify([
+        { id: "S001", url: "https://example.com/doc", title: "Doc", retrievedAt: "2026-06-20", sourceType: "primary", summary: "", reachable: "dead" },
+      ])
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/reachable=dead の source があります/);
   });
 
   it("FAILs when the 参考 block links to a reachable:dead source", async () => {
@@ -480,7 +498,7 @@ describe("verifyArtifacts: sources 到達性／差し替え／cited 整合（rea
     expect(r.errors.join("\n")).toMatch(/reachable=dead の source へのリンク/);
   });
 
-  it("FAILs on a dangling or self-referential replacedBy", async () => {
+  it("FAILs on a dangling replacedBy", async () => {
     const store = await newStore();
     const runId = "2026-06-20-dangling";
     await seedComplete(store, runId);
@@ -495,6 +513,23 @@ describe("verifyArtifacts: sources 到達性／差し替え／cited 整合（rea
     const r = await verifyArtifacts(store, runId);
     expect(r.ok).toBe(false);
     expect(r.errors.join("\n")).toMatch(/dangling/);
+  });
+
+  it("FAILs on a self-referential replacedBy (hand-edit detection)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-selfref";
+    await seedComplete(store, runId);
+    await store.save(runId, "claims.json", CLAIMS_OK);
+    await store.save(
+      runId,
+      "sources.json",
+      JSON.stringify([
+        { id: "S001", url: "https://example.com/doc", title: "Doc", retrievedAt: "2026-06-20", sourceType: "primary", summary: "", reachable: "ok", cited: true, replacedBy: "S001" },
+      ])
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/自己参照/);
   });
 
   it("FAILs when cited materialization disagrees with claims (drift)", async () => {

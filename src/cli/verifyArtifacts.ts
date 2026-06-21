@@ -272,12 +272,15 @@ async function checkSourceMeta(store: RunStore, runId: string, errors: string[])
   }
 
   const ids = new Set(sources.data.map((s) => s.id));
+  // cited の正本は claims（焼き込み値ではなく再導出を使う）。
+  const derived = collectCitedSourceIds(claims.data);
 
-  // 1. cited なのに dead（claim が死リンクを引用している台帳不整合）。
-  const deadCited = sources.data.filter((s) => s.cited && s.reachable === "dead").map((s) => s.id);
+  // 1. claims が引用しているのに dead（死リンクを引用している台帳不整合）。
+  // 焼き込み cited(optional) ではなく claims 再導出で判定する（cited 未 materialize でも検出する）。
+  const deadCited = sources.data.filter((s) => derived.has(s.id) && s.reachable === "dead").map((s) => s.id);
   if (deadCited.length > 0) {
     errors.push(
-      `cited なのに reachable=dead の source があります（claim を到達可能な代替へ張り替えてください）: ${deadCited.join(", ")}`
+      `claims が引用しているのに reachable=dead の source があります（claim を到達可能な代替へ張り替えてください）: ${deadCited.join(", ")}`
     );
   }
 
@@ -297,7 +300,6 @@ async function checkSourceMeta(store: RunStore, runId: string, errors: string[])
   // cited が materialize された新 run のみ検査（旧 run は cited 未記録なので対象外＝back-compat）。
   const materialized = sources.data.some((s) => s.cited !== undefined);
   if (materialized) {
-    const derived = collectCitedSourceIds(claims.data);
     const mismatched = sources.data.filter((s) => (s.cited ?? false) !== derived.has(s.id)).map((s) => s.id);
     if (mismatched.length > 0) {
       errors.push(
