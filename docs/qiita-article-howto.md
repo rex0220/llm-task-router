@@ -340,6 +340,16 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 llm-task-router article:claims-normalize --run 2026-06-18-ai-ir --scope full
 ```
 
+1.5. **参考章に検証済みリンクを付与**（normalize の後）。本文の参考章が出典名だけだと読者が元情報を辿れない。`sources.json`（検証済み URL）から参考章を機械生成する（**LLM に URL を書かせない＝偽 URL 防止**）：
+
+```bash
+llm-task-router article:references --run 2026-06-18-ai-ir   # --stdout で生成ブロックだけ確認も可
+```
+
+- 載せるのは **`present` かつ `verified` な claim が参照する source のみ**（未検証・要出典は公開前ゲートで潰す対象）。primary→secondary・id 順。
+- 参考章は `<!-- sources:begin/end -->` マーカーで管理し、再生成しても編集長の前後文を壊さない（初回の「名前のみ」リストは章本文ごと置換）。`final.md` は機械更新され、直前版は `final.references.bak.md` に退避（`revise` の `final.bak.md` とは別）。
+- 検証済み source が0件なら何も書かずエラー終了（公開前に0は異常なので気づける）。
+
 2. 編集長が `runs/<id>/publication-check.md` にゲート実施チェックリストを書き出したら、公開前ゲートを機械チェックする：
 
 ```bash
@@ -352,6 +362,7 @@ llm-task-router article:verify-artifacts --run 2026-06-18-ai-ir
 - 各ゲート（factcheck / build-verify / editorial-review）が publication-check で `done|skipped` 宣言済み（silent skip 禁止。skipped は理由必須）。
 - `factcheck=done` なら `claims.json`／`sources.json` 必須・スキーマ適合・出典参照 integrity・**blocking な claim ゼロ**（blocking = present かつ critical/major かつ unverified/needs-source/incorrect）。
 - `build-verify=done` なら report が `status=passed`（failed/partial・未検証混入・宣言不整合は弾く）。
+- **参考リンク**: 参考マーカーブロック内のリンクは `sources.json` に全て存在すること（偽/未登録 URL は **FAIL**）。ブロック外の本文リンク（GitHub・公式 doc・画像等）で `sources.json` に無いものは **warning**（一般リンクは壊さない）。
 
 > 採番（`CNNN-<hash8>` / `SNNN`）は **コードが担い**、factchecker や編集長は hash を計算しない。`verify-artifacts` は外部通信を行わないため安全方針と無衝突。
 
@@ -389,7 +400,7 @@ llm-task-router article:completion-report --run 2026-06-18-ai-ir
 
 ## 承認回数を減らす（Claude Code の permission）
 
-Claude Code で回すと Bash 実行のたびに承認を求められ、数が多いと中身を見ずに承認しがちになる。`init` は `.claude/settings.json` に **pipeline 系コマンドだけの allowlist** を入れて配るので、`create / refine / evaluate / revise / resume / review` は事前許可済み（プロンプトが出ない）。記録系の `article:status` / `article:progress:event` / `article:completion-report` / `article:direction-check` / `article:factcheck-scope` も allowlist に入っており、進捗確認・記録・方向性ゲート・完成報告・再 factcheck 判定のたびに承認を求められることはない。
+Claude Code で回すと Bash 実行のたびに承認を求められ、数が多いと中身を見ずに承認しがちになる。`init` は `.claude/settings.json` に **pipeline 系コマンドだけの allowlist** を入れて配るので、`create / refine / evaluate / revise / resume / review` は事前許可済み（プロンプトが出ない）。記録系の `article:status` / `article:progress:event` / `article:completion-report` / `article:direction-check` / `article:factcheck-scope` / `article:references` も allowlist に入っており、進捗確認・記録・方向性ゲート・完成報告・再 factcheck 判定・参考リンク付与のたびに承認を求められることはない。
 
 意図的に**プロンプトを残している**のは次の4つ — ここは毎回中身を見て承認する：
 
@@ -451,6 +462,9 @@ llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/
 # 5.8) 台帳の正規化（factcheck の raw → id 付き claims.json/sources.json）
 #      編集レビューが主張・見出し・数値・API に触れたなら、ここで再 factcheck して raw を最新化してから normalize する
 llm-task-router article:claims-normalize --run 2026-06-18-ai-ir --scope full
+
+# 5.85) 参考章に検証済みリンクを付与（sources.json 由来・LLM に URL を書かせない）
+llm-task-router article:references --run 2026-06-18-ai-ir
 
 # 5.9) 公開前ゲート（publication-check.md を書き出してから機械チェック。FAIL なら潰して再実行）
 llm-task-router article:verify-artifacts --run 2026-06-18-ai-ir

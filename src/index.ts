@@ -38,6 +38,12 @@ import {
   type AcceptedAfter,
   type FactcheckScope,
 } from "./cli/factcheckScope";
+import {
+  prepareReferencesBlock,
+  replaceMarkedBlock,
+  SOURCES_BEGIN,
+  SOURCES_END,
+} from "./cli/references";
 import { runEditorialReview } from "./workflows/editorialReview";
 import { initConfig } from "./cli/init";
 import { ExportIndex } from "./storage/ExportIndex";
@@ -1126,6 +1132,34 @@ program
     console.log(
       `factcheck baseline updated: runs/${options.run}/factcheck.snapshot.md (accepted-after=${meta.acceptedAfter})`
     );
+  });
+
+program
+  .command("article:references")
+  .description("Generate the 参考 section links from sources.json (verified sources only; never lets the LLM write URLs)")
+  .requiredOption("--run <runId>", "Run id")
+  .option("--stdout", "Print only the generated 参考 block (no file write)")
+  .action(async (options: { run: string; stdout?: boolean }) => {
+    const store = new RunStore();
+    await assertRunExists(store, options.run);
+
+    // claims/sources を読んで参考ブロックを生成（不在・verified 0件はここで明確にエラー＝exit 1）。
+    const { block, count } = await prepareReferencesBlock(store, options.run);
+
+    if (options.stdout) {
+      process.stdout.write(block.endsWith("\n") ? block : `${block}\n`);
+      return;
+    }
+
+    const final = await store.read(options.run, "final.md").catch(() => null);
+    if (final === null) {
+      throw new Error(`final.md がありません（runs/${options.run}/）。`);
+    }
+    // 反映を先に計算（マーカー破損ならここで throw＝書き込まない）→ bak 退避 → 書き込み。
+    const { content, status } = replaceMarkedBlock(final, SOURCES_BEGIN, SOURCES_END, block);
+    await store.save(options.run, "final.references.bak.md", final);
+    await store.save(options.run, "final.md", content);
+    console.log(`references: runs/${options.run}/final.md (${count} sources, ${status}) / backup: final.references.bak.md`);
   });
 
 if (process.argv.slice(2).length === 0) {
