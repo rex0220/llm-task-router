@@ -97,7 +97,7 @@ describe("stampSnapshot / readSnapshot", () => {
     const store = await newStore();
     const runId = "2026-06-21-fs-nofinal";
     await store.create(runId, "T", ["create"]);
-    await expect(stampSnapshot(store, runId, "factcheck", "x")).rejects.toThrow();
+    await expect(stampSnapshot(store, runId, "factcheck", "x")).rejects.toThrow(/final\.md/);
   });
 });
 

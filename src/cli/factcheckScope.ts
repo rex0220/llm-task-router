@@ -60,6 +60,15 @@ export async function readSnapshot(store: RunStore, runId: string): Promise<stri
   return readOrNull(store, runId, FACTCHECK_SNAPSHOT_FILE);
 }
 
+// final.md を読む。不在は明確なエラーにする（生 ENOENT より分かりやすく。他コマンドと作法を揃える）。
+async function readFinal(store: RunStore, runId: string): Promise<string> {
+  const final = await readOrNull(store, runId, "final.md");
+  if (final === null) {
+    throw new Error(`final.md がありません（runs/${runId}/）。create/refine で本文を生成してから実行してください。`);
+  }
+  return final;
+}
+
 // 現 final.md を factcheck baseline として受理する（受理メタつき）。
 // acceptedAfter/note は呼び出し側（CLI）で必須化する。final.md 不在はエラー。
 export async function stampSnapshot(
@@ -68,7 +77,7 @@ export async function stampSnapshot(
   acceptedAfter: AcceptedAfter,
   note: string
 ): Promise<SnapshotMeta> {
-  const final = await store.read(runId, "final.md"); // 無ければここで失敗
+  const final = await readFinal(store, runId);
   await store.save(runId, FACTCHECK_SNAPSHOT_FILE, final);
   const meta: SnapshotMeta = {
     runId,
@@ -170,7 +179,7 @@ export function decideFactcheckScope(
 
 // 収集（snapshot/final/claims を読み）→ 判定。final.md 不在はエラー。claims 破損もエラー（readClaimsStrict）。
 export async function collectFactcheckScope(store: RunStore, runId: string): Promise<FactcheckScope> {
-  const final = await store.read(runId, "final.md"); // 無ければここで失敗
+  const final = await readFinal(store, runId);
   const snapshot = await readSnapshot(store, runId);
   const resolved = await resolveClaims(store, runId);
   return decideFactcheckScope(snapshot, final, resolved?.claims ?? null, resolved?.sourceRunId);
