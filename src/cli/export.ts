@@ -42,7 +42,7 @@ export async function exportFinalArticle(
 // 「最初の非空行が H1 のとき」だけタイトルとみなす（stripLeadingH1 と同じ判定）。
 // 本文全体を走査する fallback は持たない（コードフェンス内の "# コメント" を
 // 誤ってタイトルに採るのを防ぎ、除去対象行と一致させるため）。
-function firstH1(body: string): string | undefined {
+export function firstH1(body: string): string | undefined {
   const firstNonEmpty = body.split(/\r?\n/).find((line) => line.trim() !== "");
   if (firstNonEmpty && /^#\s+/.test(firstNonEmpty.trim())) {
     return firstNonEmpty.trim().replace(/^#\s+/, "").trim();

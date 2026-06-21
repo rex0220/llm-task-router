@@ -12,11 +12,39 @@ import { writeUpdateDiff } from "./cli/updateDiff";
 import { normalizeClaims } from "./cli/claimsNormalize";
 import { verifyArtifacts } from "./cli/verifyArtifacts";
 import { writeClaimsRecheck } from "./cli/claimsRecheck";
+import { getRunStatus } from "./cli/status";
+import {
+  collectCompletionReportData,
+  mergeCompletionReport,
+  renderCompletionReport,
+  COMPLETION_REPORT_FILE,
+  COMPLETION_REPORT_BAK,
+} from "./cli/completionReport";
+import {
+  collectDirectionCheckData,
+  directionGateStatus,
+  mergeDirectionCheck,
+  DIRECTION_CHECK_FILE,
+  DIRECTION_CHECK_BAK,
+  type DirectionSource,
+  type Verdict,
+} from "./cli/directionCheck";
+import {
+  collectFactcheckScope,
+  renderFactcheckScope,
+  stampSnapshot,
+  FACTCHECK_SCOPE_FILE,
+  FACTCHECK_SCOPE_JSON,
+  type AcceptedAfter,
+  type FactcheckScope,
+} from "./cli/factcheckScope";
 import { runEditorialReview } from "./workflows/editorialReview";
 import { initConfig } from "./cli/init";
 import { ExportIndex } from "./storage/ExportIndex";
 import { loadProfile } from "./workflows/profile";
 import { RunLogger } from "./logger/RunLogger";
+import { RunProgress, type ProgressEventInput } from "./progress/RunProgress";
+import type { ProgressEventStatus } from "./progress/types";
 import { createProviders } from "./providers";
 import { ModelRouter } from "./router/ModelRouter";
 import { loadRouterConfig } from "./router/config";
@@ -89,14 +117,24 @@ program
       const runIdSeed = options.topicFile ? basename(options.topicFile).replace(/\.[^.]+$/, "") : topic;
       const runId = options.run ?? createRunId(runIdSeed);
       const { router, store } = await createRuntime(options.config);
+      const progress = new RunProgress(store);
       const reporter = createProgressReporter();
-      const result = await createQiitaArticle(
-        router,
-        store,
-        topic,
-        { runId, platform, style: profile.style, profile: options.profile },
-        reporter.report
-      );
+      const result = await runWithProgress({
+        progress,
+        runId,
+        step: "create",
+        task: "create",
+        totals: reporter.totals,
+        output: (r) => `runs/${r.runId}/final.md`,
+        run: () =>
+          createQiitaArticle(
+            router,
+            store,
+            topic,
+            { runId, platform, style: profile.style, profile: options.profile },
+            reporter.report
+          ),
+      });
       reporter.printTotal();
       console.log(`runId: ${result.runId}`);
       console.log(`final: runs/${result.runId}/final.md`);
@@ -109,8 +147,18 @@ program
   .option("--config <path>", "Path to models.yaml", "config/models.yaml")
   .action(async (options: { run: string; config: string }) => {
     const { router, store } = await createRuntime(options.config);
+    const progress = new RunProgress(store);
     const reporter = createProgressReporter();
-    const result = await resumeQiitaArticle(router, store, options.run, reporter.report);
+    const result = await runWithProgress({
+      progress,
+      runId: options.run,
+      step: "create",
+      task: "resume",
+      totals: reporter.totals,
+      output: (r) => `runs/${r.runId}/final.md`,
+      ensureRun: () => assertRunExists(store, options.run),
+      run: () => resumeQiitaArticle(router, store, options.run, reporter.report),
+    });
     reporter.printTotal();
     console.log(`runId: ${result.runId}`);
     console.log(`final: runs/${result.runId}/final.md`);
@@ -122,8 +170,18 @@ program
   .option("--config <path>", "Path to models.yaml", "config/models.yaml")
   .action(async (options: { run: string; config: string }) => {
     const { router, store } = await createRuntime(options.config);
+    const progress = new RunProgress(store);
     const reporter = createProgressReporter();
-    const result = await rerunQiitaReview(router, store, options.run, reporter.report);
+    const result = await runWithProgress({
+      progress,
+      runId: options.run,
+      step: "create",
+      task: "review",
+      totals: reporter.totals,
+      output: (r) => `runs/${r.runId}/final.md`,
+      ensureRun: () => assertRunExists(store, options.run),
+      run: () => rerunQiitaReview(router, store, options.run, reporter.report),
+    });
     reporter.printTotal();
     console.log(`runId: ${result.runId}`);
     console.log(`final: runs/${result.runId}/final.md`);
@@ -144,8 +202,18 @@ program
       "--instruction-file"
     );
     const { router, store } = await createRuntime(options.config);
+    const progress = new RunProgress(store);
     const reporter = createProgressReporter();
-    const result = await reviseQiitaFinal(router, store, options.run, instruction, reporter.report);
+    const result = await runWithProgress({
+      progress,
+      runId: options.run,
+      step: "revise",
+      task: "rewrite",
+      totals: reporter.totals,
+      output: (r) => `runs/${r.runId}/final.md`,
+      ensureRun: () => assertRunExists(store, options.run),
+      run: () => reviseQiitaFinal(router, store, options.run, instruction, reporter.report),
+    });
     reporter.printTotal();
     console.log(`runId: ${result.runId}`);
     console.log(`final: runs/${result.runId}/final.md (previous: runs/${result.runId}/final.bak.md)`);
@@ -229,6 +297,7 @@ program
       force: options.force,
       frontMatter: options.frontMatter,
     });
+    await recordProgress(store, options.run, { step: "export", status: "done", output: dest });
     console.log(`exported: ${dest}${options.frontMatter ? " (with front-matter)" : ""}`);
   });
 
@@ -256,6 +325,12 @@ program
     }
     const store = new RunStore();
     const summary = await normalizeClaims(store, options.run, scope);
+    await recordProgress(store, summary.runId, {
+      step: "claims-normalize",
+      status: "done",
+      output: `runs/${summary.runId}/claims.json`,
+      note: `${summary.present} present, blocking ${summary.blocking} (scope ${summary.scope})`,
+    });
     console.log(`runId: ${summary.runId}`);
     console.log(
       `claims: runs/${summary.runId}/claims.json (${summary.present} present, ${summary.removed} removed; round ${summary.round}, scope ${summary.scope})`
@@ -287,6 +362,11 @@ program
   .action(async (options: { run: string }) => {
     const store = new RunStore();
     const result = await verifyArtifacts(store, options.run);
+    await recordProgress(store, result.runId, {
+      step: "verify-artifacts",
+      status: result.ok ? "done" : "error",
+      note: result.ok ? "OK" : `FAIL (${result.errors.length} 件)`,
+    });
     console.log(`runId: ${result.runId}`);
     for (const w of result.warnings) {
       console.log(`warn: ${w}`);
@@ -331,11 +411,20 @@ program
     console.log(`index: export/index.json (slug: ${result.slug})`);
   });
 
+// アクションが集約した実績（progress の done イベントに載せる）。cost は判明分のみ。
+type ProgressTotals = { costUsd?: number; elapsedMs?: number };
+
 // 進捗は stderr に出す（stdout は runId / final パスのみに保ち、スクリプトでパースしやすくする）。
 // コストは usage トークン × models.yaml の prices によるローカル概算（追加APIコールは無し）。
-function createProgressReporter(): { report: (event: WorkflowEvent) => void; printTotal: () => void } {
+// totals() は progress 記録（アクション側で集約 → flush）用に同じ概算値を返す。
+function createProgressReporter(): {
+  report: (event: WorkflowEvent) => void;
+  printTotal: () => void;
+  totals: () => ProgressTotals;
+} {
   let totalCostUsd = 0;
   let hasCost = false;
+  let totalElapsedMs = 0;
 
   const report = (event: WorkflowEvent): void => {
     switch (event.type) {
@@ -350,6 +439,7 @@ function createProgressReporter(): { report: (event: WorkflowEvent) => void; pri
           totalCostUsd += event.costUsd;
           hasCost = true;
         }
+        totalElapsedMs += event.elapsedMs;
         const cost = event.costUsd !== undefined ? `, ~$${event.costUsd.toFixed(4)}` : "";
         process.stderr.write(
           `[${event.index}/${event.total}] ${event.name} - done via ${event.provider}/${event.model} (${event.elapsedMs}ms${cost})\n`
@@ -373,7 +463,93 @@ function createProgressReporter(): { report: (event: WorkflowEvent) => void; pri
     }
   };
 
-  return { report, printTotal };
+  const totals = (): ProgressTotals => ({
+    costUsd: hasCost ? Number(totalCostUsd.toFixed(6)) : undefined,
+    elapsedMs: totalElapsedMs,
+  });
+
+  return { report, printTotal, totals };
+}
+
+// アクション（CLI 1コマンド）を1つの canonical 工程として progress に記録する。
+// start を打ち、成功で done（集約した totals と出力パス）、失敗で error を打ってから再送出。
+// progress の記録失敗は本処理を止めない（観測性は副作用）。
+async function runWithProgress<T>(args: {
+  progress: RunProgress;
+  runId: string;
+  step: string;
+  task?: string;
+  totals: () => ProgressTotals;
+  output?: (result: T) => string | undefined;
+  run: () => Promise<T>;
+  // create 以外は run の存在を先に確認してから記録する（runId typo で架空 run を作らない）。
+  ensureRun?: () => Promise<void>;
+}): Promise<T> {
+  if (args.ensureRun) {
+    await args.ensureRun();
+  }
+  await safeProgress(() => args.progress.append(args.runId, { step: args.step, status: "start", task: args.task }));
+  try {
+    const result = await args.run();
+    const t = args.totals();
+    await safeProgress(() =>
+      args.progress.append(args.runId, {
+        step: args.step,
+        status: "done",
+        task: args.task,
+        elapsedMs: t.elapsedMs,
+        costUsd: t.costUsd,
+        output: args.output?.(result),
+      })
+    );
+    await safeProgress(async () => {
+      await args.progress.regenerate(args.runId);
+    });
+    return result;
+  } catch (error) {
+    await safeProgress(() =>
+      args.progress.append(args.runId, { step: args.step, status: "error", task: args.task, note: shortMessage(error) })
+    );
+    await safeProgress(async () => {
+      await args.progress.regenerate(args.runId);
+    });
+    throw error;
+  }
+}
+
+// run の存在を meta.json で確認する（runId typo で架空 run の progress を作らないため）。
+async function assertRunExists(store: RunStore, runId: string): Promise<void> {
+  try {
+    await store.readMeta(runId);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`Run ${runId} が見つかりません（runs/${runId}/meta.json なし）。runId を確認してください。`);
+    }
+    throw error;
+  }
+}
+
+// WorkflowEvent を持たない CLI（claims-normalize / verify-artifacts / export 等）の終了を1イベント記録する。
+// 記録失敗は本処理を止めない。
+async function recordProgress(store: RunStore, runId: string, input: ProgressEventInput): Promise<void> {
+  const progress = new RunProgress(store);
+  await safeProgress(async () => {
+    await progress.append(runId, input);
+    await progress.regenerate(runId);
+  });
+}
+
+async function safeProgress(fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+  } catch (error) {
+    process.stderr.write(`  ⚠ progress 記録に失敗しました（本処理は継続）: ${shortMessage(error)}\n`);
+  }
+}
+
+function shortMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length > 200 ? `${message.slice(0, 197)}...` : message;
 }
 
 program
@@ -395,8 +571,18 @@ program
       const { router, store } = await createRuntime(options.config);
       const criteria = await resolveEvaluationCriteria(store, options);
 
+      const progress = new RunProgress(store);
       const reporter = createProgressReporter();
-      const result = await evaluateQiitaFinal(router, store, options.run, { minSeverity, criteria }, reporter.report);
+      const result = await runWithProgress({
+        progress,
+        runId: options.run,
+        step: "evaluate",
+        task: "final_review",
+        totals: reporter.totals,
+        output: (r) => `runs/${r.runId}/${r.reviewSummaryFile}`,
+        ensureRun: () => assertRunExists(store, options.run),
+        run: () => evaluateQiitaFinal(router, store, options.run, { minSeverity, criteria }, reporter.report),
+      });
       reporter.printTotal();
 
       console.log(`runId: ${result.runId}`);
@@ -438,14 +624,19 @@ program
       const { router, store } = await createRuntime(options.config);
       const criteria = await resolveEvaluationCriteria(store, options);
 
+      const progress = new RunProgress(store);
       const reporter = createRefineReporter(options.run);
-      const result = await refineQiitaFinal(
-        router,
-        store,
-        options.run,
-        { maxRounds, minSeverity, until, criteria },
-        reporter.report
-      );
+      const result = await runWithProgress({
+        progress,
+        runId: options.run,
+        step: "refine",
+        task: "refine",
+        totals: reporter.totals,
+        output: (r) => `runs/${r.runId}/final.md (stopped: ${r.stoppedReason}, ${r.rounds} rounds)`,
+        ensureRun: () => assertRunExists(store, options.run),
+        run: () =>
+          refineQiitaFinal(router, store, options.run, { maxRounds, minSeverity, until, criteria }, reporter.report),
+      });
 
       console.log(`runId: ${result.runId}`);
       console.log(`stopped: ${result.stoppedReason} (${result.rounds} rounds)`);
@@ -479,6 +670,14 @@ program
         allowSameProvider: options.allowSameProvider,
         allowSameModel: options.allowSameModel,
         criteria,
+      });
+      await recordProgress(store, result.runId, {
+        step: "editorial",
+        status: "done",
+        provider: result.reviewerModel.provider,
+        model: result.reviewerModel.model,
+        output: `runs/${result.runId}/editorial-review.md`,
+        note: `${result.verdict} (round ${result.round}, ${result.candidateCount} candidates)`,
       });
       console.log(`runId: ${result.runId} (${result.mode}, round ${result.round})`);
       console.log(`reviewer: ${result.reviewerModel.provider}/${result.reviewerModel.model}`);
@@ -537,11 +736,18 @@ function parseUntil(value: string): "clean" | "approved" {
 
 // refine 専用の進捗表示。round 境界・評価/改稿の各行・打ち切り/wrap-text 警告・停止理由を stderr に出す。
 // 合計コスト表示は実額のみ（cost が取れた分だけ加算）。
-function createRefineReporter(runId: string): { report: (event: RefineEvent) => void } {
+function createRefineReporter(runId: string): {
+  report: (event: RefineEvent) => void;
+  totals: () => ProgressTotals;
+} {
   let total = 0;
   let hasCost = false;
+  let totalElapsedMs = 0;
 
-  const accrue = (costUsd?: number): string => {
+  const accrue = (costUsd?: number, elapsedMs?: number): string => {
+    if (elapsedMs !== undefined) {
+      totalElapsedMs += elapsedMs;
+    }
     if (costUsd !== undefined) {
       total += costUsd;
       hasCost = true;
@@ -556,7 +762,7 @@ function createRefineReporter(runId: string): { report: (event: RefineEvent) => 
         process.stderr.write(`[refine] round ${event.round}/${event.maxRounds}\n`);
         break;
       case "eval:done": {
-        const cost = accrue(event.costUsd);
+        const cost = accrue(event.costUsd, event.elapsedMs);
         process.stderr.write(
           `  evaluate - done via ${event.provider}/${event.model} (${event.elapsedMs}ms${cost}) — issues>=${event.minSeverity}: ${event.issueCount}, score: ${event.score}\n`
         );
@@ -568,7 +774,7 @@ function createRefineReporter(runId: string): { report: (event: RefineEvent) => 
         break;
       }
       case "revise:done": {
-        const cost = accrue(event.costUsd);
+        const cost = accrue(event.costUsd, event.elapsedMs);
         process.stderr.write(
           `  revise - done via ${event.provider}/${event.model} (${event.elapsedMs}ms${cost})\n`
         );
@@ -597,7 +803,12 @@ function createRefineReporter(runId: string): { report: (event: RefineEvent) => 
     }
   };
 
-  return { report };
+  const totals = (): ProgressTotals => ({
+    costUsd: hasCost ? Number(total.toFixed(6)) : undefined,
+    elapsedMs: totalElapsedMs,
+  });
+
+  return { report, totals };
 }
 
 // 評価観点の解決順: 明示指定（--criteria / --criteria-file）> run の brushup-criteria.md > run の profile の criteria_file > なし。
@@ -644,6 +855,53 @@ function parseSeverity(value: string): Severity {
   return value as Severity;
 }
 
+function parseProgressStatus(value: string): ProgressEventStatus {
+  const allowed: ProgressEventStatus[] = ["start", "done", "skip", "error"];
+  if (!(allowed as string[]).includes(value)) {
+    throw new Error(`Invalid --status: ${value} (use start|done|skip|error)`);
+  }
+  return value as ProgressEventStatus;
+}
+
+function parseOptionalNumber(value: string | undefined, flag: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    throw new Error(`Invalid ${flag}: ${value} (expected a number)`);
+  }
+  return n;
+}
+
+function parseVerdict(value: string): Verdict {
+  if (value !== "ok" && value !== "revise") {
+    throw new Error(`Invalid --verdict: ${value} (use ok|revise)`);
+  }
+  return value;
+}
+
+function parseDirectionSource(value: string): DirectionSource {
+  if (value !== "final" && value !== "draft") {
+    throw new Error(`Invalid --source: ${value} (use final|draft)`);
+  }
+  return value;
+}
+
+function parseAcceptedAfter(value: string): AcceptedAfter {
+  if (value !== "factcheck" && value !== "non-factual-diff") {
+    throw new Error(`Invalid --accepted-after: ${value} (use factcheck|non-factual-diff)`);
+  }
+  return value;
+}
+
+function scopeSummary(scope: FactcheckScope): string {
+  if (scope.mode === "diff") {
+    return `diff (changed ${scope.changedSections.length} sections / ${scope.recheckClaims.length} claims)`;
+  }
+  return scope.mode; // full | skip
+}
+
 async function createRuntime(configPath: string): Promise<{ router: ModelRouter; store: RunStore }> {
   const config = await loadRouterConfig(configPath);
   const providers = createProviders(config);
@@ -652,6 +910,223 @@ async function createRuntime(configPath: string): Promise<{ router: ModelRouter;
   const store = new RunStore();
   return { router, store };
 }
+
+program
+  .command("article:status")
+  .description("Show run progress (current step / elapsed / estimated cost) from progress.events.jsonl")
+  .requiredOption("--run <runId>", "Run id")
+  .option("--json", "Output the ProgressSnapshot as JSON (for scripts)")
+  .action(async (options: { run: string; json?: boolean }) => {
+    const { snapshot, markdown } = await getRunStatus(options.run);
+    if (options.json) {
+      console.log(JSON.stringify(snapshot, null, 2));
+      return;
+    }
+    process.stdout.write(`${markdown}\n`);
+  });
+
+program
+  .command("article:progress:event")
+  .description("Record a progress event into runs/<id>/progress.events.jsonl (for subagent / manual recording)")
+  .requiredOption("--run <runId>", "Run id")
+  .requiredOption("--step <name>", "Step name (e.g. factcheck, build-verify, publication-check)")
+  .requiredOption("--status <status>", "start | done | skip | error")
+  .option("--note <text>", "Reason / notes (required for skip — silent skip is forbidden)")
+  .option("--output <path>", "Main output path for this step")
+  .option("--elapsed-ms <n>", "Elapsed milliseconds")
+  .option("--cost-usd <n>", "Estimated cost in USD")
+  .action(
+    async (options: {
+      run: string;
+      step: string;
+      status: string;
+      note?: string;
+      output?: string;
+      elapsedMs?: string;
+      costUsd?: string;
+    }) => {
+      const status = parseProgressStatus(options.status);
+      if (status === "skip" && !options.note) {
+        throw new Error("skip は --note（理由）が必須です（silent skip 禁止）。");
+      }
+      const store = new RunStore();
+      await assertRunExists(store, options.run);
+      const progress = new RunProgress(store);
+      const event: ProgressEventInput = {
+        step: options.step,
+        status,
+        note: options.note,
+        output: options.output,
+        elapsedMs: parseOptionalNumber(options.elapsedMs, "--elapsed-ms"),
+        costUsd: parseOptionalNumber(options.costUsd, "--cost-usd"),
+      };
+      await progress.append(options.run, event);
+      const snapshot = await progress.regenerate(options.run);
+      console.log(`progress: runs/${options.run}/progress.md (${options.step} = ${status})`);
+      console.log(
+        `current: ${snapshot.complete ? "complete" : snapshot.currentIndex !== undefined ? `${snapshot.currentIndex}/${snapshot.total}` : `-/${snapshot.total}`}`
+      );
+    }
+  );
+
+program
+  .command("article:completion-report")
+  .description("Generate runs/<id>/completion-report.md from progress.json + publication-check.md (closed to runs/, never touches export/index.json)")
+  .requiredOption("--run <runId>", "Run id")
+  .option("--stdout", "Print to stdout without writing the file (dry run)")
+  .option("--reset-editor", "Reset the editor sections to the template (backs up the existing file first)")
+  .action(async (options: { run: string; stdout?: boolean; resetEditor?: boolean }) => {
+    const store = new RunStore();
+    await assertRunExists(store, options.run);
+
+    const publicationCheck = await store.read(options.run, "publication-check.md").catch(() => null);
+    if (publicationCheck === null) {
+      throw new Error(
+        `publication-check.md がありません（runs/${options.run}/）。先に編集長が GO/NO-GO チェックリストを作成してください（verify-artifacts は推奨だが必須ではありません）。`
+      );
+    }
+
+    const data = await collectCompletionReportData(store, options.run, publicationCheck);
+
+    // 既定: auto 範囲だけ再生成し editor 欄は保持。--reset-editor のときだけ全面初期化。
+    const existing = options.resetEditor
+      ? null
+      : await store.read(options.run, COMPLETION_REPORT_FILE).catch(() => null);
+    const { content, recovered } = mergeCompletionReport(data, existing);
+
+    if (options.stdout) {
+      process.stdout.write(content.endsWith("\n") ? content : `${content}\n`);
+      return;
+    }
+
+    // reset-editor / マーカー破損のときは既存を bak へ退避してから書く（編集を飛ばさない）。
+    if (options.resetEditor || recovered) {
+      const prev = await store.read(options.run, COMPLETION_REPORT_FILE).catch(() => null);
+      if (prev !== null) {
+        await store.save(options.run, COMPLETION_REPORT_BAK, prev);
+        process.stderr.write(
+          `  ⚠ 既存の completion-report.md を ${COMPLETION_REPORT_BAK} に退避しました${recovered ? "（auto マーカーが見つからないため再生成）" : ""}。\n`
+        );
+      }
+    }
+
+    await store.save(options.run, COMPLETION_REPORT_FILE, content);
+    console.log(`completion-report: runs/${options.run}/${COMPLETION_REPORT_FILE}`);
+    if (data.goNoGo) {
+      console.log(`GO/NO-GO: ${data.goNoGo}`);
+    }
+  });
+
+program
+  .command("article:direction-check")
+  .description("Record a pre-factcheck direction gate into runs/<id>/direction-check.md (lightweight, editor-judged)")
+  .requiredOption("--run <runId>", "Run id")
+  .requiredOption("--verdict <ok|revise>", "Editor verdict after reading the article (ok = go to factcheck, revise = fix first)")
+  .option("--note <text>", "Direction notes / revise instruction (recommended when --verdict revise)")
+  .option("--source <final|draft>", "Article to read: final.md (default, the real gate) or draft.md (early preview)", "final")
+  .option("--stdout", "Print to stdout only (no file write, no progress recording)")
+  .option("--reset-editor", "Reset the editor (所感) section to the template (backs up the existing file first)")
+  .action(async (options: { run: string; verdict: string; note?: string; source: string; stdout?: boolean; resetEditor?: boolean }) => {
+    const verdict = parseVerdict(options.verdict);
+    const source = parseDirectionSource(options.source);
+    const store = new RunStore();
+    await assertRunExists(store, options.run);
+
+    const data = await collectDirectionCheckData(store, options.run, source, verdict, options.note);
+    const existing = options.resetEditor
+      ? null
+      : await store.read(options.run, DIRECTION_CHECK_FILE).catch(() => null);
+    const { content, recovered } = mergeDirectionCheck(data, existing);
+
+    if (options.stdout) {
+      // 完全な dry run: ファイルも progress も残さない。
+      process.stdout.write(content.endsWith("\n") ? content : `${content}\n`);
+      return;
+    }
+
+    if (options.resetEditor || recovered) {
+      const prev = await store.read(options.run, DIRECTION_CHECK_FILE).catch(() => null);
+      if (prev !== null) {
+        await store.save(options.run, DIRECTION_CHECK_BAK, prev);
+        process.stderr.write(
+          `  ⚠ 既存の direction-check.md を ${DIRECTION_CHECK_BAK} に退避しました${recovered ? "（auto マーカーが見つからないため再生成）" : ""}。\n`
+        );
+      }
+    }
+
+    await store.save(options.run, DIRECTION_CHECK_FILE, content);
+
+    // progress 記録: source=final だけ canonical direction を進める（draft は早期プレビュー＝非 canonical）。
+    // verdict=revise は canonical direction を error（未通過）で記録し、status を factcheck へ進めない。
+    // 再判定 ok（done）が error を上書きする。draft は preview のため常に done（gate ではない）。
+    const revisePrefix = verdict === "revise" ? "revise before factcheck; " : "";
+    if (source === "final") {
+      await recordProgress(store, options.run, {
+        step: "direction",
+        status: directionGateStatus(verdict),
+        note: `${revisePrefix}verdict=${verdict}`,
+      });
+    } else {
+      await recordProgress(store, options.run, {
+        step: "direction-draft",
+        status: "done",
+        note: `early preview; ${revisePrefix}verdict=${verdict}`,
+      });
+    }
+
+    console.log(`direction-check: runs/${options.run}/${DIRECTION_CHECK_FILE} (source=${source}, verdict=${verdict})`);
+    if (verdict === "revise") {
+      process.stderr.write("  ⚠ 方向性 要修正: factcheck の前に revise で直してください（factcheck に進まない）。\n");
+    }
+  });
+
+program
+  .command("article:factcheck-scope")
+  .description("Decide whether a re-factcheck is needed by diffing the last baseline (factcheck.snapshot.md) against final.md")
+  .requiredOption("--run <runId>", "Run id")
+  .option("--json", "Print the scope as JSON to stdout (no file write)")
+  .option("--stdout", "Print the scope markdown to stdout (no file write)")
+  .action(async (options: { run: string; json?: boolean; stdout?: boolean }) => {
+    if (options.json && options.stdout) {
+      throw new Error("--json と --stdout は同時に指定できません（どちらの dry run か曖昧）。");
+    }
+    const store = new RunStore();
+    await assertRunExists(store, options.run);
+    const scope = await collectFactcheckScope(store, options.run);
+
+    if (options.json) {
+      console.log(JSON.stringify(scope, null, 2));
+      return;
+    }
+    const markdown = renderFactcheckScope(scope, options.run);
+    if (options.stdout) {
+      process.stdout.write(markdown.endsWith("\n") ? markdown : `${markdown}\n`);
+      return;
+    }
+    // 既定: md ＋ json を保存し、1行サマリを stdout に。progress は書かない（編集長が記録）。
+    await store.save(options.run, FACTCHECK_SCOPE_FILE, markdown);
+    await store.save(options.run, FACTCHECK_SCOPE_JSON, JSON.stringify(scope, null, 2));
+    console.log(`factcheck-scope: ${scopeSummary(scope)} -> runs/${options.run}/${FACTCHECK_SCOPE_FILE}`);
+  });
+
+program
+  .command("article:factcheck-stamp")
+  .description("Accept current final.md as the fact-checked baseline (factcheck.snapshot.md). Run after factcheck (or after judging a diff non-factual).")
+  .requiredOption("--run <runId>", "Run id")
+  .requiredOption("--accepted-after <factcheck|non-factual-diff>", "Why the baseline is accepted (audit)")
+  .requiredOption("--note <text>", "Acceptance note (audit)")
+  .action(async (options: { run: string; acceptedAfter: string; note: string }) => {
+    const acceptedAfter = parseAcceptedAfter(options.acceptedAfter);
+    if (options.note.trim().length === 0) {
+      throw new Error("--note は空にできません（baseline 受理の理由を監査メタに残すため）。");
+    }
+    const store = new RunStore();
+    await assertRunExists(store, options.run);
+    const meta = await stampSnapshot(store, options.run, acceptedAfter, options.note);
+    console.log(
+      `factcheck baseline updated: runs/${options.run}/factcheck.snapshot.md (accepted-after=${meta.acceptedAfter})`
+    );
+  });
 
 if (process.argv.slice(2).length === 0) {
   // サブコマンド未指定ならヘルプを表示する。

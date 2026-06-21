@@ -92,6 +92,21 @@ describe("verifyArtifacts", () => {
     expect(r.errors.join("\n")).toMatch(/GO\/NO-GO/);
   });
 
+  it("fails when GO/NO-GO is present but empty (regex must not swallow the next line)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-emptygo";
+    await seedComplete(store, runId);
+    // 旧 regex (\s* が改行を食う) では空欄 "- GO/NO-GO:" の直後行を値と誤読して通っていた。
+    await store.save(
+      runId,
+      "publication-check.md",
+      "# Publication Check\n- GO/NO-GO:\n- factcheck: done\n- build-verify: skipped\n- build-verify summary: なし\n- editorial-review: done\n"
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/GO\/NO-GO/);
+  });
+
   it("fails when a gate is not declared (no silent skip)", async () => {
     const store = await newStore();
     const runId = "2026-06-20-nogate";

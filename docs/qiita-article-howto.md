@@ -140,6 +140,28 @@ llm-task-router article:create --topic-file topics/ai-ir.txt --profile qiita
 llm-task-router article:resume --run 2026-06-18-ai-ir   # 未完ステップから再開
 ```
 
+Ctrl-C 等で強制中断した場合、中断した工程のイベントが記録されないことがある。resume の前に `article:status --run <id>` で記録の有無を確認するとよい。
+
+---
+
+## 4.5 進捗の可視化（progress / status）
+
+各 run には `progress.events.jsonl`（正本・追記のみ）と、そこから再生成される `progress.json` / `progress.md`（派生スナップショット）が残る。CLI 工程（create/refine/evaluate/revise/resume/review/claims-normalize/verify-artifacts/review-editorial/export）は実行するだけで自動記録される。CLI を持たない factcheck / build-verify は、編集長が結果を受け取った時点で `article:progress:event` を打って記録する（6章・6.5章を参照）。
+
+現在地・所要時間・概算コスト合計は次で確認する：
+
+```bash
+llm-task-router article:status --run 2026-06-18-ai-ir          # 人が読む表
+llm-task-router article:status --run 2026-06-18-ai-ir --json   # スクリプト用
+```
+
+工程は `create → refine → evaluate → direction（方向性ゲート）→ factcheck → build-verify → editorial → claims-normalize → verify-artifacts → export` の10段（標準工程順は `src/progress/stepOrder.ts`）。各工程の後に `article:status` を挟むと「今N/10工程目」が常に分かる。
+
+**所要・コストの見方**: `article:status` の表に各工程の **所要(ms)・概算$** と末尾の **概算コスト合計**が出る（出どころは `progress.json`）。CLI 工程は自動、factcheck/build-verify は編集長の `progress:event` 記録分。概算コストは `models.yaml` の価格表に依存する**概算**（表にも「概算」と明記される）。
+
+- factcheck / build-verify の**所要見積もり**（「約N分」）は、サブエージェントの作業時間が主で API ログ（`router.log`）に出ないため、現状は出さない。複数 run の `progress.json` 実績が溜まってからの将来拡張とする（憶測値を出さない）。
+- **Claude Code（外側AI）のトークン使用量**は `router.log` に含まれない（別系統・本ツール外）。必要なら編集長が Claude Code の `/cost` を完成報告（7.5）の `## 総評` に**手で転記**する（参考値。完全な課金額は取得不可）。
+
 ---
 
 ## 5. チェック・修正
@@ -189,6 +211,27 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
   --instruction "導入を短く。たとえ話を1つ追加。"
 ```
 
+工程後に `article:status --run <id>` で記録と現在地を確認する。
+
+---
+
+## 5.5 方向性ゲート（direction-check・factcheck の前）
+
+高コストな factcheck / build-verify に入る前に、編集長が記事の**方向性**（テーマ適合・構成・読者）を一度見て OK / 要修正を判定する軽量ゲート。**正確性ゲートではない**（事実は factcheck、品質は refine/editorial）。方向がズレたまま factcheck に時間を溶かすのを防ぐ。
+
+```bash
+# 編集長が final.md を読んだ上で判定（OK なら factcheck へ）
+llm-task-router article:direction-check --run 2026-06-18-ai-ir --verdict ok
+
+# 要修正なら理由を添える（factcheck の前に revise で直す）
+llm-task-router article:direction-check --run 2026-06-18-ai-ir --verdict revise --note "導入が長い。経済地政学の節を前倒し"
+```
+
+- `runs/<id>/direction-check.md` に保存。**auto ブロック**（タイトル・分量・見出しアウトライン・verdict・指示）は CLI 駆動で毎回上書き、**`## 所感` の editor 欄**は編集長の自由記述でマーカー保護（再生成で残る）。
+- `--source draft` で `draft.md` を読む**早期プレビュー**もできる。ただし draft はこの後 refine/evaluate で final が変わるため**正式ゲートにはならない**（progress は非 canonical の `direction-draft` 記録。canonical の方向性ゲートは `--source final` のみ）。
+- `--verdict revise` のときは canonical `direction` を**未通過（error）として記録**し（`article:status` の現在地は direction に留まり factcheck に進まない）、stderr で「factcheck の前に revise」と警告する。revise で直して再度 `--verdict ok` を打つと done で上書きされる。**OK が出てから** factcheck（6章）に進む。
+- `--stdout` はファイルも progress も残さない確認用。これは強制ゲートではない（factcheck/verify-artifacts を direction-check の有無でブロックしない）。
+
 ---
 
 ## 6. ファクトチェック（ツール外・必須）
@@ -206,6 +249,32 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 
 > なぜ revise 経由で戻すか：成果物を `runs/` に集約し、`final.bak.md` のバックアップと criteria/meta の整合を保つため。外側AIに `final.md` を直接編集させない。
 
+factcheck には CLI コマンドが無いため、編集長が結果を受け取った時点で進捗イベントを記録する：
+
+```bash
+# 例: factcheck 完了を記録（done / skip / error）
+llm-task-router article:progress:event --run 2026-06-18-ai-ir --step factcheck --status done --note "BLOCKING 0"
+```
+
+工程後に `article:status --run <id>` で記録と現在地を確認する。
+
+### 再 factcheck の差分スキップ（二度手間を避ける）
+
+編集レビュー等で本文を直すたびに全文を再 factcheck するのは無駄。**前回 factcheck した版（baseline）と現 final.md の差分**で、再検証の要否と範囲を判定する。
+
+```bash
+# 初回 factcheck が終わったら baseline を受理（snapshot を取る）。理由を必ず添える（監査）
+llm-task-router article:factcheck-stamp --run 2026-06-18-ai-ir --accepted-after factcheck --note "BLOCKING 0"
+
+# 以降、再 factcheck の前に差分で要否を判定（full / skip / diff）
+llm-task-router article:factcheck-scope --run 2026-06-18-ai-ir
+```
+
+- **判定**: baseline 無し→`full`（全文）／差分ゼロ→`skip`（再検証不要・前回結果を流用）／差分あり→`diff`（変更セクション・影響 claim・新規抽出セクションを `factcheck-scope.md` に出力。factchecker はそこだけ見る）。
+- `claims.json` が無くても差分判定は成立する（変更セクションだけで出力。claim 突き合わせは省略）。
+- 判定結果を見て、**編集長が `article:progress:event --step factcheck --status skip|done` を記録**する（`factcheck-scope` 自体は progress を書かない）。
+- 再検証（または「非事実差分だから受理」と判断）したら、再び `article:factcheck-stamp` で baseline を更新する。**`factcheck-stamp` は factcheck の前に打たない**（未検証の final を「検証済み」にしてしまう）。承認プロンプトが出るのは正しい挙動。
+
 ---
 
 ## 6.5 ビルド検証（コードを含む記事は必須）
@@ -222,6 +291,17 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 ```
 
 > ファクトチェック（事実・Web）と実機ビルド検証は別系統の2検証。`init` で入る `article-build-verifier` サブエージェントがこの役を担う。記事のコードは信頼できない入力として一時ディレクトリ内に隔離して扱う。
+
+build-verify にも CLI コマンドが無いため、編集長が結果を受け取った時点で進捗イベントを記録する。コードを含まない記事で検証を回さない場合は `skip` ＋理由（silent skip 禁止）：
+
+```bash
+# 例: 実機検証を完了として記録
+llm-task-router article:progress:event --run 2026-06-18-ai-ir --step build-verify --status done --note "report status=passed"
+# 例: コードを含まない記事のためスキップ
+llm-task-router article:progress:event --run 2026-06-18-ai-ir --step build-verify --status skip --note "コードを含まない記事のため実機検証は不要"
+```
+
+工程後に `article:status --run <id>` で記録と現在地を確認する。
 
 ---
 
@@ -273,6 +353,8 @@ llm-task-router article:verify-artifacts --run 2026-06-18-ai-ir
 
 > 採番（`CNNN-<hash8>` / `SNNN`）は **コードが担い**、factchecker や編集長は hash を計算しない。`verify-artifacts` は外部通信を行わないため安全方針と無衝突。
 
+`claims-normalize` と `verify-artifacts` は CLI コマンドなので進捗は自動記録される。工程後に `article:status --run <id>` で記録と現在地を確認する。
+
 ---
 
 ## 7. 書き出し
@@ -288,16 +370,43 @@ llm-task-router article:export --run 2026-06-18-ai-ir \
 
 ---
 
+## 7.5 完成報告（completion-report.md）
+
+完成報告を `runs/<id>/completion-report.md` に残す。チャットに流すだけでなく、ゲート結果・概算コスト・GO/NO-GO を run 内に証跡として閉じる（`export/index.json`＝公開台帳には混ぜない）。
+
+```bash
+llm-task-router article:completion-report --run 2026-06-18-ai-ir
+```
+
+- **機械生成**（`<!-- auto:begin/end -->` 内）: 記事タイトル・profile・進捗・概算コスト合計・GO/NO-GO/reason（`publication-check.md` から転記）・ゲート結果表（factcheck/build-verify/editorial の宣言＋ claims/build-report の件数）。
+- **編集長が記入**（auto 範囲の外）: `## 構成`（構成ナラティブ）・`## 上申事項`（ユーザー判断を要する論点）・`## 総評`。コードは作文せずプレースホルダだけ置く。
+- 入力は `progress.json`（コスト・進捗）と `publication-check.md`（ゲート宣言・GO/NO-GO）。**`publication-check.md` は必須**（無ければエラー）。`verify-artifacts` は推奨だが未実行/失敗でも生成できる（NO-GO の差し戻し報告も作れる）。
+- **再生成は安全**: 既定では auto 範囲だけ最新化し、編集長が書いた `## 構成`/`## 上申事項`/`## 総評` は保持する。editor 欄ごと初期化したいときだけ `--reset-editor`（既存は `completion-report.bak.md` に退避）。ファイルを書かず確認だけなら `--stdout`。
+
+---
+
 ## 承認回数を減らす（Claude Code の permission）
 
-Claude Code で回すと Bash 実行のたびに承認を求められ、数が多いと中身を見ずに承認しがちになる。`init` は `.claude/settings.json` に **pipeline 系コマンドだけの allowlist** を入れて配るので、`create / refine / evaluate / revise / resume / review` は事前許可済み（プロンプトが出ない）。
+Claude Code で回すと Bash 実行のたびに承認を求められ、数が多いと中身を見ずに承認しがちになる。`init` は `.claude/settings.json` に **pipeline 系コマンドだけの allowlist** を入れて配るので、`create / refine / evaluate / revise / resume / review` は事前許可済み（プロンプトが出ない）。記録系の `article:status` / `article:progress:event` / `article:completion-report` / `article:direction-check` / `article:factcheck-scope` も allowlist に入っており、進捗確認・記録・方向性ゲート・完成報告・再 factcheck 判定のたびに承認を求められることはない。
 
-意図的に**プロンプトを残している**のは次の2つ — ここは毎回中身を見て承認する：
+意図的に**プロンプトを残している**のは次の4つ — ここは毎回中身を見て承認する：
 
 - `article:export`（公開相当の操作）
+- `article:record-publication`（公開台帳＝公開 URL・版の更新。公開相当なので毎回 URL を確認する）
+- `article:factcheck-stamp`（factcheck baseline＝信頼状態の更新。factcheck 前の誤実行で未検証 final を「検証済み」にしないため）
 - `article-build-verifier` の `npm install` / `tsc` / `node`（記事内の**未知コードを実行**する部分）
 
 許可を足したい/外したい場合は `.claude/settings.json` の `permissions.allow` を編集する。設定変更は次回セッション開始時に反映される。
+
+### 承認の棚卸し（プロンプトが多いと感じたら）
+
+承認過多の主因は「コマンドが足りない」ことより、**allowlist にマッチしない叩き方**であることが多い。次のパターンは事前許可に当たらず毎回プロンプトになるので潰す：
+
+- `cd ../foo && llm-task-router ...`（`cd &&` の連結）→ **カレント（プロジェクト直下）で1コマンドずつ**実行する。
+- `npx llm-task-router ...` や相対パス起動 → PATH 上の `llm-task-router` を直接呼ぶ。
+- パイプ・複合（`|` / `;` / `&&` で連結）→ 1 Bash 呼び出し＝1 コマンドに分ける。
+
+Claude Code に **`/fewer-permission-prompts` スキルがあれば**、実際に出たプロンプト履歴をスキャンして allowlist 追加候補を出せる（本ツール同梱ではなく Claude Code 側の機能。あれば使う）。**追加するのは「正当だが未許可」と棚卸しで判明したパターンに限る**（むやみに広げない。上の4つの承認操作は残す）。
 
 ---
 
@@ -320,10 +429,17 @@ llm-task-router article:refine --run 2026-06-18-ai-ir --max-rounds 3 --until cle
 llm-task-router article:evaluate --run 2026-06-18-ai-ir --min-severity minor
 llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/2026-06-18-ai-ir/revise-instruction.md
 
-# 5) ファクトチェック（Claude Code 等）→ 指示を戻す
-llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/2026-06-18-ai-ir/factcheck-instruction.md
+# 4.5) 方向性ゲート（factcheck の前。OK で進む／要修正なら revise してから）
+llm-task-router article:direction-check --run 2026-06-18-ai-ir --verdict ok
 
-# 5.5) ビルド検証（コードを含む記事）→ 指示を戻す
+# 5) ファクトチェック（Claude Code 等）→ 結果受領時に編集長が進捗を記録 → 指摘があれば revise
+llm-task-router article:progress:event --run 2026-06-18-ai-ir --step factcheck --status done --note "BLOCKING 0"
+llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/2026-06-18-ai-ir/factcheck-instruction.md
+# 初回 factcheck 後に baseline 受理（以降の再 factcheck は factcheck-scope で要否判定）
+llm-task-router article:factcheck-stamp --run 2026-06-18-ai-ir --accepted-after factcheck --note "BLOCKING 0"
+
+# 5.5) ビルド検証（コードを含む記事）→ 結果受領時に編集長が進捗を記録 → 指摘があれば revise
+llm-task-router article:progress:event --run 2026-06-18-ai-ir --step build-verify --status done --note "report status=passed"
 llm-task-router article:revise   --run 2026-06-18-ai-ir --instruction-file runs/2026-06-18-ai-ir/build-verify-instruction.md
 
 # 5.7) 編集レビュー（既定で実施。本文と別 provider）→ 編集長が採否を確定 → 指示を戻す
@@ -336,6 +452,12 @@ llm-task-router article:claims-normalize --run 2026-06-18-ai-ir --scope full
 
 # 5.9) 公開前ゲート（publication-check.md を書き出してから機械チェック。FAIL なら潰して再実行）
 llm-task-router article:verify-artifacts --run 2026-06-18-ai-ir
+
+# 5.95) 現在地・概算コストを確認
+llm-task-router article:status --run 2026-06-18-ai-ir
+
+# 5.97) 完成報告を生成（構成/上申/総評の editor 欄は編集長が記入）
+llm-task-router article:completion-report --run 2026-06-18-ai-ir
 
 # 6) 書き出し（GO ＋ ユーザー承認後）
 llm-task-router article:export   --run 2026-06-18-ai-ir --out ../qiita-content/ai-ir.md
@@ -400,6 +522,7 @@ llm-task-router article:record-publication --run 2026-06-19-<slug>-v2 \
 
 - `article:export` は **コピーのみ**で meta を更新しない。公開先 URL/版の記録は `article:record-publication` の責務（責務分離）。
 - `record-publication` は同一 slug の version 退行を拒否（完全一致は no-op、訂正は `--force`）。`export` と同様に**承認操作**なので allowlist に入れず、毎回 URL を確認する。
+- `record-publication` は **progress の canonical 工程に含めない**（公開台帳＝`meta.published`/`export/index.json` の更新であって、記事生成工程ではないため）。進捗上の完了は `export`（=公開相当の書き出し）で表す。更新リライトで公開台帳まで終えたかは `article:status` ではなく `export/index.json` で確認する。
 
 ## 使うAIの目安
 

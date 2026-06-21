@@ -13,6 +13,11 @@
       "Bash(llm-task-router article:claims-recheck:*)",
       "Bash(llm-task-router article:verify-artifacts:*)",
       "Bash(llm-task-router article:review-editorial:*)",
+      "Bash(llm-task-router article:status:*)",
+      "Bash(llm-task-router article:progress:event:*)",
+      "Bash(llm-task-router article:completion-report:*)",
+      "Bash(llm-task-router article:direction-check:*)",
+      "Bash(llm-task-router article:factcheck-scope:*)",
       "Bash(llm-task-router --help)",
       "Bash(llm-task-router -v)"
     ]
