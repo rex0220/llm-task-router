@@ -12,11 +12,14 @@ import { writeUpdateDiff } from "./cli/updateDiff";
 import { normalizeClaims } from "./cli/claimsNormalize";
 import { verifyArtifacts } from "./cli/verifyArtifacts";
 import { writeClaimsRecheck } from "./cli/claimsRecheck";
+import { getRunStatus } from "./cli/status";
 import { runEditorialReview } from "./workflows/editorialReview";
 import { initConfig } from "./cli/init";
 import { ExportIndex } from "./storage/ExportIndex";
 import { loadProfile } from "./workflows/profile";
 import { RunLogger } from "./logger/RunLogger";
+import { RunProgress, type ProgressEventInput } from "./progress/RunProgress";
+import type { ProgressEventStatus } from "./progress/types";
 import { createProviders } from "./providers";
 import { ModelRouter } from "./router/ModelRouter";
 import { loadRouterConfig } from "./router/config";
@@ -89,14 +92,24 @@ program
       const runIdSeed = options.topicFile ? basename(options.topicFile).replace(/\.[^.]+$/, "") : topic;
       const runId = options.run ?? createRunId(runIdSeed);
       const { router, store } = await createRuntime(options.config);
+      const progress = new RunProgress(store);
       const reporter = createProgressReporter();
-      const result = await createQiitaArticle(
-        router,
-        store,
-        topic,
-        { runId, platform, style: profile.style, profile: options.profile },
-        reporter.report
-      );
+      const result = await runWithProgress({
+        progress,
+        runId,
+        step: "create",
+        task: "create",
+        totals: reporter.totals,
+        output: (r) => `runs/${r.runId}/final.md`,
+        run: () =>
+          createQiitaArticle(
+            router,
+            store,
+            topic,
+            { runId, platform, style: profile.style, profile: options.profile },
+            reporter.report
+          ),
+      });
       reporter.printTotal();
       console.log(`runId: ${result.runId}`);
       console.log(`final: runs/${result.runId}/final.md`);
@@ -109,8 +122,18 @@ program
   .option("--config <path>", "Path to models.yaml", "config/models.yaml")
   .action(async (options: { run: string; config: string }) => {
     const { router, store } = await createRuntime(options.config);
+    const progress = new RunProgress(store);
     const reporter = createProgressReporter();
-    const result = await resumeQiitaArticle(router, store, options.run, reporter.report);
+    const result = await runWithProgress({
+      progress,
+      runId: options.run,
+      step: "create",
+      task: "resume",
+      totals: reporter.totals,
+      output: (r) => `runs/${r.runId}/final.md`,
+      ensureRun: () => assertRunExists(store, options.run),
+      run: () => resumeQiitaArticle(router, store, options.run, reporter.report),
+    });
     reporter.printTotal();
     console.log(`runId: ${result.runId}`);
     console.log(`final: runs/${result.runId}/final.md`);
@@ -122,8 +145,18 @@ program
   .option("--config <path>", "Path to models.yaml", "config/models.yaml")
   .action(async (options: { run: string; config: string }) => {
     const { router, store } = await createRuntime(options.config);
+    const progress = new RunProgress(store);
     const reporter = createProgressReporter();
-    const result = await rerunQiitaReview(router, store, options.run, reporter.report);
+    const result = await runWithProgress({
+      progress,
+      runId: options.run,
+      step: "create",
+      task: "review",
+      totals: reporter.totals,
+      output: (r) => `runs/${r.runId}/final.md`,
+      ensureRun: () => assertRunExists(store, options.run),
+      run: () => rerunQiitaReview(router, store, options.run, reporter.report),
+    });
     reporter.printTotal();
     console.log(`runId: ${result.runId}`);
     console.log(`final: runs/${result.runId}/final.md`);
@@ -144,8 +177,18 @@ program
       "--instruction-file"
     );
     const { router, store } = await createRuntime(options.config);
+    const progress = new RunProgress(store);
     const reporter = createProgressReporter();
-    const result = await reviseQiitaFinal(router, store, options.run, instruction, reporter.report);
+    const result = await runWithProgress({
+      progress,
+      runId: options.run,
+      step: "revise",
+      task: "rewrite",
+      totals: reporter.totals,
+      output: (r) => `runs/${r.runId}/final.md`,
+      ensureRun: () => assertRunExists(store, options.run),
+      run: () => reviseQiitaFinal(router, store, options.run, instruction, reporter.report),
+    });
     reporter.printTotal();
     console.log(`runId: ${result.runId}`);
     console.log(`final: runs/${result.runId}/final.md (previous: runs/${result.runId}/final.bak.md)`);
@@ -229,6 +272,7 @@ program
       force: options.force,
       frontMatter: options.frontMatter,
     });
+    await recordProgress(store, options.run, { step: "export", status: "done", output: dest });
     console.log(`exported: ${dest}${options.frontMatter ? " (with front-matter)" : ""}`);
   });
 
@@ -256,6 +300,12 @@ program
     }
     const store = new RunStore();
     const summary = await normalizeClaims(store, options.run, scope);
+    await recordProgress(store, summary.runId, {
+      step: "claims-normalize",
+      status: "done",
+      output: `runs/${summary.runId}/claims.json`,
+      note: `${summary.present} present, blocking ${summary.blocking} (scope ${summary.scope})`,
+    });
     console.log(`runId: ${summary.runId}`);
     console.log(
       `claims: runs/${summary.runId}/claims.json (${summary.present} present, ${summary.removed} removed; round ${summary.round}, scope ${summary.scope})`
@@ -287,6 +337,11 @@ program
   .action(async (options: { run: string }) => {
     const store = new RunStore();
     const result = await verifyArtifacts(store, options.run);
+    await recordProgress(store, result.runId, {
+      step: "verify-artifacts",
+      status: result.ok ? "done" : "error",
+      note: result.ok ? "OK" : `FAIL (${result.errors.length} 件)`,
+    });
     console.log(`runId: ${result.runId}`);
     for (const w of result.warnings) {
       console.log(`warn: ${w}`);
@@ -331,11 +386,20 @@ program
     console.log(`index: export/index.json (slug: ${result.slug})`);
   });
 
+// アクションが集約した実績（progress の done イベントに載せる）。cost は判明分のみ。
+type ProgressTotals = { costUsd?: number; elapsedMs?: number };
+
 // 進捗は stderr に出す（stdout は runId / final パスのみに保ち、スクリプトでパースしやすくする）。
 // コストは usage トークン × models.yaml の prices によるローカル概算（追加APIコールは無し）。
-function createProgressReporter(): { report: (event: WorkflowEvent) => void; printTotal: () => void } {
+// totals() は progress 記録（アクション側で集約 → flush）用に同じ概算値を返す。
+function createProgressReporter(): {
+  report: (event: WorkflowEvent) => void;
+  printTotal: () => void;
+  totals: () => ProgressTotals;
+} {
   let totalCostUsd = 0;
   let hasCost = false;
+  let totalElapsedMs = 0;
 
   const report = (event: WorkflowEvent): void => {
     switch (event.type) {
@@ -350,6 +414,7 @@ function createProgressReporter(): { report: (event: WorkflowEvent) => void; pri
           totalCostUsd += event.costUsd;
           hasCost = true;
         }
+        totalElapsedMs += event.elapsedMs;
         const cost = event.costUsd !== undefined ? `, ~$${event.costUsd.toFixed(4)}` : "";
         process.stderr.write(
           `[${event.index}/${event.total}] ${event.name} - done via ${event.provider}/${event.model} (${event.elapsedMs}ms${cost})\n`
@@ -373,7 +438,93 @@ function createProgressReporter(): { report: (event: WorkflowEvent) => void; pri
     }
   };
 
-  return { report, printTotal };
+  const totals = (): ProgressTotals => ({
+    costUsd: hasCost ? Number(totalCostUsd.toFixed(6)) : undefined,
+    elapsedMs: totalElapsedMs,
+  });
+
+  return { report, printTotal, totals };
+}
+
+// アクション（CLI 1コマンド）を1つの canonical 工程として progress に記録する。
+// start を打ち、成功で done（集約した totals と出力パス）、失敗で error を打ってから再送出。
+// progress の記録失敗は本処理を止めない（観測性は副作用）。
+async function runWithProgress<T>(args: {
+  progress: RunProgress;
+  runId: string;
+  step: string;
+  task?: string;
+  totals: () => ProgressTotals;
+  output?: (result: T) => string | undefined;
+  run: () => Promise<T>;
+  // create 以外は run の存在を先に確認してから記録する（runId typo で架空 run を作らない）。
+  ensureRun?: () => Promise<void>;
+}): Promise<T> {
+  if (args.ensureRun) {
+    await args.ensureRun();
+  }
+  await safeProgress(() => args.progress.append(args.runId, { step: args.step, status: "start", task: args.task }));
+  try {
+    const result = await args.run();
+    const t = args.totals();
+    await safeProgress(() =>
+      args.progress.append(args.runId, {
+        step: args.step,
+        status: "done",
+        task: args.task,
+        elapsedMs: t.elapsedMs,
+        costUsd: t.costUsd,
+        output: args.output?.(result),
+      })
+    );
+    await safeProgress(async () => {
+      await args.progress.regenerate(args.runId);
+    });
+    return result;
+  } catch (error) {
+    await safeProgress(() =>
+      args.progress.append(args.runId, { step: args.step, status: "error", task: args.task, note: shortMessage(error) })
+    );
+    await safeProgress(async () => {
+      await args.progress.regenerate(args.runId);
+    });
+    throw error;
+  }
+}
+
+// run の存在を meta.json で確認する（runId typo で架空 run の progress を作らないため）。
+async function assertRunExists(store: RunStore, runId: string): Promise<void> {
+  try {
+    await store.readMeta(runId);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`Run ${runId} が見つかりません（runs/${runId}/meta.json なし）。runId を確認してください。`);
+    }
+    throw error;
+  }
+}
+
+// WorkflowEvent を持たない CLI（claims-normalize / verify-artifacts / export 等）の終了を1イベント記録する。
+// 記録失敗は本処理を止めない。
+async function recordProgress(store: RunStore, runId: string, input: ProgressEventInput): Promise<void> {
+  const progress = new RunProgress(store);
+  await safeProgress(async () => {
+    await progress.append(runId, input);
+    await progress.regenerate(runId);
+  });
+}
+
+async function safeProgress(fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+  } catch (error) {
+    process.stderr.write(`  ⚠ progress 記録に失敗しました（本処理は継続）: ${shortMessage(error)}\n`);
+  }
+}
+
+function shortMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length > 200 ? `${message.slice(0, 197)}...` : message;
 }
 
 program
@@ -395,8 +546,18 @@ program
       const { router, store } = await createRuntime(options.config);
       const criteria = await resolveEvaluationCriteria(store, options);
 
+      const progress = new RunProgress(store);
       const reporter = createProgressReporter();
-      const result = await evaluateQiitaFinal(router, store, options.run, { minSeverity, criteria }, reporter.report);
+      const result = await runWithProgress({
+        progress,
+        runId: options.run,
+        step: "evaluate",
+        task: "final_review",
+        totals: reporter.totals,
+        output: (r) => `runs/${r.runId}/${r.reviewSummaryFile}`,
+        ensureRun: () => assertRunExists(store, options.run),
+        run: () => evaluateQiitaFinal(router, store, options.run, { minSeverity, criteria }, reporter.report),
+      });
       reporter.printTotal();
 
       console.log(`runId: ${result.runId}`);
@@ -438,14 +599,19 @@ program
       const { router, store } = await createRuntime(options.config);
       const criteria = await resolveEvaluationCriteria(store, options);
 
+      const progress = new RunProgress(store);
       const reporter = createRefineReporter(options.run);
-      const result = await refineQiitaFinal(
-        router,
-        store,
-        options.run,
-        { maxRounds, minSeverity, until, criteria },
-        reporter.report
-      );
+      const result = await runWithProgress({
+        progress,
+        runId: options.run,
+        step: "refine",
+        task: "refine",
+        totals: reporter.totals,
+        output: (r) => `runs/${r.runId}/final.md (stopped: ${r.stoppedReason}, ${r.rounds} rounds)`,
+        ensureRun: () => assertRunExists(store, options.run),
+        run: () =>
+          refineQiitaFinal(router, store, options.run, { maxRounds, minSeverity, until, criteria }, reporter.report),
+      });
 
       console.log(`runId: ${result.runId}`);
       console.log(`stopped: ${result.stoppedReason} (${result.rounds} rounds)`);
@@ -479,6 +645,14 @@ program
         allowSameProvider: options.allowSameProvider,
         allowSameModel: options.allowSameModel,
         criteria,
+      });
+      await recordProgress(store, result.runId, {
+        step: "editorial",
+        status: "done",
+        provider: result.reviewerModel.provider,
+        model: result.reviewerModel.model,
+        output: `runs/${result.runId}/editorial-review.md`,
+        note: `${result.verdict} (round ${result.round}, ${result.candidateCount} candidates)`,
       });
       console.log(`runId: ${result.runId} (${result.mode}, round ${result.round})`);
       console.log(`reviewer: ${result.reviewerModel.provider}/${result.reviewerModel.model}`);
@@ -537,11 +711,18 @@ function parseUntil(value: string): "clean" | "approved" {
 
 // refine 専用の進捗表示。round 境界・評価/改稿の各行・打ち切り/wrap-text 警告・停止理由を stderr に出す。
 // 合計コスト表示は実額のみ（cost が取れた分だけ加算）。
-function createRefineReporter(runId: string): { report: (event: RefineEvent) => void } {
+function createRefineReporter(runId: string): {
+  report: (event: RefineEvent) => void;
+  totals: () => ProgressTotals;
+} {
   let total = 0;
   let hasCost = false;
+  let totalElapsedMs = 0;
 
-  const accrue = (costUsd?: number): string => {
+  const accrue = (costUsd?: number, elapsedMs?: number): string => {
+    if (elapsedMs !== undefined) {
+      totalElapsedMs += elapsedMs;
+    }
     if (costUsd !== undefined) {
       total += costUsd;
       hasCost = true;
@@ -556,7 +737,7 @@ function createRefineReporter(runId: string): { report: (event: RefineEvent) => 
         process.stderr.write(`[refine] round ${event.round}/${event.maxRounds}\n`);
         break;
       case "eval:done": {
-        const cost = accrue(event.costUsd);
+        const cost = accrue(event.costUsd, event.elapsedMs);
         process.stderr.write(
           `  evaluate - done via ${event.provider}/${event.model} (${event.elapsedMs}ms${cost}) — issues>=${event.minSeverity}: ${event.issueCount}, score: ${event.score}\n`
         );
@@ -568,7 +749,7 @@ function createRefineReporter(runId: string): { report: (event: RefineEvent) => 
         break;
       }
       case "revise:done": {
-        const cost = accrue(event.costUsd);
+        const cost = accrue(event.costUsd, event.elapsedMs);
         process.stderr.write(
           `  revise - done via ${event.provider}/${event.model} (${event.elapsedMs}ms${cost})\n`
         );
@@ -597,7 +778,12 @@ function createRefineReporter(runId: string): { report: (event: RefineEvent) => 
     }
   };
 
-  return { report };
+  const totals = (): ProgressTotals => ({
+    costUsd: hasCost ? Number(total.toFixed(6)) : undefined,
+    elapsedMs: totalElapsedMs,
+  });
+
+  return { report, totals };
 }
 
 // 評価観点の解決順: 明示指定（--criteria / --criteria-file）> run の brushup-criteria.md > run の profile の criteria_file > なし。
@@ -644,6 +830,25 @@ function parseSeverity(value: string): Severity {
   return value as Severity;
 }
 
+function parseProgressStatus(value: string): ProgressEventStatus {
+  const allowed: ProgressEventStatus[] = ["start", "done", "skip", "error"];
+  if (!(allowed as string[]).includes(value)) {
+    throw new Error(`Invalid --status: ${value} (use start|done|skip|error)`);
+  }
+  return value as ProgressEventStatus;
+}
+
+function parseOptionalNumber(value: string | undefined, flag: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    throw new Error(`Invalid ${flag}: ${value} (expected a number)`);
+  }
+  return n;
+}
+
 async function createRuntime(configPath: string): Promise<{ router: ModelRouter; store: RunStore }> {
   const config = await loadRouterConfig(configPath);
   const providers = createProviders(config);
@@ -652,6 +857,64 @@ async function createRuntime(configPath: string): Promise<{ router: ModelRouter;
   const store = new RunStore();
   return { router, store };
 }
+
+program
+  .command("article:status")
+  .description("Show run progress (current step / elapsed / estimated cost) from progress.events.jsonl")
+  .requiredOption("--run <runId>", "Run id")
+  .option("--json", "Output the ProgressSnapshot as JSON (for scripts)")
+  .action(async (options: { run: string; json?: boolean }) => {
+    const { snapshot, markdown } = await getRunStatus(options.run);
+    if (options.json) {
+      console.log(JSON.stringify(snapshot, null, 2));
+      return;
+    }
+    process.stdout.write(`${markdown}\n`);
+  });
+
+program
+  .command("article:progress:event")
+  .description("Record a progress event into runs/<id>/progress.events.jsonl (for subagent / manual recording)")
+  .requiredOption("--run <runId>", "Run id")
+  .requiredOption("--step <name>", "Step name (e.g. factcheck, build-verify, publication-check)")
+  .requiredOption("--status <status>", "start | done | skip | error")
+  .option("--note <text>", "Reason / notes (required for skip — silent skip is forbidden)")
+  .option("--output <path>", "Main output path for this step")
+  .option("--elapsed-ms <n>", "Elapsed milliseconds")
+  .option("--cost-usd <n>", "Estimated cost in USD")
+  .action(
+    async (options: {
+      run: string;
+      step: string;
+      status: string;
+      note?: string;
+      output?: string;
+      elapsedMs?: string;
+      costUsd?: string;
+    }) => {
+      const status = parseProgressStatus(options.status);
+      if (status === "skip" && !options.note) {
+        throw new Error("skip は --note（理由）が必須です（silent skip 禁止）。");
+      }
+      const store = new RunStore();
+      await assertRunExists(store, options.run);
+      const progress = new RunProgress(store);
+      const event: ProgressEventInput = {
+        step: options.step,
+        status,
+        note: options.note,
+        output: options.output,
+        elapsedMs: parseOptionalNumber(options.elapsedMs, "--elapsed-ms"),
+        costUsd: parseOptionalNumber(options.costUsd, "--cost-usd"),
+      };
+      await progress.append(options.run, event);
+      const snapshot = await progress.regenerate(options.run);
+      console.log(`progress: runs/${options.run}/progress.md (${options.step} = ${status})`);
+      console.log(
+        `current: ${snapshot.complete ? "complete" : snapshot.currentIndex !== undefined ? `${snapshot.currentIndex}/${snapshot.total}` : `-/${snapshot.total}`}`
+      );
+    }
+  );
 
 if (process.argv.slice(2).length === 0) {
   // サブコマンド未指定ならヘルプを表示する。

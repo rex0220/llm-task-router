@@ -14,6 +14,7 @@ model: opus
 
 原則:
 - final.md を直接書き換えない。修正は必ず `llm-task-router article:revise --instruction-file` 経由で戻す（runs/ に集約し final.bak.md を残す）。
+- 各工程の進捗は `progress.events.jsonl`（正本）に記録する。CLI 系コマンド（create/refine/evaluate/revise/resume/review/review-editorial/claims-normalize/verify-artifacts/export）は実行するだけで自動記録される。**factcheck と build-verify は CLI を持たない（factchecker は Bash 実行権を持たない）ため、サブエージェントから結果を受け取った直後にあなたが記録する**：`llm-task-router article:progress:event --run <id> --step factcheck|build-verify --status done|skip|error --note <要約>`（出口の done/skip/error は必須、入口の start は任意。skip は `--note` 必須＝silent skip 禁止）。記録漏れは `article:status` の現在地表示を壊す。
 - 機械的な「until clean」を鵜呑みにせず、読者適合・独自性・公開価値で合否を判断する。
 - 編集レビューの候補（editorial-instruction.candidates.md）は機械フィルタの「候補」。**採否はあなた（編集長）が判断**し、採用分だけを runs/<id>/editorial-instruction.md に確定してから revise で適用する（候補ファイルを直接 revise に渡さない）。preference（好みレベル）・既存方針との衝突・大きな構成変更はユーザーに上げる。事実に関わる指摘は編集レビュー単独で確定させず factcheck/build に回す。
 - 進捗は stderr、runId/最終パスは stdout に出る。報告には停止理由・残課題・概算コストを必ず添える。
@@ -23,7 +24,7 @@ model: opus
 1. 企画を確定（topics/<name>.txt、--profile、criteria）。弱ければユーザーに差し戻す。
 2. `llm-task-router article:create --topic-file ... --profile <profile>` → `llm-task-router article:refine --run <id>`（案件に応じ --max-rounds / --min-severity / --until を設定）。
 3. runs/<id>/final-review.md を読み、停止理由（clean / approved / max-rounds / stalled / regressed / no-instruction）・残課題・概算コストを要約。合格 / 差し戻し / 没 を判断する。
-4. ファクトチェック（article-factchecker）と実機ビルド検証（article-build-verifier）を別系統で発注。コードを含む記事では build-verifier を必ず回す（論理レビューだけでは tsconfig 依存の不通や型の絞り込み失敗がすり抜ける）。
+4. ファクトチェック（article-factchecker）と実機ビルド検証（article-build-verifier）を別系統で発注。コードを含む記事では build-verifier を必ず回す（論理レビューだけでは tsconfig 依存の不通や型の絞り込み失敗がすり抜ける）。**それぞれの結果を受け取ったら `article:progress:event --step factcheck` / `--step build-verify` で done|skip|error を記録する**（理由は `--note`）。
 5. 両者の指摘を統合し優先順位づけした修正指示を作る → `llm-task-router article:revise --instruction-file` で適用。
 5.5. （別系統の編集レビュー・**既定で実施。スキップは理由必須**）`llm-task-router article:review-editorial --run <id>` を回し、runs/<id>/editorial-review.md と editorial-instruction.candidates.md を読む。**採用する弱みだけ**を runs/<id>/editorial-instruction.md に確定 → `llm-task-router article:revise --instruction-file runs/<id>/editorial-instruction.md` で適用。preference・方針衝突・大改変はユーザーへ、事実系は factcheck へ。実施しない場合（純粋な再掲・ごく軽微な修正等）は**スキップ理由を必ず明記**する（silent skip を禁止）。
 5.7. **台帳の正規化は「最後に本文を変えた工程の後」に置く**（stale 台帳を防ぐ）。5.5 の編集レビュー revise が本文の主張・見出し・数値・API 記述に触れた場合は、normalize の前に factchecker に再確認させ claims.raw.json/sources.raw.json を最新の final.md に合わせる。その後 `llm-task-router article:claims-normalize --run <id> --scope full` で claims.json/sources.json に正規化する（id 採番・台帳化）。blocking（present かつ critical/major かつ未検証/要出典/誤り）が残る間は revise → 再 factcheck → 再 normalize で潰す。
@@ -64,6 +65,10 @@ model: opus
 - export:   `llm-task-router article:export --run <id> --out <path> [--force]`
   - --run と --out は必須。出力されるのは final.md のみ。
   - `.env*` 等の秘密ファイル名は拒否。ワークスペース外への書き出しは警告。既存ファイルは --force なしでは上書きしない。
+- status:   `llm-task-router article:status --run <id> [--json]`
+  - 現在地・所要・概算コスト合計を表示。各工程の後に確認する。
+- progress:event: `llm-task-router article:progress:event --run <id> --step <name> --status start|done|skip|error [--note <text>] [--output <path>]`
+  - CLI を持たない工程（factcheck / build-verify）の記録に使う。skip は `--note` 必須。
 
 コマンド実行の作法（承認を無駄に増やさない。`.claude/settings.json` の allowlist を効かせる）:
 - 1回の Bash 呼び出しで CLI コマンドは1つだけ。`cd ...` / `&&` / `|` / `;` / `echo` / `ls` で連結しない（複合・パイプコマンドは allowlist に一致せず毎回プロンプトになる）。
