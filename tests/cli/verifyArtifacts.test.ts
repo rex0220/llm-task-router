@@ -408,7 +408,7 @@ describe("verifyArtifacts", () => {
     expect(r.errors.join("\n")).toMatch(/参考ブロック内/);
   });
 
-  it("FAILs when the sources markers are malformed (only begin / reversed), not just warns", async () => {
+  it("FAILs when the sources markers are malformed (e.g. begin without end), not just warns", async () => {
     const store = await newStore();
     const runId = "2026-06-20-badmarker";
     await seedComplete(store, runId);

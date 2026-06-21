@@ -206,7 +206,7 @@ async function checkReferenceLinks(
   const wellFormed = bCount === 1 && eCount === 1 && bIdx < eIdx;
   if ((bCount > 0 || eCount > 0) && !wellFormed) {
     errors.push(
-      "参考ブロックのマーカーが壊れています（begin/end が1組・正順ではありません）。article:references で再生成してください。"
+      "参考ブロックのマーカーが壊れています（begin/end が1組・正順ではありません）。手でマーカーを修復してから article:references を再実行してください。"
     );
     return; // 破損時はリンク分類しない（偽判定を避ける）
   }
