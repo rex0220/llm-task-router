@@ -23,7 +23,8 @@ function step(snapshot: ReturnType<typeof aggregate>, key: string) {
 describe("aggregate", () => {
   it("renders every canonical step as pending when there are no events", () => {
     const snap = aggregate("r", []);
-    expect(snap.steps.length).toBe(10);
+    expect(snap.steps.length).toBe(9);
+    expect(snap.canonicalTotal).toBe(9);
     expect(snap.steps.every((s) => s.status === "pending")).toBe(true);
     expect(snap.currentIndex).toBe(1); // 最初の未着手
     expect(snap.complete).toBe(false);
@@ -104,11 +105,10 @@ describe("aggregate", () => {
     const snap = aggregate("r", [
       ev({ step: "create", status: "done" }),
       ev({ step: "refine", status: "skip", note: "clean" }),
-      ev({ step: "evaluate", status: "done" }),
       ev({ step: "direction", status: "done", note: "verdict=ok" }),
       ev({ step: "factcheck", status: "error", note: "boom" }),
     ]);
-    expect(snap.currentIndex).toBe(5); // factcheck（error=未完）が最初の未完（direction=4 の次）
+    expect(snap.currentIndex).toBe(4); // factcheck（error=未完）が最初の未完（direction=3 の次）
   });
 
   it("sums only known costs into totalCostUsd", () => {
@@ -121,13 +121,13 @@ describe("aggregate", () => {
   });
 
   it("keeps currentIndex/total stable regardless of event arrival order (canonical order)", () => {
-    // evaluate を create より先に記録しても、表示は canonical 順（create=1, refine=2, evaluate=3）。
+    // factcheck を create より先に記録しても、表示は canonical 順（create=1, refine=2, ..., factcheck=4）。
     const snap = aggregate("r", [
-      ev({ step: "evaluate", status: "done" }),
+      ev({ step: "factcheck", status: "done" }),
       ev({ step: "create", status: "done" }),
     ]);
     expect(step(snap, "create").index).toBe(1);
-    expect(step(snap, "evaluate").index).toBe(3);
+    expect(step(snap, "factcheck").index).toBe(4);
     // create done / refine pending → 現在地は refine
     expect(snap.currentIndex).toBe(2);
   });
@@ -141,8 +141,8 @@ describe("aggregate", () => {
     const weird = step(snap, "weird-step");
     expect(revise.canonical).toBe(false);
     expect(weird.canonical).toBe(false);
-    expect(revise.index).toBe(11); // 10 canonical の後
-    expect(weird.index).toBe(12);
+    expect(revise.index).toBe(10); // 9 canonical の後
+    expect(weird.index).toBe(11);
   });
 
   it("maps create internal steps (brief/draft/...) onto the create canonical step", () => {
@@ -156,17 +156,17 @@ describe("aggregate", () => {
     expect(snap.steps.filter((s) => s.step === "create").length).toBe(1);
   });
 
-  it("places direction between evaluate and factcheck, and keeps direction-draft non-canonical", () => {
+  it("places direction between refine and factcheck, and keeps direction-draft non-canonical", () => {
     const snap = aggregate("r", [
       ev({ step: "direction", status: "done", note: "verdict=ok" }),
       ev({ step: "direction-draft", status: "done", note: "early" }),
     ]);
-    expect(step(snap, "direction").index).toBe(4); // evaluate(3) の次・factcheck(5) の前
+    expect(step(snap, "direction").index).toBe(3); // refine(2) の次・factcheck(4) の前
     expect(step(snap, "direction").canonical).toBe(true);
-    expect(step(snap, "factcheck").index).toBe(5);
+    expect(step(snap, "factcheck").index).toBe(4);
     const draft = step(snap, "direction-draft");
     expect(draft.canonical).toBe(false); // 早期プレビューは canonical を満たさない
-    expect(draft.index).toBeGreaterThan(10); // 10 canonical の後ろ（追加工程）
+    expect(draft.index).toBeGreaterThan(9); // 9 canonical の後ろ（追加工程）
   });
 
   it("folds direction-check alias onto the canonical direction step", () => {
@@ -179,29 +179,26 @@ describe("aggregate", () => {
     const revised = aggregate("r", [
       ev({ step: "create", status: "done" }),
       ev({ step: "refine", status: "skip", note: "clean" }),
-      ev({ step: "evaluate", status: "done" }),
       ev({ step: "direction", status: "error", note: "revise before factcheck; verdict=revise" }),
     ]);
     expect(step(revised, "direction").status).toBe("error");
-    expect(revised.currentIndex).toBe(4); // factcheck へ進まない
+    expect(revised.currentIndex).toBe(3); // factcheck へ進まない
 
-    // 再判定 ok（done）が error を上書き → currentIndex は factcheck(5) へ。
+    // 再判定 ok（done）が error を上書き → currentIndex は factcheck(4) へ。
     const reOk = aggregate("r", [
       ev({ step: "create", status: "done" }),
       ev({ step: "refine", status: "skip", note: "clean" }),
-      ev({ step: "evaluate", status: "done" }),
       ev({ step: "direction", status: "error", note: "verdict=revise" }),
       ev({ step: "direction", status: "done", note: "verdict=ok" }),
     ]);
     expect(step(reOk, "direction").status).toBe("done");
-    expect(reOk.currentIndex).toBe(5);
+    expect(reOk.currentIndex).toBe(4);
   });
 
   it("marks complete only when every canonical step is done or skipped", () => {
     const allDone = [
       "create",
       "refine",
-      "evaluate",
       "direction",
       "factcheck",
       "build-verify",
@@ -213,5 +210,50 @@ describe("aggregate", () => {
     const snap = aggregate("r", allDone);
     expect(snap.complete).toBe(true);
     expect(snap.currentIndex).toBeUndefined();
+  });
+
+  it("exposes toolVersion from the version-bearing event with the max `at` (time-based, not array order)", () => {
+    // at 最大の版を採用する。配列では新版(0.3.0)を先頭に置く＝「配列末尾」を採る実装なら 0.2.0 になり落ちる。
+    const snap = aggregate("r", [
+      ev({ step: "refine", status: "done", version: "0.3.0", at: "2026-06-21T05:00:00.000Z" }),
+      ev({ step: "create", status: "done", version: "0.2.0", at: "2026-06-21T04:00:00.000Z" }),
+    ]);
+    expect(snap.toolVersion).toBe("0.3.0");
+  });
+
+  it("leaves toolVersion undefined when no event carries a version", () => {
+    const snap = aggregate("r", [ev({ step: "create", status: "done" })]);
+    expect(snap.toolVersion).toBeUndefined();
+  });
+
+  it("folds the evaluate alias onto the refine canonical step (single final-review stage)", () => {
+    // refine 主経路でも article:evaluate 単独でも、同じ「評価・改稿」枠を満たす。
+    const viaEvaluate = aggregate("r", [ev({ step: "evaluate", status: "done", costUsd: 0.1 })]);
+    expect(step(viaEvaluate, "refine").status).toBe("done");
+    expect(viaEvaluate.steps.filter((s) => s.step === "evaluate").length).toBe(0); // 別行を作らない
+    expect(viaEvaluate.canonicalTotal).toBe(9);
+  });
+
+  it("keeps the position denominator at canonical count even with non-canonical extras (no 3/11 regression)", () => {
+    // 実ログ再現: 全 canonical done/skip ＋ export 未了。revise / direction-draft の非 canonical あり。
+    const events = [
+      ev({ step: "create", status: "done" }),
+      ev({ step: "refine", status: "done" }),
+      ev({ step: "direction", status: "done", note: "verdict=ok" }),
+      ev({ step: "direction-draft", status: "done", note: "early preview" }), // 非 canonical
+      ev({ step: "factcheck", status: "done" }),
+      ev({ step: "build-verify", status: "skip", note: "no code" }),
+      ev({ step: "editorial", status: "done" }),
+      ev({ step: "revise", status: "done", costUsd: 0.05 }), // 非 canonical
+      ev({ step: "claims-normalize", status: "done" }),
+      ev({ step: "verify-artifacts", status: "done" }),
+      // export は未了
+    ];
+    const snap = aggregate("r", events);
+    expect(snap.canonicalTotal).toBe(9); // 分母は canonical のみ（revise/direction-draft で膨らまない）
+    expect(snap.total).toBeGreaterThan(9); // 全行数には非 canonical も含む
+    expect(step(snap, "export").index).toBe(9);
+    expect(snap.currentIndex).toBe(9); // 未完 canonical は export だけ。非 canonical に乗っ取られない
+    expect(snap.complete).toBe(false);
   });
 });

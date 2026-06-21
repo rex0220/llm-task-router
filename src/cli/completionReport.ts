@@ -28,7 +28,8 @@ export type CompletionReportData = {
   profile?: string;
   finalAuthorModel?: string;
   reviewerModel?: string;
-  progress: { complete: boolean; currentIndex?: number; total: number };
+  progress: { complete: boolean; currentIndex?: number; canonicalTotal: number };
+  toolVersion?: string;
   totalCostUsd?: number;
   goNoGo?: string;
   reason?: string;
@@ -113,7 +114,12 @@ export async function collectCompletionReportData(
     profile: meta?.profile,
     finalAuthorModel: modelLabel(meta?.finalAuthorModel),
     reviewerModel: modelLabel(meta?.reviewerModel),
-    progress: { complete: snapshot.complete, currentIndex: snapshot.currentIndex, total: snapshot.total },
+    progress: {
+      complete: snapshot.complete,
+      currentIndex: snapshot.currentIndex,
+      canonicalTotal: snapshot.canonicalTotal,
+    },
+    toolVersion: snapshot.toolVersion,
     totalCostUsd: snapshot.totalCostUsd,
     goNoGo: parseGoNoGo(pc),
     reason: parseReason(pc),
@@ -153,8 +159,8 @@ function renderAutoSection(data: CompletionReportData): string {
   const position = data.progress.complete
     ? "全工程完了"
     : data.progress.currentIndex !== undefined
-      ? `${data.progress.currentIndex} / ${data.progress.total} 工程目`
-      : `${data.progress.total} 工程`;
+      ? `${data.progress.currentIndex} / ${data.progress.canonicalTotal} 工程目`
+      : `${data.progress.canonicalTotal} 工程`;
 
   const refineSummary = data.refine
     ? joinParts([
@@ -186,6 +192,8 @@ function renderAutoSection(data: CompletionReportData): string {
     `- 記事: ${escapeCell(data.title)}`,
     "- ファイル: final.md",
     `- profile: ${data.profile ?? "n/a"}`,
+    // 生成ツール版は progress.md と同じく「あるときだけ」出す（既存 run は省略）。
+    ...(data.toolVersion ? [`- 生成ツール: llm-task-router ${data.toolVersion}`] : []),
     `- 最終モデル: ${data.finalAuthorModel ?? "n/a"}`,
     `- 進捗: ${position}`,
     `- 概算コスト合計: ${cost}`,

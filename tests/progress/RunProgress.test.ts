@@ -67,15 +67,32 @@ describe("RunProgress", () => {
     await progress.append(RUN, { step: "create", status: "done" });
     await progress.regenerate(RUN);
     await sleep(10); // mtime に差をつける
-    await progress.append(RUN, { step: "evaluate", status: "done" });
+    await progress.append(RUN, { step: "factcheck", status: "done" });
     const snap = await progress.readSnapshot(RUN);
-    expect(snap.steps.find((s) => s.step === "evaluate")?.status).toBe("done");
+    expect(snap.steps.find((s) => s.step === "factcheck")?.status).toBe("done");
   });
 
   it("readSnapshot still works on an existing run with no events (all pending)", async () => {
     const { progress } = await newProgress();
     const snap = await progress.readSnapshot(RUN);
     expect(snap.steps.every((s) => s.status === "pending")).toBe(true);
+  });
+
+  it("stamps the injected version on appended events (and omits it when not injected)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prog-"));
+    const store = new RunStore(root);
+    await store.create(RUN, "topic", ["create"]);
+
+    const withVer = new RunProgress(store, "9.9.9");
+    await withVer.append(RUN, { step: "create", status: "done" });
+    const evs1 = await withVer.readEvents(RUN);
+    expect(evs1[0].version).toBe("9.9.9");
+
+    // version 無しで構築した RunProgress は version を付けない（undefined は JSON に出さない）。
+    const noVer = new RunProgress(store);
+    await noVer.append(RUN, { step: "refine", status: "done" });
+    const evs2 = await noVer.readEvents(RUN);
+    expect(evs2.find((e) => e.step === "refine")?.version).toBeUndefined();
   });
 
   it("tolerates a corrupt trailing line in events.jsonl", async () => {

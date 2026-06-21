@@ -110,16 +110,29 @@ export function aggregate(
     steps.push(toStep(a, index++));
   }
 
-  const currentRow = steps.find((s) => s.status === "pending" || s.status === "start" || s.status === "error");
-  const complete = steps.filter((s) => s.canonical).every((s) => s.status === "done" || s.status === "skip");
+  // 現在地は canonical 未完を優先する。非 canonical の追加工程（revise / direction-draft 等）が
+  // 現在地を乗っ取らないように canonical に限定する（「N工程中M番目」の意味を保つ）。
+  const currentRow = steps.find(
+    (s) => s.canonical && (s.status === "pending" || s.status === "start" || s.status === "error")
+  );
+  const canonicalSteps2 = steps.filter((s) => s.canonical);
+  const complete = canonicalSteps2.every((s) => s.status === "done" || s.status === "skip");
 
   const costs = steps.map((s) => s.costUsd).filter((c): c is number => c !== undefined);
   const totalCostUsd = costs.length > 0 ? Number(costs.reduce((sum, c) => sum + c, 0).toFixed(6)) : undefined;
+
+  // 記録したツール版は「version を持ち at 最大のイベント」から採る（配列順ではなく時刻基準。
+  // aggregate は純関数で未ソート配列が来うるため）。
+  const versioned = events.filter((e) => e.version !== undefined);
+  const toolVersion =
+    versioned.length > 0 ? versioned.reduce((a, b) => (a.at >= b.at ? a : b)).version : undefined;
 
   return {
     runId,
     steps,
     total: steps.length,
+    canonicalTotal: canonicalSteps2.length, // 現在地の分母（canonical のみ）
+    toolVersion,
     currentIndex: currentRow?.index,
     complete,
     totalCostUsd,
