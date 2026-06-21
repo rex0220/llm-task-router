@@ -234,6 +234,31 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
   );
 
   it(
+    "article:progress:event --editor-model surfaces the editor AI model in progress.md",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "editor-e2e-"));
+      const runId = "2026-06-21-editor-e2e";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+
+      execFileSync(
+        process.execPath,
+        [bin, "article:progress:event", "--run", runId, "--step", "factcheck", "--status", "done", "--editor-model", "claude-opus-4-8"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+
+      const md = readFileSync(join(cwd, "runs", runId, "progress.md"), "utf8");
+      expect(md).toContain("- 編集長（AIモデル）: claude-opus-4-8");
+      const events = readFileSync(join(cwd, "runs", runId, "progress.events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { step: string; editorModel?: string });
+      expect(events.find((e) => e.step === "factcheck")?.editorModel).toBe("claude-opus-4-8");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
     "article:record-publication --article-version is parsed as the flag, not the CLI version",
     () => {
       // --article-version を渡しても CLI の version（package.json の値）が出力されないこと。

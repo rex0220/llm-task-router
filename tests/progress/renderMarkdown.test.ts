@@ -94,6 +94,20 @@ describe("renderProgressMarkdown", () => {
     expect(renderProgressMarkdown(snap)).toContain("+09:00");
   });
 
+  it("shows the editor-in-chief AI model from the latest event carrying editorModel, and omits when absent", () => {
+    const withEditor = aggregate("r", [
+      ev({ step: "factcheck", status: "done", at: "2026-06-21T07:38:00.000Z", editorModel: "claude-opus-4-7" }),
+      // より新しいイベントの editorModel が勝つ（toolVersion と同じ at 最大ルール）。
+      ev({ step: "editorial", status: "done", at: "2026-06-21T07:43:00.000Z", editorModel: "claude-opus-4-8" }),
+    ]);
+    expect(withEditor.editorModel).toBe("claude-opus-4-8");
+    expect(renderProgressMarkdown(withEditor)).toContain("- 編集長（AIモデル）: claude-opus-4-8");
+
+    const noEditor = aggregate("r", [ev({ step: "create", status: "done" })]);
+    expect(noEditor.editorModel).toBeUndefined();
+    expect(renderProgressMarkdown(noEditor)).not.toContain("編集長（AIモデル）");
+  });
+
   it("shows the generating tool version when present, and omits the line when absent", () => {
     const withVer = aggregate("r", [ev({ step: "create", status: "done", version: "0.2.23" })]);
     expect(renderProgressMarkdown(withVer)).toContain("- 生成ツール: llm-task-router 0.2.23");
