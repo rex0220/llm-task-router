@@ -1150,10 +1150,24 @@ program
       process.stdout.write(markdown.endsWith("\n") ? markdown : `${markdown}\n`);
       return;
     }
-    // 既定: md ＋ json を保存し、1行サマリを stdout に。progress は書かない（編集長が記録）。
+    // 既定: md ＋ json を保存し、1行サマリを stdout に。
     await store.save(options.run, FACTCHECK_SCOPE_FILE, markdown);
     await store.save(options.run, FACTCHECK_SCOPE_JSON, JSON.stringify(scope, null, 2));
     console.log(`factcheck-scope: ${scopeSummary(scope)} -> runs/${options.run}/${FACTCHECK_SCOPE_FILE}`);
+
+    // 再 factcheck の要否判定（full|diff|skip）を進捗台帳に1行残す。台帳から「差分に絞って
+    // どれだけ再検証を省いたか」が見えるようにする（dry run の --json/--stdout では記録しない）。
+    // canonical 外の追加アクション扱い（factcheck 本体とは別行）。失敗は握って本処理継続。
+    await safeProgress(async () => {
+      const progress = new RunProgress(store, pkg.version);
+      await progress.append(options.run, {
+        step: "factcheck-scope",
+        status: "done",
+        output: `runs/${options.run}/${FACTCHECK_SCOPE_FILE}`,
+        note: `scope=${scopeSummary(scope)}`,
+      });
+      await progress.regenerate(options.run);
+    });
   });
 
 program
