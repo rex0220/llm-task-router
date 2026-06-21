@@ -52,7 +52,7 @@ model: opus
    - user approval required: yes
    ```
 
-7. **完成報告を `runs/<id>/completion-report.md` に残す**: `llm-task-router article:completion-report --run <id>` を回し、機械生成部（ゲート結果表・概算コスト・GO/NO-GO 転記）の上に、`## 構成`（構成ナラティブ）/ `## 上申事項`（ユーザー判断を要する論点）/ `## 総評` の editor 欄を**あなたが記入**する。再生成は既定で editor 欄を保持する（editor 欄ごと初期化は `--reset-editor`）。これを「最終版を確認しました」報告の正本にし、`export/index.json`（公開台帳）には混ぜない。
+7. **完成報告を `runs/<id>/completion-report.md` に残す**: `llm-task-router article:completion-report --run <id>` を回し、機械生成部（ゲート結果表・概算コスト・GO/NO-GO 転記）の上に、`## 構成`（構成ナラティブ）/ `## 上申事項`（ユーザー判断を要する論点）/ `## 総評` の editor 欄を**あなたが記入**する。再生成は既定で editor 欄を保持する（editor 欄ごと初期化は `--reset-editor`）。これを「最終版を確認しました」報告の正本にし、`export/index.json`（公開台帳）には混ぜない。**外側AI（Claude Code）の使用量を残すなら**、`/cost` 等の参考値を `## 総評` に手で転記する（`router.log` には出ない別系統。完全な課金額は取得不可＝参考値）。
 
 コマンド早見（毎回 --help を引かない。これで仕様は足りる。`--config` は既定 config/models.yaml）:
 - create:   `llm-task-router article:create (--topic <text> | --topic-file <path>) --profile <name>`

@@ -155,7 +155,12 @@ llm-task-router article:status --run 2026-06-18-ai-ir          # 人が読む表
 llm-task-router article:status --run 2026-06-18-ai-ir --json   # スクリプト用
 ```
 
-工程は `create → refine → evaluate → factcheck → build-verify → editorial → claims-normalize → verify-artifacts → export` の9段（標準工程順は `src/progress/stepOrder.ts`）。各工程の後に `article:status` を挟むと「今N/9工程目」が常に分かる。
+工程は `create → refine → evaluate → direction（方向性ゲート）→ factcheck → build-verify → editorial → claims-normalize → verify-artifacts → export` の10段（標準工程順は `src/progress/stepOrder.ts`）。各工程の後に `article:status` を挟むと「今N/10工程目」が常に分かる。
+
+**所要・コストの見方**: `article:status` の表に各工程の **所要(ms)・概算$** と末尾の **概算コスト合計**が出る（出どころは `progress.json`）。CLI 工程は自動、factcheck/build-verify は編集長の `progress:event` 記録分。概算コストは `models.yaml` の価格表に依存する**概算**（表にも「概算」と明記される）。
+
+- factcheck / build-verify の**所要見積もり**（「約N分」）は、サブエージェントの作業時間が主で API ログ（`router.log`）に出ないため、現状は出さない。複数 run の `progress.json` 実績が溜まってからの将来拡張とする（憶測値を出さない）。
+- **Claude Code（外側AI）のトークン使用量**は `router.log` に含まれない（別系統・本ツール外）。必要なら編集長が Claude Code の `/cost` を完成報告（7.5）の `## 総評` に**手で転記**する（参考値。完全な課金額は取得不可）。
 
 ---
 
@@ -384,13 +389,24 @@ llm-task-router article:completion-report --run 2026-06-18-ai-ir
 
 Claude Code で回すと Bash 実行のたびに承認を求められ、数が多いと中身を見ずに承認しがちになる。`init` は `.claude/settings.json` に **pipeline 系コマンドだけの allowlist** を入れて配るので、`create / refine / evaluate / revise / resume / review` は事前許可済み（プロンプトが出ない）。記録系の `article:status` / `article:progress:event` / `article:completion-report` / `article:direction-check` / `article:factcheck-scope` も allowlist に入っており、進捗確認・記録・方向性ゲート・完成報告・再 factcheck 判定のたびに承認を求められることはない。
 
-意図的に**プロンプトを残している**のは次の3つ — ここは毎回中身を見て承認する：
+意図的に**プロンプトを残している**のは次の4つ — ここは毎回中身を見て承認する：
 
 - `article:export`（公開相当の操作）
+- `article:record-publication`（公開台帳＝公開 URL・版の更新。公開相当なので毎回 URL を確認する）
 - `article:factcheck-stamp`（factcheck baseline＝信頼状態の更新。factcheck 前の誤実行で未検証 final を「検証済み」にしないため）
 - `article-build-verifier` の `npm install` / `tsc` / `node`（記事内の**未知コードを実行**する部分）
 
 許可を足したい/外したい場合は `.claude/settings.json` の `permissions.allow` を編集する。設定変更は次回セッション開始時に反映される。
+
+### 承認の棚卸し（プロンプトが多いと感じたら）
+
+承認過多の主因は「コマンドが足りない」ことより、**allowlist にマッチしない叩き方**であることが多い。次のパターンは事前許可に当たらず毎回プロンプトになるので潰す：
+
+- `cd ../foo && llm-task-router ...`（`cd &&` の連結）→ **カレント（プロジェクト直下）で1コマンドずつ**実行する。
+- `npx llm-task-router ...` や相対パス起動 → PATH 上の `llm-task-router` を直接呼ぶ。
+- パイプ・複合（`|` / `;` / `&&` で連結）→ 1 Bash 呼び出し＝1 コマンドに分ける。
+
+Claude Code に **`/fewer-permission-prompts` スキルがあれば**、実際に出たプロンプト履歴をスキャンして allowlist 追加候補を出せる（本ツール同梱ではなく Claude Code 側の機能。あれば使う）。**追加するのは「正当だが未許可」と棚卸しで判明したパターンに限る**（むやみに広げない。上の4つの承認操作は残す）。
 
 ---
 
