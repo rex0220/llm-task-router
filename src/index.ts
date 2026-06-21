@@ -302,13 +302,18 @@ program
   .requiredOption("--out <path>", "Destination path for the final article")
   .option("--force", "Overwrite the destination if it already exists")
   .option("--front-matter", "Prepend publish front-matter (title/tags) for Qiita/Zenn and move the body H1 into it")
-  .action(async (options: { run: string; out: string; force?: boolean; frontMatter?: boolean }) => {
+  .option(
+    "--note <text>",
+    "Approval / condition-resolution note recorded in the export progress event (e.g. user approval, conditional-GO resolution)"
+  )
+  .action(async (options: { run: string; out: string; force?: boolean; frontMatter?: boolean; note?: string }) => {
     const store = new RunStore();
     const dest = await exportFinalArticle(store, options.run, options.out, {
       force: options.force,
       frontMatter: options.frontMatter,
     });
-    await recordProgress(store, options.run, { step: "export", status: "done", output: dest });
+    // --note は「条件付き GO の条件解決・ユーザー承認」を台帳に残すための監査欄（任意）。
+    await recordProgress(store, options.run, { step: "export", status: "done", output: dest, note: options.note });
     console.log(`exported: ${dest}${options.frontMatter ? " (with front-matter)" : ""}`);
   });
 

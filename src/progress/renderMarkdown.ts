@@ -34,6 +34,9 @@ export function renderProgressMarkdown(snapshot: ProgressSnapshot): string {
       `- トークン合計: 入力 ${fmtTokens(inTok)} / 出力 ${fmtTokens(outTok)}（合計 ${fmtTokens(inTok + outTok)} / LLM工程のみ）`
     );
   }
+  if (snapshot.startedAt !== undefined) {
+    lines.push(`- 開始: ${fmtDateTime(snapshot.startedAt)}`);
+  }
   lines.push(`- 更新: ${fmtDateTime(snapshot.updatedAt)}`);
   if (snapshot.editorModel !== undefined) {
     // 自己申告値（自動検出ではなく作成時に編集長が宣言）。監査値ではない旨を表記で明示する。

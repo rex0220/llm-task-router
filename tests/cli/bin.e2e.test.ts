@@ -142,6 +142,32 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
   );
 
   it(
+    "article:export --note records the approval note in the export progress event",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "export-note-e2e-"));
+      const runId = "2026-06-21-export-note";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      await store.save(runId, "final.md", "# タイトル\n本文\n");
+
+      execFileSync(
+        process.execPath,
+        [bin, "article:export", "--run", runId, "--out", join(cwd, "out.md"), "--note", "ユーザー承認済み（条件: Qiita媒体適性OK）"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+
+      const events = readFileSync(join(cwd, "runs", runId, "progress.events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { step: string; status: string; note?: string });
+      const ex = events.find((e) => e.step === "export");
+      expect(ex?.status).toBe("done");
+      expect(ex?.note).toBe("ユーザー承認済み（条件: Qiita媒体適性OK）");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
     "article:record-publication --help shows --article-version (not the reserved --version)",
     () => {
       const out = run(["article:record-publication", "--help"]);

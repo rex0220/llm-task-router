@@ -69,13 +69,13 @@ model: opus
   - normalize 後に参考章へ検証済みリンクを機械付与（present かつ verified の cited source のみ・sources.json 正本）。LLM が書いた参考リスト節（`## 参考リンク`/`## 出典` 等・URL 入り）は除去して機械生成 `## 参考` に一本化（二重化＋未検証 URL 防止）。final.md を機械更新（`final.references.bak.md` 退避）。検証済み 0件はエラー。
 - verify-artifacts: `llm-task-router article:verify-artifacts --run <id>`
   - 公開前ゲートの機械チェック（外部通信なし）。FAIL は exit 1。GO の前に必ず回す。
-- export:   `llm-task-router article:export --run <id> --out <path> [--force]`
-  - --run と --out は必須。出力されるのは final.md のみ。
+- export:   `llm-task-router article:export --run <id> --out <path> [--force] [--note <text>]`
+  - --run と --out は必須。出力されるのは final.md のみ。`--note` で承認・条件付き GO の条件解決を export イベントに残す（例 `--note "ユーザー承認済み（条件: …OK）"`）。
   - `.env*` 等の秘密ファイル名は拒否。ワークスペース外への書き出しは警告。既存ファイルは --force なしでは上書きしない。
 - direction-check: `llm-task-router article:direction-check --run <id> --verdict <ok|revise> [--note <text>] [--source final|draft]`
   - factcheck 前の方向性ゲート（既定 final.md）。verdict は CLI が権威・所感欄はマーカー保護。`revise` は factcheck 前に直す。`--source draft` は早期プレビュー（canonical を満たさない）。
 - factcheck-scope: `llm-task-router article:factcheck-scope --run <id> [--json|--stdout]`
-  - 前回 baseline（factcheck.snapshot.md）と final の差分で再 factcheck の要否を判定（full|skip|diff）。既定（ファイル書き込み）では判定を `factcheck-scope` の progress イベントに自動記録する（`--json`/`--stdout` のドライランでは記録しない）。
+  - 前回 baseline（factcheck.snapshot.md）と final の差分で再 factcheck の要否を判定（full|skip|diff）。既定（ファイル書き込み）では判定を `factcheck-scope` の progress イベントに自動記録する（`--json`/`--stdout` のドライランでは記録しない）。**本文を変えたら（編集レビューの revise 含む）必ず回して証跡を残す**。非事実差分なら次の `factcheck-stamp --accepted-after non-factual-diff` で受理する。
 - factcheck-stamp: `llm-task-router article:factcheck-stamp --run <id> --accepted-after <factcheck|non-factual-diff> --note <text>`
   - 現 final を factcheck 済み baseline として受理（必須フラグ＋プロンプト維持）。factcheck の前には打たない。
 - status:   `llm-task-router article:status --run <id> [--json]`
