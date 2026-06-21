@@ -185,6 +185,55 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
   );
 
   it(
+    "article:factcheck-scope records the scope verdict as a progress event",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "fcs-e2e-"));
+      const runId = "2026-06-21-fcs-e2e";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      await store.save(runId, "final.md", "# タイトル\n本文\n");
+      // baseline スナップショット無し → scope=full（初回判定）が決定的に出る。
+
+      execFileSync(process.execPath, [bin, "article:factcheck-scope", "--run", runId], {
+        cwd,
+        encoding: "utf8",
+        timeout: E2E_TIMEOUT,
+      });
+
+      const events = readFileSync(join(cwd, "runs", runId, "progress.events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { step: string; status: string; note?: string });
+      const fcs = events.find((e) => e.step === "factcheck-scope");
+      expect(fcs).toBeDefined();
+      expect(fcs?.status).toBe("done");
+      expect(fcs?.note).toContain("scope=full");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:factcheck-scope --stdout does not record a progress event (dry run)",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "fcs-dry-"));
+      const runId = "2026-06-21-fcs-dry";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      await store.save(runId, "final.md", "# タイトル\n本文\n");
+
+      execFileSync(process.execPath, [bin, "article:factcheck-scope", "--run", runId, "--stdout"], {
+        cwd,
+        encoding: "utf8",
+        timeout: E2E_TIMEOUT,
+      });
+
+      // dry run なので events ファイル自体が作られない（progress 記録なし）。
+      expect(existsSync(join(cwd, "runs", runId, "progress.events.jsonl"))).toBe(false);
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
     "article:record-publication --article-version is parsed as the flag, not the CLI version",
     () => {
       // --article-version を渡しても CLI の version（package.json の値）が出力されないこと。
