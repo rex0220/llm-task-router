@@ -37,7 +37,9 @@ model: opus
        "title": "参照元タイトル",
        "retrievedAt": "2026-06-20",
        "sourceType": "primary|secondary",
-       "summary": "根拠の要約"
+       "summary": "根拠の要約",
+       "reachable": "ok",
+       "replacedByKey": "後継sourceのkey（死リンク差し替え時のみ）"
      }
    ]
    ```
@@ -47,6 +49,7 @@ model: opus
    - claim と source の紐付けは `sourceRefs` で行う。値は **URL そのもの**、または `sources.raw.json` の `key`（その raw 内だけの結合ラベル）。
    - `claim` は本文の主張を1文で。これが claim の identity（normalize が claim 文の hash で同一性を取る）。`location.heading` は補助。
    - `status`: 裏取りできたら `verified`（`sourceRefs` 必須）、要出典は `needs-source`、誤りは `incorrect`、未検証は `unverified`。
+   - **到達性**: URL が到達不能（404/403/到達不能）だったら `reachable: "dead"`（到達確認できたら `"ok"`、確認したが不明なら `"unknown"`、未確認なら省略）。**死リンクを `verified` claim の `sourceRefs` に残さない**＝到達可能な代替 source を立てて claim をそちらへ張り替える。差し替えた死リンク source には `replacedByKey: <代替の key>` を付ける（normalize が後継 id へ解決。自己参照不可）。これで死リンクは参考章に出ず、台帳上も差し替え経緯が追える。
    - 観測範囲（全文か差分か）は編集長が `claims-normalize --scope full|diff` で渡す。raw 側にスコープ欄は持たない。
 
 更新リライト時（差分集中）:

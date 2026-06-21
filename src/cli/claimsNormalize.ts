@@ -114,6 +114,8 @@ async function readLedger(store: RunStore, runId: string): Promise<ClaimsLedger>
 }
 
 // raw source を台帳へマージし、urlHash→SNNN を確定する。同一 URL の再出現は既存 SNNN を再利用。
+// reachable は raw を正本として伝播（未記録は省略）。replacedBy はここでは常にクリアし、
+// 全 source の id 確定後の2パス目で raw.replacedByKey から解決して設定する。
 function mergeSource(ledger: ClaimsLedger, raw: RawSource): LedgerSource {
   const h = urlHash(raw.url);
   const existing = ledger.sources.find((s) => s.urlHash === h);
@@ -124,6 +126,8 @@ function mergeSource(ledger: ClaimsLedger, raw: RawSource): LedgerSource {
     existing.retrievedAt = raw.retrievedAt;
     existing.sourceType = raw.sourceType;
     existing.summary = raw.summary;
+    existing.reachable = raw.reachable; // 未記録（undefined）なら省略へ戻す
+    existing.replacedBy = undefined; // 2パス目で再設定
     return existing;
   }
   ledger.lastSourceSeq += 1;
@@ -135,9 +139,28 @@ function mergeSource(ledger: ClaimsLedger, raw: RawSource): LedgerSource {
     retrievedAt: raw.retrievedAt,
     sourceType: raw.sourceType,
     summary: raw.summary,
+    reachable: raw.reachable,
+    cited: false, // 後段で claims から再計算
   };
   ledger.sources.push(created);
   return created;
+}
+
+// 1つの ref（raw key か URL）を SNNN へ解決する（replacedByKey 用。全 id 確定後に呼ぶ）。
+function resolveOneSourceId(ref: string, ledger: ClaimsLedger, keyToUrlHash: Map<string, string>): string {
+  let h = keyToUrlHash.get(ref);
+  if (!h) {
+    try {
+      h = urlHash(ref);
+    } catch {
+      throw new Error(`replacedByKey is neither a known key nor a valid URL: ${ref}`);
+    }
+  }
+  const src = ledger.sources.find((s) => s.urlHash === h);
+  if (!src) {
+    throw new Error(`replacedByKey does not resolve to any declared source: ${ref}`);
+  }
+  return src.id;
 }
 
 // claim の sourceRefs（URL か raw source の key）を SNNN の配列へ解決する。
@@ -232,15 +255,39 @@ function toPublicClaim(c: LedgerClaim): Claim {
   };
 }
 
+// present かつ verified な claim が参照する sourceId 集合（cited 判定の正本。references と共有）。
+export function collectCitedSourceIds(
+  claims: Pick<Claim, "lifecycle" | "status" | "sourceIds">[]
+): Set<string> {
+  const ids = new Set<string>();
+  for (const c of claims) {
+    if (c.lifecycle === "present" && c.status === "verified") {
+      for (const sid of c.sourceIds) {
+        ids.add(sid);
+      }
+    }
+  }
+  return ids;
+}
+
 function toPublicSource(s: LedgerSource): Source {
-  return {
+  const out: Source = {
     id: s.id,
     url: s.url,
     title: s.title,
     retrievedAt: s.retrievedAt,
     sourceType: s.sourceType,
     summary: s.summary,
+    cited: s.cited ?? false,
   };
+  // reachable / replacedBy は値があるときだけ出す（未記録は省略）。
+  if (s.reachable !== undefined) {
+    out.reachable = s.reachable;
+  }
+  if (s.replacedBy !== undefined) {
+    out.replacedBy = s.replacedBy;
+  }
+  return out;
 }
 
 export async function normalizeClaims(
@@ -259,9 +306,21 @@ export async function normalizeClaims(
   const round = ledger.round + 1;
 
   const keyToUrlHash = new Map<string, string>();
+  const pendingReplaced: { source: LedgerSource; replacedByKey: string }[] = [];
   for (const rs of rawSources) {
     const merged = mergeSource(ledger, rs);
     keyToUrlHash.set(rs.key, merged.urlHash);
+    if (rs.replacedByKey !== undefined) {
+      pendingReplaced.push({ source: merged, replacedByKey: rs.replacedByKey });
+    }
+  }
+  // 2パス目: 全 source の id が確定した後に replacedByKey → SNNN を解決（後方参照を許す）。
+  for (const { source, replacedByKey } of pendingReplaced) {
+    const targetId = resolveOneSourceId(replacedByKey, ledger, keyToUrlHash);
+    if (targetId === source.id) {
+      throw new Error(`source ${source.id} の replacedBy が自分自身を指しています（自己参照は不可）。`);
+    }
+    source.replacedBy = targetId;
   }
 
   const observed = new Set<string>();
@@ -276,6 +335,12 @@ export async function normalizeClaims(
   }
 
   ledger.round = round;
+
+  // cited を claims から再計算して全 source に焼き込む（present かつ verified の参照のみ）。
+  const citedIds = collectCitedSourceIds(ledger.claims);
+  for (const s of ledger.sources) {
+    s.cited = citedIds.has(s.id);
+  }
 
   const claims = ledger.claims.map(toPublicClaim);
   const sources = ledger.sources.map(toPublicSource);

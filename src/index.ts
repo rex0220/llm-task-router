@@ -1251,7 +1251,11 @@ program
     await assertRunExists(store, options.run);
 
     // claims/sources を読んで参考ブロックを生成（不在・verified 0件はここで明確にエラー＝exit 1）。
-    const { block, count } = await prepareReferencesBlock(store, options.run);
+    const { block, count, warnings } = await prepareReferencesBlock(store, options.run);
+    // reachable:"dead" で参考章から除外したものは stderr に出す（本処理は継続）。
+    for (const w of warnings) {
+      process.stderr.write(`  ⚠ ${w}\n`);
+    }
 
     if (options.stdout) {
       process.stdout.write(block.endsWith("\n") ? block : `${block}\n`);

@@ -33,6 +33,7 @@ function source(id: string, over: Partial<Source> = {}): Source {
     retrievedAt: "2026-06-21",
     sourceType: "secondary",
     summary: "",
+    cited: false,
     ...over,
   };
 }
@@ -201,5 +202,26 @@ describe("prepareReferencesBlock (I/O)", () => {
     await store.save("r", "claims.json", JSON.stringify([]));
     await store.save("r", "sources.json", SOURCES);
     await expect(prepareReferencesBlock(store, "r")).rejects.toThrow(/検証済み source/);
+  });
+
+  it("excludes reachable:dead from the block and returns a warning", async () => {
+    const store = await newStore();
+    await store.create("r", "T", ["create"]);
+    // cited だが dead な S001 と、cited かつ live な S002。
+    const claims = JSON.stringify([
+      { id: "C001-aaaaaaaa", claim: "a", location: { heading: "## h", anchorHash: "aaaaaaaa" }, type: "general", status: "verified", lifecycle: "present", sourceIds: ["S001"], severity: "minor", note: "" },
+      { id: "C002-bbbbbbbb", claim: "b", location: { heading: "## h", anchorHash: "bbbbbbbb" }, type: "general", status: "verified", lifecycle: "present", sourceIds: ["S002"], severity: "minor", note: "" },
+    ]);
+    const sources = JSON.stringify([
+      { id: "S001", url: "https://dead.example/x", title: "Dead", retrievedAt: "2026-06-21", sourceType: "primary", summary: "", reachable: "dead", cited: true },
+      { id: "S002", url: "https://live.example/y", title: "Live", retrievedAt: "2026-06-21", sourceType: "primary", summary: "", reachable: "ok", cited: true },
+    ]);
+    await store.save("r", "claims.json", claims);
+    await store.save("r", "sources.json", sources);
+    const { block, count, warnings } = await prepareReferencesBlock(store, "r");
+    expect(count).toBe(1);
+    expect(block).toContain("https://live.example/y");
+    expect(block).not.toContain("https://dead.example/x");
+    expect(warnings.join("\n")).toMatch(/reachable=dead.*S001/);
   });
 });
