@@ -1,4 +1,5 @@
 import type { ProgressSnapshot, ProgressStepStatus } from "./types";
+import { formatDuration } from "../utils/duration";
 
 const STATUS_LABEL: Record<ProgressStepStatus, string> = {
   done: "✅ done",
@@ -92,16 +93,6 @@ export function renderProgressMarkdown(snapshot: ProgressSnapshot): string {
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
-}
-
-// 所要時間を人が読みやすい M:SS.mmm に整形する（例 241362ms → 4:01.362、1200ms → 0:01.200）。
-// 分は桁あふれをそのまま（例 72:05.000）。progress.json 側は raw な elapsedMs のまま保つ。
-function formatDuration(ms: number): string {
-  const totalSec = Math.floor(ms / 1000);
-  const millis = ms % 1000;
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  return `${min}:${pad2(sec)}.${String(millis).padStart(3, "0")}`;
 }
 
 // トークン数を桁区切りで表示（ランタイム locale 非依存に固定）。

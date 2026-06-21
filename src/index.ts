@@ -49,6 +49,7 @@ import { initConfig } from "./cli/init";
 import { ExportIndex } from "./storage/ExportIndex";
 import { loadProfile } from "./workflows/profile";
 import { RunLogger } from "./logger/RunLogger";
+import { formatDuration } from "./utils/duration";
 import { RunProgress, type ProgressEventInput } from "./progress/RunProgress";
 import type { ProgressEventStatus } from "./progress/types";
 import { createProviders } from "./providers";
@@ -459,7 +460,7 @@ function createProgressReporter(): {
         totalElapsedMs += event.elapsedMs;
         const cost = event.costUsd !== undefined ? `, ~$${event.costUsd.toFixed(4)}` : "";
         process.stderr.write(
-          `[${event.index}/${event.total}] ${event.name} - done via ${event.provider}/${event.model} (${event.elapsedMs}ms${cost})\n`
+          `[${event.index}/${event.total}] ${event.name} - done via ${event.provider}/${event.model} (${formatDuration(event.elapsedMs)}${cost})\n`
         );
         if (event.truncated) {
           process.stderr.write(
@@ -803,7 +804,7 @@ function createRefineReporter(runId: string): {
       case "eval:done": {
         const cost = accrue(event.costUsd, event.elapsedMs, event.inputTokens, event.outputTokens);
         process.stderr.write(
-          `  evaluate - done via ${event.provider}/${event.model} (${event.elapsedMs}ms${cost}) — issues>=${event.minSeverity}: ${event.issueCount}, score: ${event.score}\n`
+          `  evaluate - done via ${event.provider}/${event.model} (${formatDuration(event.elapsedMs)}${cost}) — issues>=${event.minSeverity}: ${event.issueCount}, score: ${event.score}\n`
         );
         if (event.truncated) {
           process.stderr.write(
@@ -815,7 +816,7 @@ function createRefineReporter(runId: string): {
       case "revise:done": {
         const cost = accrue(event.costUsd, event.elapsedMs, event.inputTokens, event.outputTokens);
         process.stderr.write(
-          `  revise - done via ${event.provider}/${event.model} (${event.elapsedMs}ms${cost})\n`
+          `  revise - done via ${event.provider}/${event.model} (${formatDuration(event.elapsedMs)}${cost})\n`
         );
         if (event.truncated) {
           process.stderr.write(
