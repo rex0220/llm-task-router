@@ -117,7 +117,7 @@ program
       const runIdSeed = options.topicFile ? basename(options.topicFile).replace(/\.[^.]+$/, "") : topic;
       const runId = options.run ?? createRunId(runIdSeed);
       const { router, store } = await createRuntime(options.config);
-      const progress = new RunProgress(store);
+      const progress = new RunProgress(store, pkg.version);
       const reporter = createProgressReporter();
       const result = await runWithProgress({
         progress,
@@ -147,7 +147,7 @@ program
   .option("--config <path>", "Path to models.yaml", "config/models.yaml")
   .action(async (options: { run: string; config: string }) => {
     const { router, store } = await createRuntime(options.config);
-    const progress = new RunProgress(store);
+    const progress = new RunProgress(store, pkg.version);
     const reporter = createProgressReporter();
     const result = await runWithProgress({
       progress,
@@ -170,7 +170,7 @@ program
   .option("--config <path>", "Path to models.yaml", "config/models.yaml")
   .action(async (options: { run: string; config: string }) => {
     const { router, store } = await createRuntime(options.config);
-    const progress = new RunProgress(store);
+    const progress = new RunProgress(store, pkg.version);
     const reporter = createProgressReporter();
     const result = await runWithProgress({
       progress,
@@ -202,7 +202,7 @@ program
       "--instruction-file"
     );
     const { router, store } = await createRuntime(options.config);
-    const progress = new RunProgress(store);
+    const progress = new RunProgress(store, pkg.version);
     const reporter = createProgressReporter();
     const result = await runWithProgress({
       progress,
@@ -532,7 +532,7 @@ async function assertRunExists(store: RunStore, runId: string): Promise<void> {
 // WorkflowEvent を持たない CLI（claims-normalize / verify-artifacts / export 等）の終了を1イベント記録する。
 // 記録失敗は本処理を止めない。
 async function recordProgress(store: RunStore, runId: string, input: ProgressEventInput): Promise<void> {
-  const progress = new RunProgress(store);
+  const progress = new RunProgress(store, pkg.version);
   await safeProgress(async () => {
     await progress.append(runId, input);
     await progress.regenerate(runId);
@@ -571,7 +571,7 @@ program
       const { router, store } = await createRuntime(options.config);
       const criteria = await resolveEvaluationCriteria(store, options);
 
-      const progress = new RunProgress(store);
+      const progress = new RunProgress(store, pkg.version);
       const reporter = createProgressReporter();
       const result = await runWithProgress({
         progress,
@@ -624,7 +624,7 @@ program
       const { router, store } = await createRuntime(options.config);
       const criteria = await resolveEvaluationCriteria(store, options);
 
-      const progress = new RunProgress(store);
+      const progress = new RunProgress(store, pkg.version);
       const reporter = createRefineReporter(options.run);
       const result = await runWithProgress({
         progress,
@@ -951,7 +951,7 @@ program
       }
       const store = new RunStore();
       await assertRunExists(store, options.run);
-      const progress = new RunProgress(store);
+      const progress = new RunProgress(store, pkg.version);
       const event: ProgressEventInput = {
         step: options.step,
         status,

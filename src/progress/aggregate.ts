@@ -121,11 +121,18 @@ export function aggregate(
   const costs = steps.map((s) => s.costUsd).filter((c): c is number => c !== undefined);
   const totalCostUsd = costs.length > 0 ? Number(costs.reduce((sum, c) => sum + c, 0).toFixed(6)) : undefined;
 
+  // 記録したツール版は「version を持ち at 最大のイベント」から採る（配列順ではなく時刻基準。
+  // aggregate は純関数で未ソート配列が来うるため）。
+  const versioned = events.filter((e) => e.version !== undefined);
+  const toolVersion =
+    versioned.length > 0 ? versioned.reduce((a, b) => (a.at >= b.at ? a : b)).version : undefined;
+
   return {
     runId,
     steps,
     total: steps.length,
     canonicalTotal: canonicalSteps2.length, // 現在地の分母（canonical のみ）
+    toolVersion,
     currentIndex: currentRow?.index,
     complete,
     totalCostUsd,

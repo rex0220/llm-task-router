@@ -111,6 +111,11 @@ describe("renderCompletionReport", () => {
     const md = renderCompletionReport(makeData({ title: "a | b" }));
     expect(md).toContain("a \\| b");
   });
+
+  it("shows the generating tool version in the auto block", () => {
+    const md = renderCompletionReport(makeData({ toolVersion: "0.2.23" }));
+    expect(md).toContain("- 生成ツール: llm-task-router 0.2.23");
+  });
 });
 
 describe("mergeCompletionReport (marker protection)", () => {

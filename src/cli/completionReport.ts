@@ -29,6 +29,7 @@ export type CompletionReportData = {
   finalAuthorModel?: string;
   reviewerModel?: string;
   progress: { complete: boolean; currentIndex?: number; canonicalTotal: number };
+  toolVersion?: string;
   totalCostUsd?: number;
   goNoGo?: string;
   reason?: string;
@@ -118,6 +119,7 @@ export async function collectCompletionReportData(
       currentIndex: snapshot.currentIndex,
       canonicalTotal: snapshot.canonicalTotal,
     },
+    toolVersion: snapshot.toolVersion,
     totalCostUsd: snapshot.totalCostUsd,
     goNoGo: parseGoNoGo(pc),
     reason: parseReason(pc),
@@ -190,6 +192,7 @@ function renderAutoSection(data: CompletionReportData): string {
     `- 記事: ${escapeCell(data.title)}`,
     "- ファイル: final.md",
     `- profile: ${data.profile ?? "n/a"}`,
+    `- 生成ツール: llm-task-router ${data.toolVersion ?? "n/a"}`,
     `- 最終モデル: ${data.finalAuthorModel ?? "n/a"}`,
     `- 進捗: ${position}`,
     `- 概算コスト合計: ${cost}`,

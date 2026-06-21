@@ -212,6 +212,20 @@ describe("aggregate", () => {
     expect(snap.currentIndex).toBeUndefined();
   });
 
+  it("exposes toolVersion from the version-bearing event with the max `at` (time-based, not array order)", () => {
+    // at 最大の版を採用する。配列では新版(0.3.0)を先頭に置く＝「配列末尾」を採る実装なら 0.2.0 になり落ちる。
+    const snap = aggregate("r", [
+      ev({ step: "refine", status: "done", version: "0.3.0", at: "2026-06-21T05:00:00.000Z" }),
+      ev({ step: "create", status: "done", version: "0.2.0", at: "2026-06-21T04:00:00.000Z" }),
+    ]);
+    expect(snap.toolVersion).toBe("0.3.0");
+  });
+
+  it("leaves toolVersion undefined when no event carries a version", () => {
+    const snap = aggregate("r", [ev({ step: "create", status: "done" })]);
+    expect(snap.toolVersion).toBeUndefined();
+  });
+
   it("folds the evaluate alias onto the refine canonical step (single final-review stage)", () => {
     // refine 主経路でも article:evaluate 単独でも、同じ「評価・改稿」枠を満たす。
     const viaEvaluate = aggregate("r", [ev({ step: "evaluate", status: "done", costUsd: 0.1 })]);

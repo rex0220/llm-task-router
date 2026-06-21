@@ -69,6 +69,14 @@ describe("renderProgressMarkdown", () => {
     expect(renderProgressMarkdown(snap)).toContain("+09:00");
   });
 
+  it("shows the generating tool version when present, and omits the line when absent", () => {
+    const withVer = aggregate("r", [ev({ step: "create", status: "done", version: "0.2.23" })]);
+    expect(renderProgressMarkdown(withVer)).toContain("- 生成ツール: llm-task-router 0.2.23");
+
+    const noVer = aggregate("r", [ev({ step: "create", status: "done" })]);
+    expect(renderProgressMarkdown(noVer)).not.toContain("生成ツール");
+  });
+
   it("uses canonicalTotal as the position denominator (non-canonical extras do not inflate it)", () => {
     const snap = aggregate("r", [
       ev({ step: "create", status: "done" }),

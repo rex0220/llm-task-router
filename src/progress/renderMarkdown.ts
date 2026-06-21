@@ -26,6 +26,9 @@ export function renderProgressMarkdown(snapshot: ProgressSnapshot): string {
     lines.push(`- 概算コスト合計: ~$${snapshot.totalCostUsd.toFixed(4)}（概算 / 不明分は除外）`);
   }
   lines.push(`- 更新: ${fmtDateTime(snapshot.updatedAt)}`);
+  if (snapshot.toolVersion !== undefined) {
+    lines.push(`- 生成ツール: llm-task-router ${snapshot.toolVersion}`);
+  }
   lines.push("");
   lines.push("> 時刻はローカルタイム表示（events / progress.json は UTC）。");
   lines.push("");

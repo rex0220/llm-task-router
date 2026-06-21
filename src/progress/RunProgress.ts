@@ -10,12 +10,18 @@ const JSON_FILE = "progress.json";
 const MD_FILE = "progress.md";
 
 // 記録は at/runId を埋める前の最小入力で渡せる。
-export type ProgressEventInput = Omit<ProgressEvent, "at" | "runId"> & { at?: string };
+// version は呼び出し側に渡させない（stamp は RunProgress の責務）ため Omit する。
+export type ProgressEventInput = Omit<ProgressEvent, "at" | "runId" | "version"> & { at?: string };
 
 // 進捗の記録・再生成。正本は append-only の progress.events.jsonl。
 // progress.json / progress.md は events から再生成する派生物（このクラス以外は書かない）。
 export class RunProgress {
-  constructor(private readonly store: RunStore) {}
+  // version は index.ts から注入する（RunProgress 内で package.json を読むと dev/prod で相対パスがズレる）。
+  // 読み取り専用（readSnapshot 等）では省略可（append しないため）。
+  constructor(
+    private readonly store: RunStore,
+    private readonly version?: string
+  ) {}
 
   private eventsPath(runId: string): string {
     return join(this.store.runPath(runId), EVENTS_FILE);
@@ -41,7 +47,13 @@ export class RunProgress {
     await mkdir(dir, { recursive: true });
     const body = inputs
       .map((input) => {
-        const event: ProgressEvent = { at: input.at ?? new Date().toISOString(), runId, ...stripAt(input) };
+        // version は RunProgress が stamp（stripAt の後に置き、入力側の残骸を上書きしない）。
+        const event: ProgressEvent = {
+          at: input.at ?? new Date().toISOString(),
+          runId,
+          ...stripAt(input),
+          version: this.version,
+        };
         return JSON.stringify(withoutUndefined(event));
       })
       .join("\n");
@@ -107,7 +119,7 @@ async function mtime(path: string): Promise<number | undefined> {
   }
 }
 
-function stripAt(input: ProgressEventInput): Omit<ProgressEvent, "at" | "runId"> {
+function stripAt(input: ProgressEventInput): Omit<ProgressEvent, "at" | "runId" | "version"> {
   const { at: _at, ...rest } = input;
   return rest;
 }
