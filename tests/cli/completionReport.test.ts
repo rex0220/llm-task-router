@@ -127,6 +127,7 @@ function makeData(over: Partial<CompletionReportData> = {}): CompletionReportDat
     factcheck: { state: "done" },
     buildVerify: { state: "skipped" },
     editorial: { state: "done" },
+    editorialGate: { hasLedger: false, major: [], minor: [], preference: [] },
     verifyArtifacts: { status: "done", note: "OK" },
     exported: null,
     claims: { total: 1, sources: 1, blocking: 0 },
@@ -177,6 +178,48 @@ describe("renderCompletionReport", () => {
     // 手動で回した report があれば対象外扱いにせず要約を出す。
     expect(md).toContain("checkedBlocks 2");
     expect(md).not.toContain("作成時にコードチェック非指定");
+  });
+
+  it("shows machine gate OK and does not touch transcribed GO when ledger has no unsettled", () => {
+    const md = renderCompletionReport(
+      makeData({ goNoGo: "GO", editorialGate: { hasLedger: true, major: [], minor: [], preference: [] } })
+    );
+    expect(md).toContain("- GO/NO-GO: GO"); // 転記は不変
+    expect(md).toContain("- machine gate（editorial）: OK（未確定 0）");
+  });
+
+  it("surfaces machine gate BLOCK alongside (not overriding) a transcribed GO when a major is unsettled", () => {
+    const md = renderCompletionReport(
+      makeData({
+        goNoGo: "GO",
+        editorialGate: {
+          hasLedger: true,
+          major: [{ id: "W001-x", severity: "major", status: "open", reason: "unresolved", problem: "P" }],
+          minor: [],
+          preference: [],
+        },
+      })
+    );
+    // publication-check 由来の GO は転記のまま（黙って NO-GO に上書きしない）。
+    expect(md).toContain("- GO/NO-GO: GO");
+    // machine gate は別軸で BLOCK を併記し、editorial 行にも要 editorial-resolve を出す。
+    expect(md).toContain("- machine gate（editorial）: BLOCK（未確定 major 1）");
+    expect(md).toMatch(/machine gate: BLOCK.*要 editorial-resolve/);
+  });
+
+  it("treats escalated as unsettled (BLOCK) in the machine gate", () => {
+    const md = renderCompletionReport(
+      makeData({
+        editorialGate: {
+          hasLedger: true,
+          major: [{ id: "W001-x", severity: "major", status: "open", reason: "escalated", problem: "P" }],
+          minor: [],
+          preference: [],
+        },
+      })
+    );
+    expect(md).toContain("BLOCK（未確定 major 1）");
+    expect(md).toContain("W001-x(major/escalated)");
   });
 
   it("shows export state in the auto block (done with path, and 未実行 default)", () => {

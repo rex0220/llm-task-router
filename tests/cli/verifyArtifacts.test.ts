@@ -52,7 +52,11 @@ const SOURCES_OK = JSON.stringify([
 const BUILD_ENV = { node: "v20.18.0", typescript: "5.8.3" };
 
 // 揃った run（factcheck done＋claims.json/sources.json / build skipped＋理由 / editorial done）。
-async function seedComplete(store: RunStore, runId: string): Promise<void> {
+async function seedComplete(
+  store: RunStore,
+  runId: string,
+  opts: { ledger?: string | null } = {}
+): Promise<void> {
   await store.create(runId, "T", ["final"], "Qiita");
   await store.save(runId, "final.md", "# T\n本文\n");
   await store.save(runId, "final-review.md", "# review\n");
@@ -61,6 +65,39 @@ async function seedComplete(store: RunStore, runId: string): Promise<void> {
   await store.save(runId, "claims.json", CLAIMS_OK);
   await store.save(runId, "sources.json", SOURCES_OK);
   await store.save(runId, "editorial-review.md", "# editorial\n");
+  // editorial-review=done を宣言しているので台帳も必須。既定は未確定 0（weaknesses 空）。
+  // ledger:null を渡すと台帳を書かない（台帳欠落ケースの検証用）。
+  const ledger = opts.ledger === undefined ? LEDGER_EMPTY : opts.ledger;
+  if (ledger !== null) {
+    await store.save(runId, "editorial-ledger.json", ledger);
+  }
+}
+
+const LEDGER_EMPTY = JSON.stringify({ round: 1, lastSeq: 0, weaknesses: [] });
+
+// 任意 severity・resolution の weakness を 1 件持つ台帳を作るヘルパー（新ゲートのテスト用）。
+function ledgerWith(
+  severity: "major" | "minor" | "preference",
+  opts: { status?: "open" | "partial" | "resolved"; resolution?: string } = {}
+): string {
+  return JSON.stringify({
+    round: 1,
+    lastSeq: 1,
+    weaknesses: [
+      {
+        severity,
+        location: "L",
+        problem: "P",
+        recommendation: "R",
+        id: `W001-${severity}`,
+        hash: "deadbeef",
+        status: opts.status ?? "open",
+        firstRound: 1,
+        lastRound: 1,
+        ...(opts.resolution ? { resolution: opts.resolution } : {}),
+      },
+    ],
+  });
 }
 
 describe("verifyArtifacts", () => {
@@ -71,6 +108,71 @@ describe("verifyArtifacts", () => {
     const r = await verifyArtifacts(store, runId);
     expect(r.ok).toBe(true);
     expect(r.errors).toEqual([]);
+  });
+
+  describe("editorial-ledger gate", () => {
+    it("fails when editorial-review=done but editorial-ledger.json is missing", async () => {
+      const store = await newStore();
+      const runId = "2026-06-22-no-ledger";
+      await seedComplete(store, runId, { ledger: null });
+      const r = await verifyArtifacts(store, runId);
+      expect(r.ok).toBe(false);
+      expect(r.errors.join("\n")).toMatch(/editorial-ledger\.json がありません/);
+    });
+
+    it("fails when a major weakness is unresolved (open, no resolution)", async () => {
+      const store = await newStore();
+      const runId = "2026-06-22-major-open";
+      await seedComplete(store, runId);
+      await store.save(runId, "editorial-ledger.json", ledgerWith("major"));
+      const r = await verifyArtifacts(store, runId);
+      expect(r.ok).toBe(false);
+      expect(r.errors.join("\n")).toMatch(/未確定の weakness/);
+      expect(r.errors.join("\n")).toMatch(/W001-major\(major\/unresolved\)/);
+    });
+
+    it("fails when a major weakness is escalated (judged but not user-approved)", async () => {
+      const store = await newStore();
+      const runId = "2026-06-22-major-escalated";
+      await seedComplete(store, runId);
+      await store.save(runId, "editorial-ledger.json", ledgerWith("major", { resolution: "escalated" }));
+      const r = await verifyArtifacts(store, runId);
+      expect(r.ok).toBe(false);
+      expect(r.errors.join("\n")).toMatch(/W001-major\(major\/escalated\)/);
+    });
+
+    it("passes once the escalated weakness is user-approved", async () => {
+      const store = await newStore();
+      const runId = "2026-06-22-major-approved";
+      await seedComplete(store, runId);
+      await store.save(runId, "editorial-ledger.json", ledgerWith("major", { resolution: "user-approved" }));
+      const r = await verifyArtifacts(store, runId);
+      expect(r.ok).toBe(true);
+      expect(r.errors).toEqual([]);
+    });
+
+    it("passes (accepted) and (waived) resolutions", async () => {
+      const store = await newStore();
+      for (const resolution of ["accepted", "waived"]) {
+        const runId = `2026-06-22-${resolution}`;
+        await seedComplete(store, runId);
+        await store.save(runId, "editorial-ledger.json", ledgerWith("minor", { resolution }));
+        const r = await verifyArtifacts(store, runId);
+        expect(r.ok).toBe(true);
+        expect(r.errors).toEqual([]);
+      }
+    });
+
+    it("treats an unresolved preference as a warning, not a blocker", async () => {
+      const store = await newStore();
+      const runId = "2026-06-22-pref-open";
+      await seedComplete(store, runId);
+      await store.save(runId, "editorial-ledger.json", ledgerWith("preference"));
+      const r = await verifyArtifacts(store, runId);
+      expect(r.ok).toBe(true);
+      expect(r.errors).toEqual([]);
+      expect(r.warnings.join("\n")).toMatch(/未確定の preference/);
+    });
   });
 
   // 構文/型チェック既定オフ（作成時に --code-check 非指定）の run は build-verify 宣言を要求しない。

@@ -5,6 +5,7 @@ import { gateState, hasSkipReason, parseGoNoGo } from "./publicationCheck";
 import { SOURCES_BEGIN, SOURCES_END } from "./references";
 import { RunProgress } from "../progress/RunProgress";
 import { aggregate } from "../progress/aggregate";
+import { collectUnsettledWeaknesses } from "../workflows/editorialReview";
 
 // 公開前ゲート: 成果物の揃い・スキーマ・blocking を機械的にチェックする（外部通信なし）。
 // 各検証の中身は再判定しない（factcheck/build/editorial の判断は各担当に委ねる）。
@@ -115,10 +116,34 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
   }
 
   const editorialReview = await readOrNull(store, runId, "editorial-review.md");
+  // checkGate の done は同期コールバックのため、台帳集計は事前に await して渡す。
+  // skip 宣言の run は done 経路に入らない＝台帳なしでも素通り（既存の skip 運用を壊さない）。
+  const editorialGate = await collectUnsettledWeaknesses(store, runId);
   checkGate(pc, "editorial-review", errors, {
     done: () => {
       if (editorialReview === null) {
         errors.push("editorial-review=done ですが editorial-review.md がありません。");
+        return;
+      }
+      // editorial-review=done を宣言した以上、採否を記録する台帳も必須にする。
+      if (!editorialGate.hasLedger) {
+        errors.push("editorial-review=done ですが editorial-ledger.json がありません。");
+        return;
+      }
+      // major/minor の未確定（未解決 or 上申中）は公開ブロック。preference は warning のみ。
+      const blocking = [...editorialGate.major, ...editorialGate.minor];
+      if (blocking.length > 0) {
+        const list = blocking.map((w) => `${w.id}(${w.severity}/${w.reason})`).join(", ");
+        errors.push(
+          `editorial-ledger に未確定の weakness が ${blocking.length} 件あります` +
+            `（unresolved は article:editorial-resolve で採否を、escalated はユーザー承認後に` +
+            ` --resolution user-approved で確定してください）: ${list}`
+        );
+      }
+      if (editorialGate.preference.length > 0) {
+        warnings.push(
+          `editorial-ledger に未確定の preference が ${editorialGate.preference.length} 件あります（任意・waived 推奨）。`
+        );
       }
     },
   });
