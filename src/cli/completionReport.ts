@@ -12,6 +12,7 @@ import {
   type GateState,
 } from "./publicationCheck";
 import { AUTO_BEGIN, AUTO_END, mergeMarkered, type MergeResult } from "./markerMerge";
+import { collectUnsettledWeaknesses, type EditorialGateInput } from "../workflows/editorialReview";
 
 // 完成報告（runs/<id>/completion-report.md）の生成。
 // - 機械由来（ゲート結果・コスト・GO/NO-GO 転記）はコードが <!-- auto:begin/end --> 内に書く。
@@ -40,6 +41,8 @@ export type CompletionReportData = {
   // 構文/型チェックの実施対象か（作成時に固定）。false＝対象外（既定オフ）、true＝対象、undefined＝旧 run（未刻印）。
   codeCheckRequested?: boolean;
   editorial: GateInfo;
+  // editorial-ledger の未確定（未解決 or 上申中）集計。GO/NO-GO 転記とは別軸の machine gate として表示する。
+  editorialGate: EditorialGateInput;
   // verify-artifacts は publication-check に状態が出ない（exit code を読めない）ため、progress
   // snapshot の最新イベント由来で表示する。未実施なら status="pending"。
   verifyArtifacts: { status: ProgressStepStatus; note?: string };
@@ -161,6 +164,7 @@ export async function collectCompletionReportData(
     buildVerify: { state: gateState(pc, "build-verify"), summary: parseGateSummary(pc, "build-verify") },
     codeCheckRequested: snapshot.codeCheck,
     editorial: { state: gateState(pc, "editorial-review"), summary: parseGateSummary(pc, "editorial-review") },
+    editorialGate: await collectUnsettledWeaknesses(store, runId),
     verifyArtifacts: { status: verifyEvent?.status ?? "pending", note: verifyEvent?.note },
     // export イベントが無ければ「未実行」として null（completion-report は既定で export 前に生成される）。
     exported: exportEvent
@@ -199,6 +203,37 @@ function joinParts(parts: (string | undefined)[]): string {
   return parts.filter((p) => p !== undefined && p !== "").join(" / ");
 }
 
+// editorial-ledger の未確定（未解決 or 上申中）を機械集計したゲート結果。
+// publication-check 由来の GO/NO-GO は転記が正本のため、これは「別軸の machine gate」として併記する
+// （GO を黙って NO-GO に上書きしない）。major/minor の未確定があれば BLOCK。
+function editorialMachineGate(
+  gate: EditorialGateInput,
+  editorialState: GateState
+): { ok: boolean; label: string; detail?: string } {
+  if (!gate.hasLedger) {
+    // editorial-review=done を宣言しているのに台帳が無いのは verify-artifacts と同じく BLOCK。
+    // skip/未宣言の run は台帳なしが正常なので n/a。
+    if (editorialState === "done") {
+      return { ok: false, label: "BLOCK（editorial-ledger.json なし）" };
+    }
+    return { ok: true, label: "n/a（台帳なし）" };
+  }
+  const blocking = [...gate.major, ...gate.minor];
+  const counts = joinParts([
+    gate.major.length ? `major ${gate.major.length}` : undefined,
+    gate.minor.length ? `minor ${gate.minor.length}` : undefined,
+    gate.preference.length ? `preference ${gate.preference.length}` : undefined,
+  ]);
+  if (blocking.length > 0) {
+    const ids = blocking.map((w) => `${w.id}(${w.severity}/${w.reason})`).join(", ");
+    return { ok: false, label: `BLOCK（未確定 ${counts}）`, detail: ids };
+  }
+  if (gate.preference.length > 0) {
+    return { ok: true, label: `OK（preference ${gate.preference.length} 件は warn）` };
+  }
+  return { ok: true, label: "OK（未確定 0）" };
+}
+
 // 機械由来セクション（<!-- auto:begin/end --> を含む見出し直下のヘッダ＋ゲート表）。
 function renderAutoSection(data: CompletionReportData): string {
   const cost =
@@ -234,7 +269,13 @@ function renderAutoSection(data: CompletionReportData): string {
           : undefined,
       ]);
   const buildVerifyStateLabel = buildVerifyOptedOut ? "対象外" : gateStateLabel(data.buildVerify.state);
-  const editorialSummary = joinParts([data.editorial.summary, data.reviewerModel]);
+  const machineGate = editorialMachineGate(data.editorialGate, data.editorial.state);
+  // 未確定があれば editorial 行にも併記（要 editorial-resolve を読み手に促す）。
+  const editorialSummary = joinParts([
+    data.editorial.summary,
+    machineGate.ok ? undefined : `machine gate: ${machineGate.label} — 要 editorial-resolve`,
+    data.reviewerModel,
+  ]);
   const claimsState = data.claims ? `claims.json あり` : `claims.json なし`;
   const claimsSummary = data.claims
     ? `claims ${data.claims.total} / sources ${data.claims.sources} / blocking ${data.claims.blocking}`
@@ -254,6 +295,11 @@ function renderAutoSection(data: CompletionReportData): string {
     `- 概算コスト合計: ${cost}`,
     `- GO/NO-GO: ${data.goNoGo ?? "（publication-check 未記入）"}`,
     `- reason: ${data.reason ?? "（publication-check 未記入）"}`,
+    // GO/NO-GO は publication-check 転記が正本。machine gate は editorial-ledger の機械集計を別軸で併記する
+    // （両者が食い違う＝転記 GO だが未確定あり、のときに編集長へ publication-check 更新を促すため）。
+    `- machine gate（editorial）: ${escapeCell(machineGate.label)}${
+      machineGate.detail ? `（${escapeCell(machineGate.detail)}）` : ""
+    }`,
     `- export: ${escapeCell(exportLabel(data.exported))}`,
     "",
     "## ゲート結果",

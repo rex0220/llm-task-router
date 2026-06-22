@@ -515,9 +515,66 @@ export async function resolveWeakness(
   return { runId, id, resolution, severity: entry.severity };
 }
 
+// --- 未確定（公開ゲート）判定 ---
+// 述語を 1 箇所に集約し、countUnresolved / collectUnsettledWeaknesses で共有する（定義のドリフト防止）。
+
+type WeaknessDecision = { status: WeaknessStatus; resolution?: WeaknessResolution };
+
+// 未解決: open/partial かつ編集長の採否が未設定。
+function isUnresolved(w: WeaknessDecision): boolean {
+  return (w.status === "open" || w.status === "partial") && w.resolution === undefined;
+}
+// 上申中: ユーザー承認前（user-approved への打ち直し待ち）。判断済みだが公開承認済みではない。
+// ただし status==="resolved"（reviewer 側で解消済み）は settled。continuation レビューで
+// resolved に変わっても古い resolution="escalated" は applyTracked が残すため、status で除外する。
+function isEscalated(w: WeaknessDecision): boolean {
+  return w.status !== "resolved" && w.resolution === "escalated";
+}
+// 公開を止めるべき「未確定」= 未解決 または 上申中。
+// 公開可（settled）= status="resolved"、または resolution ∈ {accepted, waived, user-approved}。
+function isUnsettled(w: WeaknessDecision): boolean {
+  return isUnresolved(w) || isEscalated(w);
+}
+
 // 未解決の weakness 数（open/partial かつ編集長の採否が未設定）。preference は除外可。
 export function countUnresolved(weaknesses: { status: WeaknessStatus; severity: WeaknessSeverity; resolution?: WeaknessResolution }[]): number {
-  return weaknesses.filter(
-    (w) => (w.status === "open" || w.status === "partial") && w.resolution === undefined
-  ).length;
+  return weaknesses.filter(isUnresolved).length;
+}
+
+export type UnsettledWeakness = {
+  id: string;
+  severity: WeaknessSeverity;
+  status: WeaknessStatus;
+  reason: "unresolved" | "escalated";
+  problem: string;
+};
+
+// 公開ゲート入力: 台帳の有無と、未確定 weakness を severity 別に分けたもの。
+export type EditorialGateInput = {
+  hasLedger: boolean;
+  major: UnsettledWeakness[];
+  minor: UnsettledWeakness[];
+  preference: UnsettledWeakness[];
+};
+
+// 台帳を読み、未確定（未解決 or 上申中）を severity 別に集計する。
+// 台帳が無ければ hasLedger=false（編集レビュー未実施 run。呼び出し側で done 宣言時は必須化する）。
+export async function collectUnsettledWeaknesses(
+  store: RunStore,
+  runId: string
+): Promise<EditorialGateInput> {
+  const ledger = await readLedger(store, runId);
+  const out: EditorialGateInput = { hasLedger: ledger !== null, major: [], minor: [], preference: [] };
+  if (!ledger) return out;
+  for (const w of ledger.weaknesses) {
+    if (!isUnsettled(w)) continue;
+    out[w.severity].push({
+      id: w.id,
+      severity: w.severity,
+      status: w.status,
+      reason: isEscalated(w) ? "escalated" : "unresolved",
+      problem: w.problem,
+    });
+  }
+  return out;
 }
