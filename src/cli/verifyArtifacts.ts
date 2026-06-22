@@ -38,9 +38,9 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
   if (finalMd === null) {
     errors.push("final.md が存在しません。");
   } else {
-    // Phase 2（非ブロック）: 強調 **…** のレンダリング不備を warning で可視化する。
-    // error 化（公開ブロック）は Phase 3。検出ロジックは src/utils/text.ts。
-    warnings.push(...strongEmphasisWarnings(finalMd, { label: "final.md" }));
+    // Phase 3（公開ブロック）: 強調 **…** のレンダリング不備は error（ok=false）。
+    // export 直前ゲート（exportFinalArticle）と対称に、公開前ゲートでも弾く。検出は src/utils/text.ts。
+    errors.push(...strongEmphasisWarnings(finalMd, { label: "final.md" }));
   }
   if ((await readOrNull(store, runId, "final-review.md")) === null) {
     errors.push("final-review.md が存在しません。");

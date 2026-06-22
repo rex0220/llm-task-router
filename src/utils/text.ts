@@ -84,6 +84,10 @@ export type EmphasisLintIssue = {
   excerpt: string; // 該当行（前後を ** 含めて抜粋）
 };
 
+// 強調 lint ルールセットの版。対象パターン定義（フランキング判定・約物分類等）を変えたら上げる。
+// 監査スタンプ（markdown-lint-stamp.json）に焼き込み、どのルールで通したかを後から追えるようにする。
+export const STRONG_EMPHASIS_RULE_VERSION = "strong-emphasis-v1";
+
 // lint 対象外の領域（コードフェンス内の各行・インラインコードスパン・エスケープ `\x`）を
 // 同じ長さの 'A'（other 扱い）で潰す。行数・桁位置は保存するので line/column が原文と一致する。
 function maskNonEmphasis(markdown: string): string {

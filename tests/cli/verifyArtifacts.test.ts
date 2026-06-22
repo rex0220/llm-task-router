@@ -110,16 +110,15 @@ describe("verifyArtifacts", () => {
     expect(r.errors).toEqual([]);
   });
 
-  // Phase 2: 強調 **…** の崩れは warning（非ブロック）。error 化は Phase 3。
-  it("warns (non-blocking) when final.md has broken strong emphasis", async () => {
+  // Phase 3: 強調 **…** の崩れは error（公開ブロック）。
+  it("fails (blocking) when final.md has broken strong emphasis", async () => {
     const store = await newStore();
     const runId = "2026-06-20-emphasis";
     await seedComplete(store, runId);
     await store.save(runId, "final.md", "# T\n小惑星は、**「太陽系の化石」**のような存在です。\n");
     const r = await verifyArtifacts(store, runId);
-    expect(r.ok).toBe(true); // 非ブロック（errors には積まない）
-    expect(r.errors).toEqual([]);
-    expect(r.warnings.some((w) => w.includes("強調がレンダリングされない") && w.includes("L2"))).toBe(true);
+    expect(r.ok).toBe(false); // 公開ブロック
+    expect(r.errors.some((e) => e.includes("強調がレンダリングされない") && e.includes("L2"))).toBe(true);
   });
 
   describe("editorial-ledger gate", () => {

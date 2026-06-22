@@ -379,6 +379,53 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
   );
 
   it(
+    "article:export blocks broken strong emphasis; --allow-broken-markdown needs --note; --force does not bypass it",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "export-emphasis-e2e-"));
+      const runId = "2026-06-22-export-emphasis";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      await store.save(runId, "final.md", "# タイトル\n小惑星は、**「太陽系の化石」**のような存在です。\n");
+      const out = join(cwd, "out.md");
+
+      // cwd=temp で実行し、非ゼロ終了を期待するヘルパー（RunStore() は cwd/runs を見る）。
+      const expectExportFail = (args: string[]): void => {
+        try {
+          execFileSync(process.execPath, [bin, "article:export", "--run", runId, "--out", out, ...args], {
+            cwd,
+            encoding: "utf8",
+            timeout: E2E_TIMEOUT,
+          });
+          throw new Error("expected a non-zero exit");
+        } catch (error) {
+          expect((error as { status?: number }).status).not.toBe(0);
+        }
+      };
+
+      // 既定: 崩れていると失敗（書き出さない）。
+      expectExportFail([]);
+      expect(existsSync(out)).toBe(false);
+
+      // --force（上書き）だけでは lint を回避できない。
+      expectExportFail(["--force"]);
+      expect(existsSync(out)).toBe(false);
+
+      // --allow-broken-markdown 単独（--note なし）は CLI 層で検証エラー。
+      expectExportFail(["--allow-broken-markdown"]);
+      expect(existsSync(out)).toBe(false);
+
+      // --allow-broken-markdown + --note なら書き出せる。
+      execFileSync(
+        process.execPath,
+        [bin, "article:export", "--run", runId, "--out", out, "--allow-broken-markdown", "--note", "既知の崩れを明示承認"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+      expect(existsSync(out)).toBe(true);
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
     "article:record-publication --help shows --article-version (not the reserved --version)",
     () => {
       const out = run(["article:record-publication", "--help"]);
