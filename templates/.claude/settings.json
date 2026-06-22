@@ -23,7 +23,24 @@
       "Bash(llm-task-router article:export:*)",
       "Bash(llm-task-router article:record-publication:*)",
       "Bash(llm-task-router --help)",
-      "Bash(llm-task-router -v)"
+      "Bash(llm-task-router -v)",
+      "WebSearch",
+      "WebFetch"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/auto-approve-llm-task-router.mjs\"",
+            "statusMessage": "記事ワークフローのコマンドを判定中"
+          }
+        ]
+      }
     ]
   }
 }

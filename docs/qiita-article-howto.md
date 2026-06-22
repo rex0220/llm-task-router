@@ -14,6 +14,18 @@ llm-task-router を使って Qiita 記事を「作成 → 評価 → 修正 → 
 - Node.js >= 20（`node --version` で確認）
 - OpenAI / Anthropic の API キー
 
+### 0.1 Claude Code の承認プロンプト（init が設定済み）
+
+オペレーターを Claude Code で回す場合の承認プロンプト軽減は、**`llm-task-router init` が記事フォルダーに展開する `.claude/` に同梱済み**（手順 2 参照）。中身は:
+
+- `.claude/settings.json` … 記事ワークフローの `llm-task-router article:*`（`export` / `record-publication` を含む）と `WebSearch` / `WebFetch`（裏取り用・全ドメイン）を allow。
+- `.claude/hooks/auto-approve-llm-task-router.mjs` … 別ディレクトリから `bash -c 'cd "<記事フォルダー>" && llm-task-router article:...'` の形で実行されると先頭が `bash` になり前方一致 allowlist が効かないため、**コマンド全文を見て自動承認する** PreToolUse フック（`settings.json` に登録済み）。
+- `.claude/agents/`・`.claude/commands/`・`CLAUDE.md` … 編集長／factchecker／build-verifier と各スラッシュコマンド。
+
+公開（`article:export`）も自動承認に含めているが、**公開ゲートは編集長の GO/NO-GO ＋ ユーザー承認（会話レベル）で担保**する設計（CLAUDE.md「自走で公開しない」）。権限プロンプトでは止めない。
+
+> テンプレートを更新したら、記事フォルダーで `llm-task-router init --force` を再実行すると `.claude/` が上書き展開される（`--force` 無しでは既存ファイルを上書きしない）。設定変更が効かない場合は Claude Code で `/hooks` を開く（リロード）か再起動。
+
 ---
 
 ## 1. llm-task-router をグローバルインストール
