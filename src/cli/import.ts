@@ -115,6 +115,9 @@ export async function importArticle(store: RunStore, options: ImportArticleOptio
       await store.remove(runId, file);
     }
     await removeRoundArtifacts(store, runId); // refine-r<N>-* / editorial-r<N>-* を上限仮定なしで掃除
+    // 進捗台帳もリセットする。残すと aggregate の first-write-wins で旧 run の codeCheck / editorModel が
+    // 引き継がれ、--force --code-check の指定が効かない（build-verify の対象/対象外が旧値に固定される）。
+    await new RunProgress(store).reset(runId);
   }
 
   // meta を create と同経路で生成 → 全 step done ＋ imported を立てる（手書き meta を避ける核心）。
@@ -174,7 +177,7 @@ export async function importArticle(store: RunStore, options: ImportArticleOptio
 
   // 構文/型チェックの実施対象を import 時に固定（create の --code-check と対称・first-write-wins）。
   // 更新フロー（/update-article）の起点でも、create 系と同じく既定オフ＝対象外を既定にする。
-  // ※ --force 再 import では既存 events.jsonl が残るため、最初の import で刻んだ値が first-write-wins で優先される。
+  // --force 置き換え時は上で台帳をリセット済みなので、この import イベントが最古＝first-write-wins の基準になる。
   const progress = new RunProgress(store, options.toolVersion);
   await progress.append(runId, { step: "import", status: "done", task: "import", codeCheck: options.codeCheck === true });
   await progress.regenerate(runId);

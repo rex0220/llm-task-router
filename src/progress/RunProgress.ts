@@ -1,4 +1,4 @@
-import { mkdir, appendFile, writeFile, readFile, stat } from "node:fs/promises";
+import { mkdir, appendFile, writeFile, readFile, stat, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { RunStore } from "../storage/RunStore";
 import type { ProgressEvent, ProgressSnapshot } from "./types";
@@ -31,6 +31,15 @@ export class RunProgress {
   }
   private mdPath(runId: string): string {
     return join(this.store.runPath(runId), MD_FILE);
+  }
+
+  // 進捗台帳（正本 events.jsonl と派生 json/md）を丸ごと削除する。
+  // run を作り直すとき（import --force の置き換え）に、旧版の進捗履歴を残さないために使う。
+  // 残すと aggregate の first-write-wins（editorModel / codeCheck）が旧値を引き継いでしまう。
+  async reset(runId: string): Promise<void> {
+    await rm(this.eventsPath(runId), { force: true });
+    await rm(this.jsonPath(runId), { force: true });
+    await rm(this.mdPath(runId), { force: true });
   }
 
   // 1イベント追記（append-only なので並行でも行が壊れにくい）。

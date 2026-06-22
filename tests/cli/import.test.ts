@@ -64,6 +64,22 @@ describe("importArticle", () => {
     expect(snap.steps.find((s) => s.step === "build-verify")?.status).toBe("pending");
   });
 
+  it("resets the progress ledger on --force re-import so a new --code-check takes effect (no stale first-write-wins)", async () => {
+    const store = await newStore();
+    const from = await writeArticle("# T\n本文\n");
+    const { runId } = await importArticle(store, { from, profile: "qiita" }); // codeCheck=false（既定オフ）
+    expect((await new RunProgress(store).readSnapshot(runId)).codeCheck).toBe(false);
+
+    // --force で再 import。今度は --code-check ありで、旧 codeCheck=false に引きずられないこと。
+    await importArticle(store, { from, runId, profile: "qiita", codeCheck: true, force: true });
+    const snap = await new RunProgress(store).readSnapshot(runId);
+    expect(snap.codeCheck).toBe(true);
+    expect(snap.steps.find((s) => s.step === "build-verify")?.status).toBe("pending");
+    // 旧 import イベントが残っていないこと（import 工程は1件だけ）。
+    const events = await new RunProgress(store).readEvents(runId);
+    expect(events.filter((e) => e.step === "import").length).toBe(1);
+  });
+
   it("saves the brush-up brief as brushup-criteria.md", async () => {
     const store = await newStore();
     const from = await writeArticle("# T\n本文\n");
