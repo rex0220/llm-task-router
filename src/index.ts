@@ -1300,28 +1300,28 @@ program
     }
   });
 
-// 実 fetcher: HEAD（redirect follow）→ 405/501 は GET で再試行。到達不能/タイムアウトは error。
+// 実 fetcher: まず HEAD（redirect follow）。HEAD が 2xx 以外（error 含む）なら GET で最終判定する。
+// HEAD だけ壊れていて GET は 200、というサイトは珍しくないので、dead(404/410) 確定は GET の結果のみに
+// 委ねる（「dead は誤爆させない」方針。dead は公開前ゲートを強く動かすため保守的に）。
 const realFetcher: Fetcher = async (url, { timeoutMs }): Promise<FetchOutcome> => {
   const headers = { "user-agent": "llm-task-router/sources-check" };
-  const once = async (method: "HEAD" | "GET"): Promise<number> => {
+  const attempt = async (method: "HEAD" | "GET"): Promise<FetchOutcome> => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       const res = await fetch(url, { method, redirect: "follow", signal: ctrl.signal, headers });
-      return res.status;
+      return { status: res.status };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
     } finally {
       clearTimeout(timer);
     }
   };
-  try {
-    let status = await once("HEAD");
-    if (status === 405 || status === 501) {
-      status = await once("GET"); // HEAD 非対応サーバは GET で再確認
-    }
-    return { status };
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
+  const head = await attempt("HEAD");
+  if ("status" in head && head.status >= 200 && head.status < 300) {
+    return head; // HEAD 2xx はそれで確定（GET を打たず省コスト）
   }
+  return attempt("GET"); // 非2xx / error は GET で最終判定（404/410 もここでのみ確定）
 };
 
 program

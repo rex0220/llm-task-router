@@ -281,6 +281,58 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
   );
 
   it(
+    "article:sources-check --only-cited stamps only sources cited by present&verified claims",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "sc-cited-"));
+      const runId = "2026-06-21-sc-cited";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      // S001 は cited（verified/present claim が参照）、S002 は uncited。
+      await store.save(
+        runId,
+        "claims.json",
+        JSON.stringify([
+          { id: "C001-aaaaaaaa", claim: "x", location: { heading: "## h", anchorHash: "aaaaaaaa" }, type: "general", status: "verified", lifecycle: "present", sourceIds: ["S001"], severity: "minor", note: "" },
+        ])
+      );
+      await store.save(
+        runId,
+        "sources.json",
+        JSON.stringify([
+          { id: "S001", url: "http://127.0.0.1:1/cited", title: "C", retrievedAt: "2026-06-20", sourceType: "primary", summary: "", cited: true },
+          { id: "S002", url: "http://127.0.0.1:1/uncited", title: "U", retrievedAt: "2026-06-20", sourceType: "secondary", summary: "", cited: false },
+        ])
+      );
+      await store.save(
+        runId,
+        "sources.raw.json",
+        JSON.stringify([
+          { key: "c", url: "http://127.0.0.1:1/cited", title: "C", retrievedAt: "2026-06-20", sourceType: "primary", summary: "" },
+          { key: "u", url: "http://127.0.0.1:1/uncited", title: "U", retrievedAt: "2026-06-20", sourceType: "secondary", summary: "" },
+        ])
+      );
+
+      execFileSync(
+        process.execPath,
+        [bin, "article:sources-check", "--run", runId, "--only-cited", "--timeout", "2000"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+
+      const updated = JSON.parse(readFileSync(join(cwd, "runs", runId, "sources.raw.json"), "utf8")) as {
+        key: string;
+        reachable?: string;
+        checkedAt?: string;
+      }[];
+      const cited = updated.find((s) => s.key === "c")!;
+      const uncited = updated.find((s) => s.key === "u")!;
+      expect(cited.reachable).toBe("unknown"); // cited だけ確認・stamp された
+      expect(uncited.reachable).toBeUndefined(); // uncited は触らない
+      expect(uncited.checkedAt).toBeUndefined();
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
     "article:references --help shows --run and --stdout",
     () => {
       const out = run(["article:references", "--help"]);
