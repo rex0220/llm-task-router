@@ -149,6 +149,7 @@ checkGate(pc, "editorial-review", errors, {
 - **GO/NO-GO の表示を2層にする**:
   - `publication-check GO/NO-GO`: 従来どおり publication-check.md から**そのまま転記**（正本）。
   - `machine gate（editorial）`: `OK` / `BLOCK（未確定 N 件）` を機械集計で別行に出す。両者が食い違う場合（転記=GO だが machine=BLOCK）は「**正本=publication-check、ただし machine gate が未確定を検出**」と明示し、編集長に publication-check 側の更新を促す。
+  - **台帳欠落も machine gate で検出**: `editorial-review` ゲートが `done` 宣言なのに台帳が無い場合は `BLOCK（editorial-ledger.json なし）`（verify-artifacts の §4-1 と挙動を揃える）。`skipped`/未宣言の run は台帳なしが正常なので `n/a`。
 - これにより「散文では判断済みだが台帳は未処理」という今回の齟齬が、**正本を書き換えずに**表面化する。どちらが正本か曖昧にならない。
 
 > 補足: 公開直前の硬いブロックは §4-1 の verify-artifacts に集約する（completion-report は NO-GO=差し戻し報告もあり得るため必須ブロックにしない、という既存方針 [同計画 §設計確定事項](./課題-対策-実装計画-completion-report.md) を尊重）。

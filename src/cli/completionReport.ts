@@ -206,8 +206,16 @@ function joinParts(parts: (string | undefined)[]): string {
 // editorial-ledger の未確定（未解決 or 上申中）を機械集計したゲート結果。
 // publication-check 由来の GO/NO-GO は転記が正本のため、これは「別軸の machine gate」として併記する
 // （GO を黙って NO-GO に上書きしない）。major/minor の未確定があれば BLOCK。
-function editorialMachineGate(gate: EditorialGateInput): { ok: boolean; label: string; detail?: string } {
+function editorialMachineGate(
+  gate: EditorialGateInput,
+  editorialState: GateState
+): { ok: boolean; label: string; detail?: string } {
   if (!gate.hasLedger) {
+    // editorial-review=done を宣言しているのに台帳が無いのは verify-artifacts と同じく BLOCK。
+    // skip/未宣言の run は台帳なしが正常なので n/a。
+    if (editorialState === "done") {
+      return { ok: false, label: "BLOCK（editorial-ledger.json なし）" };
+    }
     return { ok: true, label: "n/a（台帳なし）" };
   }
   const blocking = [...gate.major, ...gate.minor];
@@ -261,7 +269,7 @@ function renderAutoSection(data: CompletionReportData): string {
           : undefined,
       ]);
   const buildVerifyStateLabel = buildVerifyOptedOut ? "対象外" : gateStateLabel(data.buildVerify.state);
-  const machineGate = editorialMachineGate(data.editorialGate);
+  const machineGate = editorialMachineGate(data.editorialGate, data.editorial.state);
   // 未確定があれば editorial 行にも併記（要 editorial-resolve を読み手に促す）。
   const editorialSummary = joinParts([
     data.editorial.summary,

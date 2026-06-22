@@ -207,6 +207,20 @@ describe("renderCompletionReport", () => {
     expect(md).toMatch(/machine gate: BLOCK.*要 editorial-resolve/);
   });
 
+  it("BLOCKs in the machine gate when editorial-review=done but the ledger is missing (mirrors verify-artifacts)", () => {
+    const md = renderCompletionReport(
+      makeData({ editorial: { state: "done" }, editorialGate: { hasLedger: false, major: [], minor: [], preference: [] } })
+    );
+    expect(md).toContain("- machine gate（editorial）: BLOCK（editorial-ledger.json なし）");
+  });
+
+  it("keeps machine gate n/a when editorial-review is skipped and there is no ledger", () => {
+    const md = renderCompletionReport(
+      makeData({ editorial: { state: "skipped" }, editorialGate: { hasLedger: false, major: [], minor: [], preference: [] } })
+    );
+    expect(md).toContain("- machine gate（editorial）: n/a（台帳なし）");
+  });
+
   it("treats escalated as unsettled (BLOCK) in the machine gate", () => {
     const md = renderCompletionReport(
       makeData({
