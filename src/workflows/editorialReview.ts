@@ -525,8 +525,10 @@ function isUnresolved(w: WeaknessDecision): boolean {
   return (w.status === "open" || w.status === "partial") && w.resolution === undefined;
 }
 // 上申中: ユーザー承認前（user-approved への打ち直し待ち）。判断済みだが公開承認済みではない。
+// ただし status==="resolved"（reviewer 側で解消済み）は settled。continuation レビューで
+// resolved に変わっても古い resolution="escalated" は applyTracked が残すため、status で除外する。
 function isEscalated(w: WeaknessDecision): boolean {
-  return w.resolution === "escalated";
+  return w.status !== "resolved" && w.resolution === "escalated";
 }
 // 公開を止めるべき「未確定」= 未解決 または 上申中。
 // 公開可（settled）= status="resolved"、または resolution ∈ {accepted, waived, user-approved}。

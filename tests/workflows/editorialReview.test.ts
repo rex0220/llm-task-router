@@ -374,6 +374,32 @@ describe("collectUnsettledWeaknesses (publication gate input)", () => {
     expect(gate2.minor).toHaveLength(0);
   });
 
+  it("drops a previously-escalated weakness once a continuation review marks it resolved (status wins over stale resolution)", async () => {
+    const { store, runId } = await makeRun({ provider: "openai", model: "gpt" });
+    await runEditorialReview(routerReturning(REVIEW_JSON), store, runId);
+    const ledger = JSON.parse(await store.read(runId, "editorial-ledger.json")) as GateLedgerView;
+    const majorId = ledger.weaknesses.find((w) => w.severity === "major")!.id;
+    await resolveWeakness(store, runId, majorId, "escalated", "上申中");
+    // この時点では escalated＝未確定。
+    expect((await collectUnsettledWeaknesses(store, runId)).major).toHaveLength(1);
+
+    // 改稿して継続レビュー: reviewer が major を resolved として返す（resolution="escalated" は applyTracked が残す）。
+    await store.save(runId, "final.md", "# T\n\n改稿後の本文\n");
+    const contJson = JSON.stringify({
+      verdict: "publication-candidate",
+      scores: [{ axis: "構成", score: 9.5 }],
+      strengths: ["改善"],
+      trackedWeaknesses: [{ id: majorId, status: "resolved", evidence: "対応済み" }],
+      newWeaknesses: [],
+      summary: "ほぼ",
+    });
+    await runEditorialReview(routerReturning(contJson), store, runId, { mode: "continuation" });
+
+    // status="resolved" は settled。stale な resolution="escalated" が残っていても未確定にしない。
+    const gate = await collectUnsettledWeaknesses(store, runId);
+    expect(gate.major).toHaveLength(0);
+  });
+
   it("countUnresolved shares the predicate (open/partial & no resolution; escalated is NOT unresolved)", async () => {
     const { store, runId } = await makeRun({ provider: "openai", model: "gpt" });
     await runEditorialReview(routerReturning(REVIEW_JSON), store, runId);
