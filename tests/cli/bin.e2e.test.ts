@@ -388,18 +388,24 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
       await store.save(runId, "final.md", "# タイトル\n小惑星は、**「太陽系の化石」**のような存在です。\n");
       const out = join(cwd, "out.md");
 
-      // cwd=temp で実行し、非ゼロ終了を期待するヘルパー（RunStore() は cwd/runs を見る）。
+      // cwd=temp で実行し、非ゼロ終了（execFileSync が throw）を厳密に検証するヘルパー。
+      // 成功時は failed=false のまま assert で落ちる（sentinel を catch に混ぜない）。
       const expectExportFail = (args: string[]): void => {
+        let failed = false;
+        let status: number | undefined;
         try {
           execFileSync(process.execPath, [bin, "article:export", "--run", runId, "--out", out, ...args], {
             cwd,
             encoding: "utf8",
             timeout: E2E_TIMEOUT,
           });
-          throw new Error("expected a non-zero exit");
         } catch (error) {
-          expect((error as { status?: number }).status).not.toBe(0);
+          failed = true;
+          status = (error as { status?: number }).status;
         }
+        expect(failed).toBe(true);
+        expect(status).toBeTypeOf("number");
+        expect(status).not.toBe(0);
       };
 
       // 既定: 崩れていると失敗（書き出さない）。
@@ -414,13 +420,20 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
       expectExportFail(["--allow-broken-markdown"]);
       expect(existsSync(out)).toBe(false);
 
-      // --allow-broken-markdown + --note なら書き出せる。
+      // --allow-broken-markdown + --note なら書き出せ、note が progress event に載る。
       execFileSync(
         process.execPath,
         [bin, "article:export", "--run", runId, "--out", out, "--allow-broken-markdown", "--note", "既知の崩れを明示承認"],
         { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
       );
       expect(existsSync(out)).toBe(true);
+      const exportEvents = readFileSync(join(cwd, "runs", runId, "progress.events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { step: string; status: string; note?: string });
+      const exportEvent = exportEvents.find((e) => e.step === "export");
+      expect(exportEvent?.status).toBe("done");
+      expect(exportEvent?.note).toBe("既知の崩れを明示承認");
     },
     E2E_TIMEOUT
   );
