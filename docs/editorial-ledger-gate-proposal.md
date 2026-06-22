@@ -53,8 +53,10 @@ CLAUDE.md は「採否を決めたら `article:editorial-resolve` で `editorial
 function isUnresolved(w: { status: WeaknessStatus; resolution?: WeaknessResolution }): boolean {
   return (w.status === "open" || w.status === "partial") && w.resolution === undefined;
 }
-function isEscalated(w: { resolution?: WeaknessResolution }): boolean {
-  return w.resolution === "escalated";
+// status==="resolved"（reviewer 側で解消）は settled。continuation で resolved になっても
+// 古い resolution="escalated" を applyTracked が残すため、status で除外する。
+function isEscalated(w: { status: WeaknessStatus; resolution?: WeaknessResolution }): boolean {
+  return w.status !== "resolved" && w.resolution === "escalated";
 }
 // 公開を止めるべき「未確定」= 未解決 または 上申中。
 function isUnsettled(w: { status: WeaknessStatus; resolution?: WeaknessResolution }): boolean {
