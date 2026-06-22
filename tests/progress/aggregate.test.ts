@@ -307,4 +307,157 @@ describe("aggregate", () => {
       expect(step(snap, "build-verify").status).toBe("pending");
     });
   });
+
+  describe("post-completion log", () => {
+    // 全 canonical を done/skip にして完成させる最小イベント列（build-verify は skip）。
+    function completing(): ProgressEvent[] {
+      return [
+        ev({ step: "create", status: "done" }),
+        ev({ step: "refine", status: "done" }),
+        ev({ step: "direction", status: "done" }),
+        ev({ step: "factcheck", status: "done" }),
+        ev({ step: "build-verify", status: "skip", note: "n/a" }),
+        ev({ step: "editorial", status: "done" }),
+        ev({ step: "claims-normalize", status: "done" }),
+        ev({ step: "verify-artifacts", status: "done" }),
+        ev({ step: "export", status: "done" }), // ← これで完成
+      ];
+    }
+
+    it("sets completedAt at the first all-terminal event and leaves postCompletion undefined when nothing follows", () => {
+      const events = completing();
+      const snap = aggregate("r", events);
+      expect(snap.complete).toBe(true);
+      expect(snap.completedAt).toBe(events[events.length - 1].at); // export の at
+      expect(snap.postCompletion).toBeUndefined();
+    });
+
+    it("collects events after completion in chronological order", () => {
+      const events = [
+        ...completing(),
+        ev({ step: "revise", status: "done", costUsd: 0.46 }),
+        ev({ step: "factcheck", status: "done", note: "差分factcheck" }),
+        ev({ step: "export", status: "done", note: "第2版 再export" }),
+      ];
+      const completedAt = events[8].at; // 最初の export
+      const snap = aggregate("r", events);
+      expect(snap.completedAt).toBe(completedAt);
+      expect(snap.postCompletion?.map((e) => e.step)).toEqual(["revise", "factcheck", "export"]);
+      expect(snap.postCompletion?.[0].costUsd).toBe(0.46);
+    });
+
+    it("completes via the synthesized build-verify skip (codeCheck=false, no bv event)", () => {
+      const events = [
+        ev({ step: "create", status: "done", codeCheck: false }),
+        ev({ step: "refine", status: "done" }),
+        ev({ step: "direction", status: "done" }),
+        ev({ step: "factcheck", status: "done" }),
+        ev({ step: "editorial", status: "done" }),
+        ev({ step: "claims-normalize", status: "done" }),
+        ev({ step: "verify-artifacts", status: "done" }),
+        ev({ step: "export", status: "done" }),
+      ];
+      const snap = aggregate("r", events);
+      expect(snap.complete).toBe(true);
+      expect(snap.completedAt).toBe(events[events.length - 1].at); // export で全 terminal
+      expect(snap.postCompletion).toBeUndefined();
+    });
+
+    it("delays completion to a manual build-verify recorded after export (findings #2)", () => {
+      const events = [
+        ev({ step: "create", status: "done", codeCheck: false }),
+        ev({ step: "refine", status: "done" }),
+        ev({ step: "direction", status: "done" }),
+        ev({ step: "factcheck", status: "done" }),
+        ev({ step: "editorial", status: "done" }),
+        ev({ step: "claims-normalize", status: "done" }),
+        ev({ step: "verify-artifacts", status: "done" }),
+        ev({ step: "export", status: "done", note: "先に export" }),
+        ev({ step: "revise", status: "done", note: "export 後 revise" }),
+        ev({ step: "build-verify", status: "done", note: "手動 build-verify" }), // ← 完成はここ
+      ];
+      const snap = aggregate("r", events);
+      // build-verify 実イベントを完成条件に含めるので completedAt は手動 bv まで遅れる。
+      expect(snap.completedAt).toBe(events[9].at);
+      // export 後・bv 前の revise は完成後ログに入らない。
+      expect(snap.postCompletion).toBeUndefined();
+    });
+
+    it("preserves tokens and the raw step name (evaluate→refine) in post-completion entries", () => {
+      const events = [
+        ...completing(),
+        ev({ step: "evaluate", status: "done", inputTokens: 30134, outputTokens: 25901 }),
+      ];
+      const snap = aggregate("r", events);
+      const entry = snap.postCompletion?.[0];
+      expect(entry?.step).toBe("evaluate"); // raw を保つ
+      expect(entry?.canonicalStep).toBe("refine"); // 畳み先
+      expect(entry?.label).toBe("評価・改稿（refine / evaluate）");
+      expect(entry?.inputTokens).toBe(30134);
+      expect(entry?.outputTokens).toBe(25901);
+    });
+
+    it("leaves completedAt undefined for a run that never completed", () => {
+      const snap = aggregate("r", [ev({ step: "create", status: "done" }), ev({ step: "refine", status: "start" })]);
+      expect(snap.complete).toBe(false);
+      expect(snap.completedAt).toBeUndefined();
+      expect(snap.postCompletion).toBeUndefined();
+    });
+
+    it("fixes completedAt to the FIRST completion even after a second round completes again", () => {
+      const events = [
+        ...completing(),
+        ev({ step: "revise", status: "done" }),
+        ev({ step: "factcheck", status: "done" }), // canonical をやり直し
+        ev({ step: "verify-artifacts", status: "done" }),
+        ev({ step: "export", status: "done" }), // 再完成
+      ];
+      const firstCompletion = events[8].at;
+      const snap = aggregate("r", events);
+      expect(snap.completedAt).toBe(firstCompletion);
+      expect(snap.postCompletion?.length).toBe(4);
+    });
+
+    it("does NOT emit the section when the run momentarily completed then regressed (final not complete)", () => {
+      // build-verify は完成時 skip。後から error が来ると最終状態は error（error>skip）＝未完に戻る。
+      // （done は最高優先度なので done→error では退行しない。退行が起きるのは skip→error 等。）
+      const events = [
+        ...completing(),
+        ev({ step: "build-verify", status: "error", note: "手動で回したら FAIL" }),
+      ];
+      const snap = aggregate("r", events);
+      expect(step(snap, "build-verify").status).toBe("error");
+      expect(snap.complete).toBe(false); // 現在地は未完
+      expect(snap.completedAt).toBeUndefined();
+      expect(snap.postCompletion).toBeUndefined();
+    });
+
+    it("orders same-at events by input array order (tie-break)", () => {
+      const sameAt = "2026-06-22T05:00:00.000Z";
+      const base = completing();
+      // 完成後に同一 at の2イベント（revise, factcheck）を入力順 revise→factcheck で置く。
+      const events: ProgressEvent[] = [
+        ...base,
+        { at: sameAt, runId: "r", step: "revise", status: "done" },
+        { at: sameAt, runId: "r", step: "factcheck", status: "done" },
+      ];
+      const snap = aggregate("r", events);
+      expect(snap.postCompletion?.map((e) => e.step)).toEqual(["revise", "factcheck"]);
+    });
+
+    it("is idempotent: aggregating the same events twice yields equal completedAt/postCompletion", () => {
+      const events = [...completing(), ev({ step: "revise", status: "done" }), ev({ step: "export", status: "done" })];
+      const a = aggregate("r", events);
+      const b = aggregate("r", events);
+      expect(a.completedAt).toBe(b.completedAt);
+      expect(a.postCompletion).toEqual(b.postCompletion);
+    });
+
+    it("keeps both events when the same step is recorded twice post-completion (append-only honesty)", () => {
+      const events = [...completing(), ev({ step: "export", status: "done" }), ev({ step: "export", status: "done" })];
+      const snap = aggregate("r", events);
+      // 集約表は1行に畳むが、完成後ログには export が2件並ぶ。
+      expect(snap.postCompletion?.filter((e) => e.step === "export").length).toBe(2);
+    });
+  });
 });

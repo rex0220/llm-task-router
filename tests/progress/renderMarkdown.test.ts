@@ -158,6 +158,55 @@ describe("renderProgressMarkdown", () => {
     const md = renderProgressMarkdown(aggregate("r", [ev({ step: "create", status: "done" })]));
     expect(md).not.toContain("追加アクション");
   });
+
+  describe("post-completion log section", () => {
+    // 増加する at を振って完成→完成後の順序を作る。
+    let sec = 0;
+    function tick(over: Partial<ProgressEvent> & Pick<ProgressEvent, "step" | "status">): ProgressEvent {
+      sec += 1;
+      return { at: `2026-06-21T07:19:${String(sec).padStart(2, "0")}.000Z`, runId: "r", ...over };
+    }
+    function completing(): ProgressEvent[] {
+      return [
+        tick({ step: "create", status: "done" }),
+        tick({ step: "refine", status: "done" }),
+        tick({ step: "direction", status: "done" }),
+        tick({ step: "factcheck", status: "done" }),
+        tick({ step: "build-verify", status: "skip", note: "n/a" }),
+        tick({ step: "editorial", status: "done" }),
+        tick({ step: "claims-normalize", status: "done" }),
+        tick({ step: "verify-artifacts", status: "done" }),
+        tick({ step: "export", status: "done" }),
+      ];
+    }
+
+    it("renders the section with completion datetime, raw step, local time, and a tokens column", () => {
+      const snap = aggregate("r", [
+        ...completing(),
+        tick({ step: "evaluate", status: "done", inputTokens: 30134, outputTokens: 25901, note: "再評価" }),
+        tick({ step: "export", status: "done", note: "第2版 再export" }),
+      ]);
+      const md = renderProgressMarkdown(snap);
+      expect(md).toContain("## 完成後の変更ログ（時系列）");
+      expect(md).toContain("- 完成到達: 2026-06-21 16:19:09 +09:00"); // export(9秒) の完成時刻
+      expect(md).toContain("| 時刻 | 工程 | 状態 | 概算$ | トークン(in/out) | 補足 |");
+      expect(md).toContain("| 16:19:10 | evaluate | ✅ done |  | 30,134/25,901 | 再評価 |"); // raw step を保つ
+      expect(md).toContain("第2版 再export");
+    });
+
+    it("drops the tokens column when no post-completion event reports tokens", () => {
+      const snap = aggregate("r", [...completing(), tick({ step: "revise", status: "done", note: "微修正" })]);
+      const md = renderProgressMarkdown(snap);
+      expect(md).toContain("## 完成後の変更ログ（時系列）");
+      expect(md).toContain("| 時刻 | 工程 | 状態 | 概算$ | 補足 |");
+      expect(md).not.toMatch(/完成後[\s\S]*トークン\(in\/out\)/);
+    });
+
+    it("omits the section entirely when there is no post-completion activity", () => {
+      const md = renderProgressMarkdown(aggregate("r", completing()));
+      expect(md).not.toContain("完成後の変更ログ");
+    });
+  });
 });
 
 describe("local time formatters (TZ=Asia/Tokyo)", () => {

@@ -1,4 +1,4 @@
-import type { ProgressEvent, ProgressSnapshot, ProgressStep, ProgressStepStatus } from "./types";
+import type { PostCompletionEntry, ProgressEvent, ProgressSnapshot, ProgressStep, ProgressStepStatus } from "./types";
 import { QIITA_CANONICAL_STEPS, resolveCanonicalKey, type CanonicalStep } from "./stepOrder";
 
 // 状態の優先度（高いほど確定的）。同一工程に複数イベントが来たとき、最高優先度を最終状態とする。
@@ -174,6 +174,12 @@ export function aggregate(
   // run の開始時刻＝全イベントの at 最小（未ソート配列が来うるので min を取る）。
   const startedAt = events.length > 0 ? events.reduce((min, e) => (e.at < min ? e.at : min), events[0].at) : undefined;
 
+  // 完成（全 canonical が done/skip）後の編集経過。最終状態が complete のときだけ求める
+  // （瞬間的に完成→退行して現在 error 等の run では現在地と矛盾しないよう節を出さない）。
+  const { completedAt, postCompletion } = complete
+    ? computePostCompletion(events, canonicalKeys, labelOf, codeCheck)
+    : { completedAt: undefined, postCompletion: undefined };
+
   return {
     runId,
     steps,
@@ -188,10 +194,83 @@ export function aggregate(
     totalInputTokens,
     totalOutputTokens,
     startedAt,
+    completedAt,
+    postCompletion,
     updatedAt: new Date().toISOString(),
   };
 }
 
 function isTerminal(status: ProgressStepStatus): boolean {
   return status === "done" || status === "skip" || status === "error";
+}
+
+// 完成境界（全 canonical が初めて done/skip を満たした点）を求め、それより後ろのイベントを写像する。
+// events から決定的に計算する純関数（推定アンカーを持ち込まない）。呼び出し側で final complete を確認済み。
+function computePostCompletion(
+  events: ProgressEvent[],
+  canonicalKeys: Set<string>,
+  labelOf: Map<string, string>,
+  codeCheck: boolean | undefined
+): { completedAt?: string; postCompletion?: PostCompletionEntry[] } {
+  // at 昇順の安定ソート（同時刻は入力配列順を保つ＝tie-break は入力順）。
+  const sorted = events
+    .map((e, i) => ({ e, i }))
+    .sort((a, b) => (a.e.at === b.e.at ? a.i - b.i : a.e.at < b.e.at ? -1 : 1))
+    .map(({ e }) => e);
+
+  // build-verify 既定オフ（codeCheck=false）かつ実イベントなし → 最初から synthetic skip（terminal）。
+  // 実イベントが1件でもあれば synthetic は使わず、その status に従ってリプレイする（done/skip 到達で terminal）。
+  const hasBuildVerifyEvent = sorted.some((e) => resolveCanonicalKey(e.step) === "build-verify");
+  const statusByKey = new Map<string, ProgressStepStatus>();
+  for (const key of canonicalKeys) {
+    const syntheticSkip = key === "build-verify" && codeCheck === false && !hasBuildVerifyEvent;
+    statusByKey.set(key, syntheticSkip ? "skip" : "pending");
+  }
+
+  const allComplete = (): boolean =>
+    [...canonicalKeys].every((k) => {
+      const s = statusByKey.get(k)!;
+      return s === "done" || s === "skip";
+    });
+
+  let boundary = -1;
+  let completedAt: string | undefined;
+  for (let i = 0; i < sorted.length; i++) {
+    const key = resolveCanonicalKey(sorted[i].step);
+    if (canonicalKeys.has(key)) {
+      const cur = statusByKey.get(key)!;
+      const next = sorted[i].status;
+      // 集約と同じ優先度で単調更新（done>error>skip>start）。start/error だけでは terminal にしない。
+      if (STATUS_PRIORITY[next] >= STATUS_PRIORITY[cur]) {
+        statusByKey.set(key, next);
+      }
+    }
+    if (boundary === -1 && allComplete()) {
+      boundary = i;
+      completedAt = sorted[i].at;
+    }
+  }
+
+  if (boundary === -1) {
+    return { completedAt: undefined, postCompletion: undefined };
+  }
+
+  const post = sorted.slice(boundary + 1).map((e): PostCompletionEntry => {
+    const key = resolveCanonicalKey(e.step);
+    const canonicalStep = canonicalKeys.has(key) ? key : undefined;
+    return {
+      at: e.at,
+      step: e.step, // raw を保つ（evaluate / direction-check 等を畳まない）
+      canonicalStep,
+      label: (canonicalStep ? labelOf.get(canonicalStep) : undefined) ?? e.step,
+      status: e.status,
+      costUsd: e.costUsd,
+      inputTokens: e.inputTokens,
+      outputTokens: e.outputTokens,
+      note: e.note,
+      output: e.output,
+    };
+  });
+
+  return { completedAt, postCompletion: post.length > 0 ? post : undefined };
 }
