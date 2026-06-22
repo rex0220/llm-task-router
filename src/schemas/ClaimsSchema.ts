@@ -43,6 +43,8 @@ export const RawSourceSchema = z.object({
   summary: z.string().default(""),
   // 到達性。未記録は省略（default なし）。factchecker が死リンクに気づいたら "dead" を記録。
   reachable: z.enum(REACHABILITY).optional(),
+  // 最後に到達確認した日付（article:sources-check が stamp。retrievedAt と粒度を揃え日付）。
+  checkedAt: z.string().regex(DATE_RE).optional(),
   // 死リンクを置換した後継 source の raw key（normalize で SNNN へ解決する）。
   replacedByKey: z.string().min(1).optional(),
 });
@@ -98,6 +100,8 @@ export const SourceSchema = z.object({
   summary: z.string(),
   // 到達性。省略=旧run/未記録、"unknown"=確認したが不明（default を付けない）。
   reachable: z.enum(REACHABILITY).optional(),
+  // 最後に到達確認した日付（YYYY-MM-DD）。article:sources-check が stamp、normalize が伝播。
+  checkedAt: z.string().regex(DATE_RE).optional(),
   // 死リンクの後継 source id（normalize が replacedByKey から解決）。
   replacedBy: z.string().regex(SOURCE_ID_RE).optional(),
   // 参考章に出る（present かつ verified の claim が参照する）か。normalize が毎回再計算して焼き込む。

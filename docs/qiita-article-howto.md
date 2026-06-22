@@ -352,6 +352,7 @@ llm-task-router article:references --run 2026-06-18-ai-ir   # --stdout で生成
 - 参考章は `<!-- sources:begin/end -->` マーカーで管理し、再生成しても編集長の前後文を壊さない（初回の「名前のみ」リストは章本文ごと置換）。`final.md` は機械更新され、直前版は `final.references.bak.md` に退避（`revise` の `final.bak.md` とは別）。
 - 検証済み source が0件なら何も書かずエラー終了（公開前に0は異常なので気づける）。
 - **到達不能 URL の扱い**: factchecker は死リンクに `reachable:"dead"`＋`replacedByKey`（到達可能な代替の key）を `sources.raw.json` に記録し、`verified` claim は代替へ張り替える。normalize が `replacedBy` を解決し `cited` を焼き込む。`reachable:"dead"` は参考章に出ない（除外時は references が stderr に warn）。verify-artifacts が「cited かつ dead」「参考ブロック内の dead」「replacedBy の dangling/自己参照」「cited 焼き込みの claims 不一致」を弾く（HTTP 到達チェックは別途・verify-artifacts は通信しない）。
+- **（任意）到達性の機械ふるい**: `llm-task-router article:sources-check --run <id>` で `sources.raw.json` の URL を HTTP 確認し `reachable`/`checkedAt` を stamp（opt-in・外部通信）。`--dry-run`（非書き込み）/`--only-cited`（cited のみ）/`--json`。判定は保守的で **dead は 404/410 のみ**（5xx・401/403・通信エラーは unknown）。書き込み後は `article:claims-normalize` で `sources.json` に反映し、dead は代替へ張り替える。`verify-artifacts` は通信しないので、到達確認はこのコマンドに閉じる。
 
 2. 編集長が `runs/<id>/publication-check.md` にゲート実施チェックリストを書き出したら、公開前ゲートを機械チェックする：
 

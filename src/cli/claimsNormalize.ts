@@ -127,6 +127,7 @@ function mergeSource(ledger: ClaimsLedger, raw: RawSource): LedgerSource {
     existing.sourceType = raw.sourceType;
     existing.summary = raw.summary;
     existing.reachable = raw.reachable; // 未記録（undefined）なら省略へ戻す
+    existing.checkedAt = raw.checkedAt;
     existing.replacedBy = undefined; // 2パス目で再設定
     return existing;
   }
@@ -140,6 +141,7 @@ function mergeSource(ledger: ClaimsLedger, raw: RawSource): LedgerSource {
     sourceType: raw.sourceType,
     summary: raw.summary,
     reachable: raw.reachable,
+    checkedAt: raw.checkedAt,
     cited: false, // 後段で claims から再計算
   };
   ledger.sources.push(created);
@@ -280,9 +282,12 @@ function toPublicSource(s: LedgerSource): Source {
     summary: s.summary,
     cited: s.cited ?? false,
   };
-  // reachable / replacedBy は値があるときだけ出す（未記録は省略）。
+  // reachable / checkedAt / replacedBy は値があるときだけ出す（未記録は省略）。
   if (s.reachable !== undefined) {
     out.reachable = s.reachable;
+  }
+  if (s.checkedAt !== undefined) {
+    out.checkedAt = s.checkedAt;
   }
   if (s.replacedBy !== undefined) {
     out.replacedBy = s.replacedBy;
