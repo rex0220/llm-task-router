@@ -224,7 +224,12 @@ export function strongEmphasisWarnings(markdown: string, options: { label?: stri
   const where = options.label ? `${options.label} ` : "";
   return detectBrokenStrongEmphasis(markdown).map((issue) => {
     const what = issue.kind === "unopened" ? "開けない **" : "閉じられない **";
-    return `強調がレンダリングされない可能性: ${where}L${issue.line}:${issue.column}（${what}）。約物（「」（）“”等）を ** の外へ。`;
+    // 検出対象は CJK 約物だけでなく ASCII punctuation（+ % 等）も含むため、
+    // 修正案は約物に限定せず汎用に示す（「+ を外へ」のような意味を変える誘導を避ける）。
+    return (
+      `強調がレンダリングされない可能性: ${where}L${issue.line}:${issue.column}（${what}）。` +
+      `内端の句読点・記号で開閉できていません。句読点・記号を ** の外へ出す／強調範囲を調整する／閉じ ** の後に空白を入れる等で修正してください。`
+    );
   });
 }
 
