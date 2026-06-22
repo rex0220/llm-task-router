@@ -95,6 +95,43 @@ export function renderProgressMarkdown(snapshot: ProgressSnapshot): string {
     );
     lines.push("");
   }
+
+  // 完成後の変更ログ（完成＝全 canonical done/skip 到達より後ろのイベントを時系列で）。
+  // 集約表が完成後のやり直しを既存行に畳むため、生の時系列はこの節でしか追えない。
+  if (snapshot.postCompletion && snapshot.postCompletion.length > 0) {
+    lines.push("## 完成後の変更ログ（時系列）");
+    lines.push("");
+    lines.push("> 完成（全工程 done/skip 到達）後に記録されたイベント。正本は progress.events.jsonl。");
+    if (snapshot.completedAt !== undefined) {
+      lines.push(`- 完成到達: ${fmtDateTime(snapshot.completedAt)}`);
+    }
+    lines.push("");
+    // トークン列は完成後イベントに1件でもトークン記録があるときだけ出す（既存表の条件付き列に揃える）。
+    const showPostTokens = snapshot.postCompletion.some(
+      (e) => e.inputTokens !== undefined || e.outputTokens !== undefined
+    );
+    const pHead = ["時刻", "工程", "状態", "概算$", ...(showPostTokens ? ["トークン(in/out)"] : []), "補足"];
+    lines.push(`| ${pHead.join(" | ")} |`);
+    lines.push(`|${pHead.map(() => "---").join("|")}|`);
+    for (const e of snapshot.postCompletion) {
+      const cost = e.costUsd !== undefined ? `~$${e.costUsd.toFixed(4)}` : "";
+      const tokens =
+        e.inputTokens !== undefined || e.outputTokens !== undefined
+          ? `${fmtTokens(e.inputTokens ?? 0)}/${fmtTokens(e.outputTokens ?? 0)}`
+          : "";
+      const note = [e.output, e.note].filter((v) => v !== undefined && v !== "").join(" / ");
+      const cells = [
+        fmtTime(e.at),
+        e.step, // raw を表示（実操作の時系列ビュー）
+        STATUS_LABEL[e.status],
+        cost,
+        ...(showPostTokens ? [tokens] : []),
+        escapeCell(note),
+      ];
+      lines.push(`| ${cells.join(" | ")} |`);
+    }
+    lines.push("");
+  }
   return lines.join("\n");
 }
 

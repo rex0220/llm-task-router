@@ -45,6 +45,21 @@ export type ProgressStep = {
   model?: string;
 };
 
+// 完成（全 canonical が done/skip）後に記録された1イベントの写像。集約せず生の時系列で並べる。
+// 集約表（canonical 畳み）とは役割が異なり、実操作の時系列ビューとして step は raw を保つ。
+export type PostCompletionEntry = {
+  at: string; // ISO8601（UTC）。表示時にローカル HH:MM:SS へ
+  step: string; // 記録された生の操作名（evaluate / direction-check 等をそのまま保つ）
+  canonicalStep?: string; // resolveCanonicalKey(step) が canonical キーに解決されるとき、その畳み先。非 canonical は undefined
+  label: string; // 表示用ラベル。canonical なら canonical ラベル、非 canonical は step 名そのまま
+  status: ProgressEventStatus; // start/done/skip/error
+  costUsd?: number;
+  inputTokens?: number; // LLM 工程のみ。完成後のトークン内訳を新節で復元するため保持
+  outputTokens?: number;
+  note?: string;
+  output?: string;
+};
+
 export type ProgressSnapshot = {
   runId: string;
   steps: ProgressStep[];
@@ -59,5 +74,9 @@ export type ProgressSnapshot = {
   totalInputTokens?: number; // トークンが判明した工程のみ合算（LLM 工程のみ。無ければ undefined）
   totalOutputTokens?: number;
   startedAt?: string; // run の開始時刻（全イベントの at 最小。イベントが無ければ undefined）
+  // 完成（全 canonical が done/skip）に初めて到達した完成イベントの at。未完なら undefined。
+  completedAt?: string;
+  // 完成イベントより後ろに記録されたイベント（時系列）。完成後の編集経過。無ければ undefined。
+  postCompletion?: PostCompletionEntry[];
   updatedAt: string;
 };

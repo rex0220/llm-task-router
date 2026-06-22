@@ -53,6 +53,26 @@ describe("RunProgress", () => {
     expect(b.totalCostUsd).toBe(a.totalCostUsd);
   });
 
+  it("regenerates progress.md byte-identically (except the 更新 line) even with a post-completion log", async () => {
+    const { progress, root } = await newProgress();
+    // 完成させてから完成後イベントを足す（完成後の変更ログ節を含む md を作る）。
+    for (const step of ["create", "refine", "direction", "factcheck", "editorial", "claims-normalize", "verify-artifacts", "export"]) {
+      await progress.append(RUN, { step, status: "done" });
+    }
+    await progress.append(RUN, { step: "build-verify", status: "skip", note: "n/a" });
+    await progress.append(RUN, { step: "revise", status: "done", note: "完成後の手直し" });
+
+    const stripUpdated = (md: string) => md.replace(/^- 更新:.*$/m, "- 更新: <ts>");
+    await progress.regenerate(RUN);
+    const first = await readFile(join(root, RUN, "progress.md"), "utf8");
+    await progress.regenerate(RUN);
+    const second = await readFile(join(root, RUN, "progress.md"), "utf8");
+
+    expect(first).toContain("## 完成後の変更ログ（時系列）");
+    expect(first).toContain("完成後の手直し");
+    expect(stripUpdated(second)).toBe(stripUpdated(first));
+  });
+
   it("readSnapshot regenerates from events when progress.json is missing", async () => {
     const { progress, root } = await newProgress();
     await progress.append(RUN, { step: "create", status: "done" });
