@@ -197,6 +197,90 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
   );
 
   it(
+    "article:sources-check --help shows --dry-run/--only-cited/--json (not --stdout)",
+    () => {
+      const out = run(["article:sources-check", "--help"]);
+      expect(out).toContain("--dry-run");
+      expect(out).toContain("--only-cited");
+      expect(out).toContain("--json");
+      expect(out).not.toContain("--stdout");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:sources-check --dry-run classifies an unreachable URL as unknown without writing",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "sc-dry-"));
+      const runId = "2026-06-21-sc-dry";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      // 接続拒否で即 error → unknown（実通信だが localhost:1 で速い）。
+      const rawSources = JSON.stringify([
+        { key: "x", url: "http://127.0.0.1:1/gone", title: "X", retrievedAt: "2026-06-20", sourceType: "secondary", summary: "" },
+      ]);
+      await store.save(runId, "sources.raw.json", rawSources);
+
+      const out = execFileSync(
+        process.execPath,
+        [bin, "article:sources-check", "--run", runId, "--dry-run", "--json", "--timeout", "2000"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+      const parsed = JSON.parse(out) as { summary: { ok: number; dead: number; unknown: number }; dryRun: boolean };
+      expect(parsed.summary).toEqual({ ok: 0, dead: 0, unknown: 1 });
+      expect(parsed.dryRun).toBe(true);
+      // dry-run なので raw は不変（reachable/checkedAt は付かない）・progress も記録されない。
+      const after = JSON.parse(readFileSync(join(cwd, "runs", runId, "sources.raw.json"), "utf8")) as {
+        reachable?: string;
+        checkedAt?: string;
+      }[];
+      expect(after[0].reachable).toBeUndefined();
+      expect(after[0].checkedAt).toBeUndefined();
+      expect(existsSync(join(cwd, "runs", runId, "progress.events.jsonl"))).toBe(false);
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:sources-check writes reachable/checkedAt and records a progress event",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "sc-write-"));
+      const runId = "2026-06-21-sc-write";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      await store.save(
+        runId,
+        "sources.raw.json",
+        JSON.stringify([
+          { key: "x", url: "http://127.0.0.1:1/gone", title: "X", retrievedAt: "2026-06-20", sourceType: "secondary", summary: "" },
+        ])
+      );
+
+      execFileSync(
+        process.execPath,
+        [bin, "article:sources-check", "--run", runId, "--timeout", "2000"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+
+      const updated = JSON.parse(readFileSync(join(cwd, "runs", runId, "sources.raw.json"), "utf8")) as {
+        reachable?: string;
+        checkedAt?: string;
+      }[];
+      expect(updated[0].reachable).toBe("unknown");
+      expect(updated[0].checkedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+      const events = readFileSync(join(cwd, "runs", runId, "progress.events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { step: string; status: string; note?: string });
+      const ev = events.find((e) => e.step === "sources-check");
+      expect(ev?.status).toBe("done");
+      expect(ev?.note).toMatch(/unknown=1/);
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
     "article:references --help shows --run and --stdout",
     () => {
       const out = run(["article:references", "--help"]);

@@ -9,7 +9,22 @@ import { exportFinalArticle } from "./cli/export";
 import { importArticle } from "./cli/import";
 import { recordPublication } from "./cli/record-publication";
 import { writeUpdateDiff } from "./cli/updateDiff";
-import { normalizeClaims } from "./cli/claimsNormalize";
+import {
+  normalizeClaims,
+  collectCitedSourceIds,
+  urlHash,
+  RAW_SOURCES_FILE,
+  CLAIMS_FILE,
+  SOURCES_FILE,
+} from "./cli/claimsNormalize";
+import { ClaimsSchema, RawSourcesSchema, SourcesSchema } from "./schemas/ClaimsSchema";
+import {
+  checkSources,
+  applyReachabilityToRaw,
+  summarize,
+  type Fetcher,
+  type FetchOutcome,
+} from "./cli/sourcesCheck";
 import { verifyArtifacts } from "./cli/verifyArtifacts";
 import { writeClaimsRecheck } from "./cli/claimsRecheck";
 import { getRunStatus } from "./cli/status";
@@ -1284,6 +1299,137 @@ program
       );
     }
   });
+
+// 実 fetcher: HEAD（redirect follow）→ 405/501 は GET で再試行。到達不能/タイムアウトは error。
+const realFetcher: Fetcher = async (url, { timeoutMs }): Promise<FetchOutcome> => {
+  const headers = { "user-agent": "llm-task-router/sources-check" };
+  const once = async (method: "HEAD" | "GET"): Promise<number> => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { method, redirect: "follow", signal: ctrl.signal, headers });
+      return res.status;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  try {
+    let status = await once("HEAD");
+    if (status === 405 || status === 501) {
+      status = await once("GET"); // HEAD 非対応サーバは GET で再確認
+    }
+    return { status };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+};
+
+program
+  .command("article:sources-check")
+  .description(
+    "Check URL reachability of sources.raw.json over HTTP and stamp reachable/checkedAt (opt-in; external network; not a gate)"
+  )
+  .requiredOption("--run <runId>", "Run id")
+  .option("--timeout <ms>", "Per-URL timeout (ms)", "10000")
+  .option("--concurrency <n>", "Max concurrent requests", "4")
+  .option("--only-cited", "Check only sources cited by present&verified claims")
+  .option("--dry-run", "Run the checks but do not write sources.raw.json")
+  .option("--json", "Print the summary as JSON")
+  .action(
+    async (options: {
+      run: string;
+      timeout: string;
+      concurrency: string;
+      onlyCited?: boolean;
+      dryRun?: boolean;
+      json?: boolean;
+    }) => {
+      const timeoutMs = Number(options.timeout);
+      const concurrency = Number(options.concurrency);
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+        throw new Error(`Invalid --timeout: ${options.timeout}（正の整数 ms）`);
+      }
+      if (!Number.isInteger(concurrency) || concurrency < 1) {
+        throw new Error(`Invalid --concurrency: ${options.concurrency}（1 以上の整数）`);
+      }
+      const store = new RunStore();
+      await assertRunExists(store, options.run);
+
+      const rawText = await store.read(options.run, RAW_SOURCES_FILE).catch(() => null);
+      if (rawText === null) {
+        throw new Error(
+          `${RAW_SOURCES_FILE} がありません（runs/${options.run}/）。先に factcheck で出典を出してください。`
+        );
+      }
+      const rawSources = RawSourcesSchema.parse(JSON.parse(rawText));
+
+      // --only-cited: claims.json から cited な normalized source を導出し、その URL に絞る。
+      let urls = rawSources.map((s) => s.url);
+      if (options.onlyCited) {
+        const claimsText = await store.read(options.run, CLAIMS_FILE).catch(() => null);
+        const sourcesText = await store.read(options.run, SOURCES_FILE).catch(() => null);
+        if (claimsText === null || sourcesText === null) {
+          throw new Error(
+            "--only-cited には claims.json / sources.json が必要です（先に article:claims-normalize を実行）。"
+          );
+        }
+        const citedIds = collectCitedSourceIds(ClaimsSchema.parse(JSON.parse(claimsText)));
+        const citedHashes = new Set(
+          SourcesSchema.parse(JSON.parse(sourcesText))
+            .filter((s) => citedIds.has(s.id))
+            .map((s) => urlHash(s.url))
+        );
+        urls = rawSources.filter((s) => citedHashes.has(urlHash(s.url))).map((s) => s.url);
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      const results = await checkSources(urls, realFetcher, { concurrency, timeoutMs, today });
+      const summary = summarize(results);
+
+      // dead/unknown の URL を列挙（要対応）。
+      const flagged: { url: string; reachable: string }[] = [];
+      for (const s of rawSources) {
+        let h: string;
+        try {
+          h = urlHash(s.url);
+        } catch {
+          continue;
+        }
+        const r = results.get(h);
+        if (r && r.reachable !== "ok") {
+          flagged.push({ url: s.url, reachable: r.reachable });
+        }
+      }
+
+      if (!options.dryRun) {
+        const updated = applyReachabilityToRaw(rawSources, results);
+        await store.save(options.run, RAW_SOURCES_FILE, JSON.stringify(updated, null, 2));
+        // dry-run でなければ追加アクションとして1行記録（canonical 工程ではない）。
+        await recordProgress(store, options.run, {
+          step: "sources-check",
+          status: "done",
+          output: `runs/${options.run}/${RAW_SOURCES_FILE}`,
+          note: `ok=${summary.ok} dead=${summary.dead} unknown=${summary.unknown}`,
+        });
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify({ summary, flagged, dryRun: Boolean(options.dryRun) }, null, 2));
+        return;
+      }
+      console.log(
+        `sources-check: ok=${summary.ok} dead=${summary.dead} unknown=${summary.unknown}${options.dryRun ? " (dry-run; 未書き込み)" : ""}`
+      );
+      for (const f of flagged) {
+        console.log(`  - ${f.reachable}: ${f.url}`);
+      }
+      if (!options.dryRun) {
+        console.log(
+          `next: dead は verified claim から到達可能な代替へ張り替え → article:claims-normalize で sources.json に反映`
+        );
+      }
+    }
+  );
 
 if (process.argv.slice(2).length === 0) {
   // サブコマンド未指定ならヘルプを表示する。
