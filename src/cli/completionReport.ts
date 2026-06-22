@@ -37,6 +37,8 @@ export type CompletionReportData = {
   refine?: { stoppedReason?: string; finalScore?: number; finalApproved?: boolean };
   factcheck: GateInfo;
   buildVerify: GateInfo;
+  // 構文/型チェックの実施対象か（作成時に固定）。false＝対象外（既定オフ）、true＝対象、undefined＝旧 run（未刻印）。
+  codeCheckRequested?: boolean;
   editorial: GateInfo;
   // verify-artifacts は publication-check に状態が出ない（exit code を読めない）ため、progress
   // snapshot の最新イベント由来で表示する。未実施なら status="pending"。
@@ -157,6 +159,7 @@ export async function collectCompletionReportData(
       : undefined,
     factcheck: { state: gateState(pc, "factcheck"), summary: parseGateSummary(pc, "factcheck") },
     buildVerify: { state: gateState(pc, "build-verify"), summary: parseGateSummary(pc, "build-verify") },
+    codeCheckRequested: snapshot.codeCheck,
     editorial: { state: gateState(pc, "editorial-review"), summary: parseGateSummary(pc, "editorial-review") },
     verifyArtifacts: { status: verifyEvent?.status ?? "pending", note: verifyEvent?.note },
     // export イベントが無ければ「未実行」として null（completion-report は既定で export 前に生成される）。
@@ -219,12 +222,18 @@ function renderAutoSection(data: CompletionReportData): string {
     data.factcheck.summary,
     data.claims ? `claims ${data.claims.total} / sources ${data.claims.sources} / blocking ${data.claims.blocking}` : undefined,
   ]);
-  const buildSummary = joinParts([
-    data.buildVerify.summary,
-    data.buildReport
-      ? `status ${data.buildReport.status} / checkedBlocks ${data.buildReport.checkedBlocks} / unverified ${data.buildReport.unverified}`
-      : undefined,
-  ]);
+  // 構文/型チェックが既定オフ（作成時に非指定）のときは、publication-check の未宣言ではなく「対象外」と明示する。
+  // ただし誰かが手動で build-verify を回し build-verify-report.json を残していれば、それは要約に出す。
+  const buildVerifyOptedOut = data.codeCheckRequested === false && data.buildReport === null;
+  const buildSummary = buildVerifyOptedOut
+    ? "作成時にコードチェック非指定（既定オフ）"
+    : joinParts([
+        data.buildVerify.summary,
+        data.buildReport
+          ? `status ${data.buildReport.status} / checkedBlocks ${data.buildReport.checkedBlocks} / unverified ${data.buildReport.unverified}`
+          : undefined,
+      ]);
+  const buildVerifyStateLabel = buildVerifyOptedOut ? "対象外" : gateStateLabel(data.buildVerify.state);
   const editorialSummary = joinParts([data.editorial.summary, data.reviewerModel]);
   const claimsState = data.claims ? `claims.json あり` : `claims.json なし`;
   const claimsSummary = data.claims
@@ -252,7 +261,7 @@ function renderAutoSection(data: CompletionReportData): string {
     "|---|---|---|",
     `| refine | ${escapeCell(data.refine?.stoppedReason ?? "n/a")} | ${escapeCell(refineSummary || "n/a")} |`,
     `| factcheck | ${gateStateLabel(data.factcheck.state)} | ${escapeCell(factcheckSummary || "n/a")} |`,
-    `| build-verify | ${gateStateLabel(data.buildVerify.state)} | ${escapeCell(buildSummary || "n/a")} |`,
+    `| build-verify | ${escapeCell(buildVerifyStateLabel)} | ${escapeCell(buildSummary || "n/a")} |`,
     `| editorial-review | ${gateStateLabel(data.editorial.state)} | ${escapeCell(editorialSummary || "n/a")} |`,
     `| claims-normalize | ${escapeCell(claimsState)} | ${escapeCell(claimsSummary)} |`,
     `| verify-artifacts | ${escapeCell(stepStatusLabel(data.verifyArtifacts.status))} | ${escapeCell(data.verifyArtifacts.note ?? "n/a")} |`,

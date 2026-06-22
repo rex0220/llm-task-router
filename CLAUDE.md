@@ -7,7 +7,7 @@
 - 記事の指示ファイル（topics/<slug>.txt）は `/draft-topic <テーマ>` で規約に従って起案し、承認後に `/write-article` で記事化する。
 - 記事本文は手書きしない。llm-task-router の CLI パイプライン（create / refine / evaluate / revise）で生成・修正する。
 - `final.md` を直接編集しない。修正は `llm-task-router article:revise --instruction-file` 経由で戻す（runs/ に集約し `final.bak.md` を残すため）。
-- 作成・進行・品質判断は **article-editor-in-chief**（編集長）、Web裏取りは **article-factchecker**、コードの構文/型チェック（`tsc`・実行はしない）は **article-build-verifier** に委譲する。コードを含む記事は事実検証と構文/型チェックの両方を回す（コードは実行せず静的検証のみ）。サブエージェントから結果を受け取ったら、編集長が工程の出口で進捗イベントを記録する（`done|skip|error` は必須、入口 `start` は任意。skip は理由必須＝silent skip 禁止）。
+- 作成・進行・品質判断は **article-editor-in-chief**（編集長）、Web裏取りは **article-factchecker**、コードの構文/型チェック（`tsc`・実行はしない）は **article-build-verifier** に委譲する。**事実検証（factcheck）は必須**。**構文/型チェック（build-verify）は既定オフ**（記事のコードは省略されたサンプルが多く `tsc` が構造的に落ちるため）で、`article:create --code-check` を付けて作成した記事だけ実施する（run 単位で first-write-wins 固定。progress.md ヘッダと completion-report に対象/対象外が出る）。コードは構文チェックの対象外でも引き続き factcheck の対象（API 名・バージョン等の事実誤り）。実施する場合もコードは実行せず静的検証のみ。サブエージェントから結果を受け取ったら、編集長が工程の出口で進捗イベントを記録する（`done|skip|error` は必須、入口 `start` は任意。skip は理由必須＝silent skip 禁止）。
 - **各工程の進捗は `progress.events.jsonl`（正本）に記録する**。CLI 工程は実行するだけで自動記録、CLI を持たない工程（factcheck / build-verify）は編集長が `llm-task-router article:progress:event` で記録する。現在地・所要・概算コストの確認は `llm-task-router article:status --run <id>`。
 - **編集長（駆動する Claude）の AI モデルは作成時に固定する**。`article:create`（＝`write-article` 起点）で `--editor-model <id>`（例 `claude-opus-4-8`）を渡すと、create の最初のイベントに刻まれ progress.md ヘッダに「編集長（AIモデル・自己申告）」として表示される。run 単位で **first-write-wins（最初に申告した値で固定。後続・別セッション・旧 run への追記で遡及・上書きされない）**。自動検出ではなく自己申告（監査値ではない）。`article:progress:event --editor-model` でも渡せるが、未指定の値を後から足すだけで上書きはしない。
 - **factcheck の前に方向性ゲート**（`llm-task-router article:direction-check --run <id> --verdict ok|revise`）を通す（任意の推奨ステップ）。高コストな factcheck/build の前にテーマ適合・構成・読者を編集長が判定する軽量ゲート（正確性ゲートではない）。`--verdict ok` で factcheck へ、`revise` なら直してから。`runs/<id>/direction-check.md` に閉じる。
@@ -16,7 +16,7 @@
 - 公開相当の `llm-task-router article:export` は編集長が GO/NO-GO を出し、**ユーザー承認後に実行**する。自走で公開しない。**承認・条件付き GO の条件解決は `--note` で台帳（export イベント）に残す**（例 `--note "ユーザー承認済み（条件: Qiita媒体適性OK）"`）。
 - **完成報告は `runs/<runId>/completion-report.md` に残す**（`llm-task-router article:completion-report`）。ゲート結果・コスト・GO/NO-GO は機械生成、構成/上申/総評は編集長が editor 欄に記入。`export/index.json`（公開台帳）には混ぜない。
 - **編集レビュー**（読者・編集視点の批評）は `/review-editorial <run>`（`llm-task-router article:review-editorial`）。本文の書き手と別 provider のモデルが担当し、**採否は編集長が判断・preference と最終可否は筆者・事実は factcheck 優先**。正確性ゲートではない。**採否を決めたら `article:editorial-resolve --run <id> --id <Wxxx> --resolution accepted|waived|escalated|user-approved --evidence ...` で台帳（editorial-ledger.json）に書き戻す**（reviewer の `status` は触らず編集判断を別軸 `resolution` で記録。`escalated` は上申、ユーザー承認が下りたら `user-approved` で再度打つ）。**weakness を `open` のまま残さない**（未処理＝open/partial かつ resolution 未設定。完成報告前に 0 にする）。
-- **公開済み記事の更新**は `/update-article <slug>` で行う。import を起点に `update-base.md`（版の正本）を固定し、変更点だけを revise → `article:update-diff` で差分集中の2検証 → 承認後に `article:export` ＋ `article:record-publication`（同一 URL の更新。`published` と `export/index.json` を記録）。全面リライトはしない。
+- **公開済み記事の更新**は `/update-article <slug>` で行う。import を起点に `update-base.md`（版の正本）を固定し、変更点だけを revise → `article:update-diff` で差分集中の検証（factcheck は必須、構文/型チェックは既定オフ＝`import --code-check` 指定時のみ。create と統一） → 承認後に `article:export` ＋ `article:record-publication`（同一 URL の更新。`published` と `export/index.json` を記録）。全面リライトはしない。
 
 ## 手順書
 

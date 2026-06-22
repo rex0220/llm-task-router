@@ -125,6 +125,7 @@ program
   .option("--platform <name>", "Override the platform label from the profile")
   .option("--run <runId>", "Run id")
   .option("--editor-model <id>", "Editor-in-chief AI model id (e.g. claude-opus-4-8). Fixed at creation, shown in progress.md header")
+  .option("--code-check", "Run code syntax/type checks (build-verify) for this article. Off by default — article code is often abbreviated samples. Fixed at creation")
   .option("--config <path>", "Path to models.yaml", "config/models.yaml")
   .action(
     async (options: {
@@ -134,6 +135,7 @@ program
       platform?: string;
       run?: string;
       editorModel?: string;
+      codeCheck?: boolean;
       config: string;
     }) => {
       const topic = await resolveText(options.topic, options.topicFile, "topic", "--topic", "--topic-file");
@@ -151,6 +153,8 @@ program
         task: "create",
         totals: reporter.totals,
         editorModel: options.editorModel,
+        // 構文/型チェックの実施対象を作成時に固定（first-write-wins）。未指定＝既定オフ（false を刻む）。
+        codeCheck: options.codeCheck === true,
         output: (r) => `runs/${r.runId}/final.md`,
         run: () =>
           createQiitaArticle(
@@ -258,6 +262,7 @@ program
   .option("--supersedes <runId>", "Previous run this update supersedes (recorded in meta.lineage)")
   .option("--root <runId>", "Root run of the lineage (first version, recorded in meta.lineage)")
   .option("--tags <list>", "Comma-separated publish tags (else inherited from --supersedes run)")
+  .option("--code-check", "Run code syntax/type checks (build-verify) for this run. Off by default. Fixed at import (first-write-wins), same as article:create")
   .option("--force", "Replace an existing run with the same id as an import run")
   .action(
     async (options: {
@@ -271,6 +276,7 @@ program
       supersedes?: string;
       root?: string;
       tags?: string;
+      codeCheck?: boolean;
       force?: boolean;
     }) => {
       const topic =
@@ -297,6 +303,8 @@ program
         supersedesRunId: options.supersedes,
         rootRunId: options.root,
         tags,
+        codeCheck: options.codeCheck === true,
+        toolVersion: pkg.version,
         force: options.force,
       });
 
@@ -527,12 +535,20 @@ async function runWithProgress<T>(args: {
   ensureRun?: () => Promise<void>;
   // 編集長（駆動する Claude）の AI モデル。create 等で渡すと start から progress.md に出る。
   editorModel?: string;
+  // 構文/型チェック（build-verify）の実施対象フラグ。create で渡すと start から刻まれ first-write-wins で固定される。
+  codeCheck?: boolean;
 }): Promise<T> {
   if (args.ensureRun) {
     await args.ensureRun();
   }
   await safeProgress(() =>
-    args.progress.append(args.runId, { step: args.step, status: "start", task: args.task, editorModel: args.editorModel })
+    args.progress.append(args.runId, {
+      step: args.step,
+      status: "start",
+      task: args.task,
+      editorModel: args.editorModel,
+      codeCheck: args.codeCheck,
+    })
   );
   // start 直後に progress.json / progress.md を生成する。create/refine など長い工程でも
   // 「開始時点」で進捗ファイルが出る（done まで待たない＝folder 作成直後に見える）。
@@ -553,6 +569,7 @@ async function runWithProgress<T>(args: {
         outputTokens: t.outputTokens,
         output: args.output?.(result),
         editorModel: args.editorModel,
+        codeCheck: args.codeCheck,
       })
     );
     await safeProgress(async () => {

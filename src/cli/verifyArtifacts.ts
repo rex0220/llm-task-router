@@ -3,6 +3,8 @@ import { BuildVerifyReportSchema, ClaimsSchema, SourcesSchema } from "../schemas
 import { CLAIMS_FILE, SOURCES_FILE, isBlocking, canonicalUrl, collectCitedSourceIds } from "./claimsNormalize";
 import { gateState, hasSkipReason, parseGoNoGo } from "./publicationCheck";
 import { SOURCES_BEGIN, SOURCES_END } from "./references";
+import { RunProgress } from "../progress/RunProgress";
+import { aggregate } from "../progress/aggregate";
 
 // 公開前ゲート: 成果物の揃い・スキーマ・blocking を機械的にチェックする（外部通信なし）。
 // 各検証の中身は再判定しない（factcheck/build/editorial の判断は各担当に委ねる）。
@@ -59,13 +61,22 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
 
   const buildVerify = gateState(pc, "build-verify");
   const reportRaw = await readOrNull(store, runId, "build-verify-report.json");
-  checkGate(pc, "build-verify", errors, {
-    done: () => {
-      if (reportRaw === null) {
-        errors.push("build-verify=done ですが build-verify-report.json がありません。");
-      }
-    },
-  });
+  // 構文/型チェックは既定オフ。作成時に --code-check 非指定（codeCheck===false）の run は build-verify を
+  // 「対象外」とし、publication-check のゲート宣言を必須にしない。これは silent skip ではなく、create で
+  // first-write-wins 固定された監査済みの宣言（progress.md / completion-report に「対象外」と出る）。
+  // codeCheck が未刻印（undefined＝旧 run）や true のときは従来どおり done|skipped の宣言を要求する。
+  // ※ 手動で build-verify-report.json を残した場合は、下のブロックで宣言と独立に成否・整合性を検査する。
+  const events = await new RunProgress(store).readEvents(runId).catch(() => []);
+  const codeCheckOptedOut = aggregate(runId, events).codeCheck === false;
+  if (!codeCheckOptedOut) {
+    checkGate(pc, "build-verify", errors, {
+      done: () => {
+        if (reportRaw === null) {
+          errors.push("build-verify=done ですが build-verify-report.json がありません。");
+        }
+      },
+    });
+  }
   // report があれば宣言と独立にスキーマ検証 + 実機検証の成否・整合性を見る。
   if (reportRaw !== null) {
     const parsed = BuildVerifyReportSchema.safeParse(safeJson(reportRaw));

@@ -7,6 +7,7 @@ import { loadProfile } from "../workflows/profile";
 import { createRunId } from "../workflows/createQiitaArticle";
 import { DEFAULT_PLATFORM, qiitaSteps } from "../workflows/qiitaSteps";
 import { assertSafeInputPath } from "./inputs";
+import { RunProgress } from "../progress/RunProgress";
 
 export type ImportArticleOptions = {
   from: string;
@@ -21,6 +22,11 @@ export type ImportArticleOptions = {
   rootRunId?: string;
   // 投稿用タグ。未指定なら supersedes 元 run の tags を継承する。
   tags?: string[];
+  // 構文/型チェック（build-verify）の実施対象か。create の --code-check と対称で、import（更新フローの起点）でも
+  // 作成時に固定する（first-write-wins）。未指定＝既定オフ（false を刻む）。
+  codeCheck?: boolean;
+  // 記録する llm-task-router のバージョン（import イベントに stamp。CLI から pkg.version を渡す）。
+  toolVersion?: string;
 };
 
 export type ImportArticleResult = {
@@ -165,6 +171,13 @@ export async function importArticle(store: RunStore, options: ImportArticleOptio
   if (options.criteria?.trim()) {
     await store.save(runId, "brushup-criteria.md", options.criteria.trim());
   }
+
+  // 構文/型チェックの実施対象を import 時に固定（create の --code-check と対称・first-write-wins）。
+  // 更新フロー（/update-article）の起点でも、create 系と同じく既定オフ＝対象外を既定にする。
+  // ※ --force 再 import では既存 events.jsonl が残るため、最初の import で刻んだ値が first-write-wins で優先される。
+  const progress = new RunProgress(store, options.toolVersion);
+  await progress.append(runId, { step: "import", status: "done", task: "import", codeCheck: options.codeCheck === true });
+  await progress.regenerate(runId);
 
   return { runId, frontMatterWarning: hasFrontMatter(body), replacedRun: dirExists && Boolean(options.force) };
 }

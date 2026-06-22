@@ -159,6 +159,26 @@ describe("renderCompletionReport", () => {
     expect(md).not.toContain("publication-check では判定不可");
   });
 
+  it("renders build-verify as 対象外 when code check was opted out at creation (codeCheckRequested=false)", () => {
+    const md = renderCompletionReport(makeData({ codeCheckRequested: false }));
+    expect(md).toContain("| build-verify | 対象外 | 作成時にコードチェック非指定（既定オフ） |");
+  });
+
+  it("renders build-verify from publication-check gate state when code check was requested", () => {
+    const md = renderCompletionReport(makeData({ codeCheckRequested: true, buildVerify: { state: "done", summary: "passed" } }));
+    expect(md).toContain("| build-verify | done | passed |");
+    expect(md).not.toContain("対象外");
+  });
+
+  it("still surfaces a build-verify report even when opted out (manual run)", () => {
+    const md = renderCompletionReport(
+      makeData({ codeCheckRequested: false, buildReport: { status: "passed", checkedBlocks: 2, unverified: 0 } })
+    );
+    // 手動で回した report があれば対象外扱いにせず要約を出す。
+    expect(md).toContain("checkedBlocks 2");
+    expect(md).not.toContain("作成時にコードチェック非指定");
+  });
+
   it("shows export state in the auto block (done with path, and 未実行 default)", () => {
     const done = renderCompletionReport(
       makeData({ exported: { status: "done", output: "export/x.md", note: "承認済み" } })

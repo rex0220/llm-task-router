@@ -256,4 +256,55 @@ describe("aggregate", () => {
     expect(snap.currentIndex).toBe(9); // 未完 canonical は export だけ。非 canonical に乗っ取られない
     expect(snap.complete).toBe(false);
   });
+
+  describe("codeCheck（構文/型チェックの実施対象・first-write-wins）", () => {
+    it("derives codeCheck from the earliest event that declares it", () => {
+      const snap = aggregate("r", [
+        ev({ step: "create", status: "start", codeCheck: false }),
+        ev({ step: "create", status: "done", codeCheck: false }),
+        ev({ step: "build-verify", status: "done", codeCheck: true }), // 後続の宣言では上書きしない
+      ]);
+      expect(snap.codeCheck).toBe(false);
+    });
+
+    it("is undefined for legacy runs that never stamped it", () => {
+      const snap = aggregate("r", [ev({ step: "create", status: "done" })]);
+      expect(snap.codeCheck).toBeUndefined();
+    });
+
+    it("treats build-verify as 対象外(skip) when codeCheck is false and no real event exists", () => {
+      const snap = aggregate("r", [
+        ev({ step: "create", status: "start", codeCheck: false }),
+        ev({ step: "create", status: "done", codeCheck: false }),
+        ev({ step: "refine", status: "done" }),
+        ev({ step: "direction", status: "done" }),
+        ev({ step: "factcheck", status: "done" }),
+        ev({ step: "editorial", status: "done" }),
+        ev({ step: "claims-normalize", status: "done" }),
+        ev({ step: "verify-artifacts", status: "done" }),
+        ev({ step: "export", status: "done" }),
+      ]);
+      const bv = step(snap, "build-verify");
+      expect(bv.status).toBe("skip");
+      expect(bv.note).toContain("コードチェック非指定");
+      // build-verify が未実施の必須工程に見えず、全 canonical done/skip で complete になる。
+      expect(snap.complete).toBe(true);
+      expect(snap.currentIndex).toBeUndefined();
+    });
+
+    it("keeps a real build-verify event over the opted-out synthesized skip (manual rescue)", () => {
+      const snap = aggregate("r", [
+        ev({ step: "create", status: "done", codeCheck: false }),
+        ev({ step: "build-verify", status: "done", note: "手動で実施。report status=passed" }),
+      ]);
+      const bv = step(snap, "build-verify");
+      expect(bv.status).toBe("done");
+      expect(bv.note).toContain("手動で実施");
+    });
+
+    it("leaves build-verify pending when codeCheck is true and no event yet", () => {
+      const snap = aggregate("r", [ev({ step: "create", status: "done", codeCheck: true })]);
+      expect(step(snap, "build-verify").status).toBe("pending");
+    });
+  });
 });

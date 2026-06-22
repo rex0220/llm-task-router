@@ -77,6 +77,15 @@ export function aggregate(
     }
   }
 
+  // 構文/型チェックの実施対象フラグも run 単位の不変属性。create で1回固定する想定なので、
+  // codeCheck を持つ「at 最小（＝最初に申告された）」イベントから採る（first-write-wins）。
+  // undefined＝旧 run（未刻印）。false＝既定オフ（作成時にコードチェック非指定）。
+  const codeCheckEvents = events.filter((e) => e.codeCheck !== undefined);
+  const codeCheck =
+    codeCheckEvents.length > 0
+      ? codeCheckEvents.reduce((a, b) => (a.at <= b.at ? a : b)).codeCheck
+      : undefined;
+
   const labelOf = new Map(canonicalSteps.map((s) => [s.key, s.label] as const));
 
   const toStep = (a: Accumulated, index: number): ProgressStep => {
@@ -108,6 +117,17 @@ export function aggregate(
     const a = acc.get(c.key);
     if (a) {
       steps.push(toStep(a, index++));
+    } else if (c.key === "build-verify" && codeCheck === false) {
+      // 既定オフ: 作成時にコードチェック非指定。実イベントが無い build-verify は「対象外」として skip 表示にし、
+      // 現在地・完了判定で「未実施の必須工程」に見えないようにする（手動で done/skip を記録すれば実イベントが優先）。
+      steps.push({
+        step: c.key,
+        label: c.label,
+        index: index++,
+        canonical: true,
+        status: "skip",
+        note: "作成時にコードチェック非指定（既定オフ・必要なら手動で実施可）",
+      });
     } else {
       steps.push({ step: c.key, label: c.label, index: index++, canonical: true, status: "pending" });
     }
@@ -161,6 +181,7 @@ export function aggregate(
     canonicalTotal: canonicalSteps2.length, // 現在地の分母（canonical のみ）
     toolVersion,
     editorModel,
+    codeCheck,
     currentIndex: currentRow?.index,
     complete,
     totalCostUsd,

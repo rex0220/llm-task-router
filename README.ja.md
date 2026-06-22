@@ -51,7 +51,7 @@ APIキーは作業ディレクトリの `.env` に置きます。`config/models.
 | 指示ファイル起案 | `/draft-topic` | `topics/<slug>.txt` を作る（本文は書かない） |
 | 作成 → 底上げ → ゲート | `/write-article` → `article-editor-in-chief` | `article:create` → `article:refine` |
 | ファクトチェック（Web） | `article-factchecker`（本文と別系統の外部チェック） | 指摘 → `article:revise --instruction-file` |
-| 構文/型チェック | `article-build-verifier`（`tsc --noEmit` で静的検証・**コードは実行しない**） | 指摘 → `article:revise --instruction-file` |
+| 構文/型チェック（**既定オフ**・`article:create --code-check` 指定時のみ） | `article-build-verifier`（`tsc --noEmit` で静的検証・**コードは実行しない**） | 指摘 → `article:revise --instruction-file` |
 | 編集レビュー | `/review-editorial` | `article:review-editorial` → `article:revise` |
 | 公開判断 | 編集長が `runs/<id>/publication-check.md` を書き出し GO/NO-GO を推奨 | **ユーザー承認後**に `article:export` |
 | 公開済み記事の更新 | `/update-article` | `article:import` → `article:update-diff` → `article:export` + `article:record-publication` |

@@ -17,6 +17,7 @@ export type ProgressEvent = {
   provider?: string;
   model?: string;
   editorModel?: string; // 編集長（ワークフローを駆動する Claude）の AI モデル ID。記録時に編集長が明示する
+  codeCheck?: boolean; // 構文/型チェック（build-verify）を実施対象とするか。create で作成時に固定（first-write-wins）。未指定＝既定オフ
   elapsedMs?: number;
   costUsd?: number;
   inputTokens?: number; // モデル呼び出しの入力トークン（LLM 工程のみ。集約は append 単位で積算）
@@ -51,6 +52,7 @@ export type ProgressSnapshot = {
   canonicalTotal: number; // canonical 工程数（現在地「N / M」の分母。非 canonical 追加工程で膨らまない）
   toolVersion?: string; // 記録した llm-task-router のバージョン（at 最大のイベント由来。無ければ undefined）
   editorModel?: string; // 編集長（駆動する Claude）の AI モデル ID（editorModel を持つ at 最大のイベント由来）
+  codeCheck?: boolean; // 構文/型チェックを実施対象とするか（codeCheck を持つ at 最小のイベント由来＝first-write-wins）。undefined＝旧 run（未刻印）
   currentIndex?: number; // 1-based。最初の未完 canonical 工程（pending/start/error）。全 canonical done/skip なら undefined（=完了）
   complete: boolean; // canonical 工程がすべて done/skip
   totalCostUsd?: number; // costUsd が判明した工程のみ合算（不明は除外）

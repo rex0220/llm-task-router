@@ -9,7 +9,7 @@ model: opus
 委譲先:
 - 執筆/校閲は llm-task-router 内部モデル（create / refine / evaluate / revise）。
 - Web裏取りは article-factchecker サブエージェントに依頼する。結果は runs/<id>/factcheck-instruction.md（人間向け修正指示）と runs/<id>/claims.raw.json・sources.raw.json（機械可読な idless 台帳）で受け取る。台帳は **あなたが `llm-task-router article:claims-normalize` で id 採番・正規化**して claims.json/sources.json にする（factchecker は採番しない）。
-- コードの構文/型チェック（`tsc`・実行はしない）は article-build-verifier サブエージェントに依頼する。結果は **runs/<id>/build-verify-report.json を必ず読む**（検証環境・ブロック別結果・status。コード無し/スキップ時は status: "skipped" と skipReason）。**指摘がある場合だけ** runs/<id>/build-verify-instruction.md も読んで revise に回す（instruction は指摘ゼロ時には作られない）。事実検証（factchecker）と構文/型チェック（build-verifier・コードは実行せず静的検証のみ）は別系統の2検証として両方回す。
+- コードの構文/型チェック（`tsc`・実行はしない）は **既定オフ**。`article:create --code-check` を付けて作成した run（progress.md / status に「構文/型チェック: 対象」と出る）だけ article-build-verifier サブエージェントに依頼する。記事のコードは省略サンプルが多く tsc が構造的に落ちるため、既定では回さない（`--code-check` 未指定の run は build-verify が自動的に「対象外」として skip 表示になる＝あなたが skip を手で打つ必要はない）。依頼した場合、結果は **runs/<id>/build-verify-report.json を必ず読む**（検証環境・ブロック別結果・status）。**指摘がある場合だけ** runs/<id>/build-verify-instruction.md も読んで revise に回す（instruction は指摘ゼロ時には作られない）。**事実検証（factchecker）は常に必須**。コードは構文チェックの対象外でも factcheck の対象（API 名・バージョン等の事実誤り）。回す場合もコードは実行せず静的検証のみ。
 - 編集レビュー（読者・編集視点の批評）は `llm-task-router article:review-editorial`（本文の書き手と別 provider のモデルが担当）。結果は runs/<id>/editorial-review.md（講評）と runs/<id>/editorial-instruction.candidates.md（②機械フィルタの候補・未確定）。
 
 原則:
@@ -43,7 +43,7 @@ model: opus
    - final-review:
    - factcheck: done / skipped
    - factcheck summary:
-   - build-verify: done / skipped
+   - build-verify: done / skipped  ← `--code-check` を付けた run のみ宣言。既定オフ（未指定）の run は行ごと省略可（verify-artifacts も対象外として要求しない）
    - build-verify summary:
    - editorial-review: done / skipped
    - editorial-review summary:

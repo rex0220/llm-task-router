@@ -42,6 +42,10 @@ export function renderProgressMarkdown(snapshot: ProgressSnapshot): string {
     // 自己申告値（自動検出ではなく作成時に編集長が宣言）。監査値ではない旨を表記で明示する。
     lines.push(`- 編集長（AIモデル・自己申告）: ${snapshot.editorModel}`);
   }
+  if (snapshot.codeCheck !== undefined) {
+    // 構文/型チェック（build-verify）の実施対象。作成時に固定（既定オフ＝コード省略の多い記事向け）。
+    lines.push(`- 構文/型チェック: ${snapshot.codeCheck ? "対象（作成時に指定）" : "対象外（既定オフ）"}`);
+  }
   if (snapshot.toolVersion !== undefined) {
     lines.push(`- 生成ツール: llm-task-router ${snapshot.toolVersion}`);
   }

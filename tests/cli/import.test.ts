@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { importArticle } from "../../src/cli/import";
 import { RunStore } from "../../src/storage/RunStore";
+import { RunProgress } from "../../src/progress/RunProgress";
 
 describe("importArticle", () => {
   beforeEach(() => {
@@ -41,6 +42,26 @@ describe("importArticle", () => {
     expect(meta.steps.final.file).toBe("final.md");
     // import 由来は外部/人間作 → finalAuthorModel は "external"（編集レビューの独立性チェック免除）。
     expect(meta.finalAuthorModel).toBe("external");
+  });
+
+  it("stamps codeCheck=false by default (build-verify opted out, same as create)", async () => {
+    const store = await newStore();
+    const from = await writeArticle("# T\n本文\n");
+    const { runId } = await importArticle(store, { from, profile: "qiita" });
+    const snap = await new RunProgress(store).readSnapshot(runId);
+    expect(snap.codeCheck).toBe(false);
+    // build-verify は対象外（skip 合成）として現在地を塞がない。
+    expect(snap.steps.find((s) => s.step === "build-verify")?.status).toBe("skip");
+  });
+
+  it("stamps codeCheck=true when --code-check is requested at import", async () => {
+    const store = await newStore();
+    const from = await writeArticle("# T\n本文\n");
+    const { runId } = await importArticle(store, { from, profile: "qiita", codeCheck: true });
+    const snap = await new RunProgress(store).readSnapshot(runId);
+    expect(snap.codeCheck).toBe(true);
+    // 指定時は build-verify を実施対象として pending のまま残す。
+    expect(snap.steps.find((s) => s.step === "build-verify")?.status).toBe("pending");
   });
 
   it("saves the brush-up brief as brushup-criteria.md", async () => {

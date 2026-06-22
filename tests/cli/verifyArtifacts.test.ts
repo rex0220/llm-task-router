@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { verifyArtifacts } from "../../src/cli/verifyArtifacts";
 import { RunStore } from "../../src/storage/RunStore";
+import { RunProgress } from "../../src/progress/RunProgress";
 
 async function newStore(): Promise<RunStore> {
   return new RunStore(await mkdtemp(join(tmpdir(), "va-runs-")));
@@ -70,6 +71,47 @@ describe("verifyArtifacts", () => {
     const r = await verifyArtifacts(store, runId);
     expect(r.ok).toBe(true);
     expect(r.errors).toEqual([]);
+  });
+
+  // 構文/型チェック既定オフ（作成時に --code-check 非指定）の run は build-verify 宣言を要求しない。
+  const PUB_NO_BUILD = [
+    "# Publication Check",
+    "- GO/NO-GO: GO",
+    "- factcheck: done",
+    "- editorial-review: done",
+    "",
+  ].join("\n");
+
+  it("does not require a build-verify declaration when code-check was opted out at creation (codeCheck=false)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-optout";
+    await seedComplete(store, runId);
+    await store.save(runId, "publication-check.md", PUB_NO_BUILD); // build-verify 行なし
+    await new RunProgress(store).appendMany(runId, [{ step: "create", status: "done", codeCheck: false }]);
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+  });
+
+  it("still requires a build-verify declaration when code-check was requested (codeCheck=true)", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-optin";
+    await seedComplete(store, runId);
+    await store.save(runId, "publication-check.md", PUB_NO_BUILD);
+    await new RunProgress(store).appendMany(runId, [{ step: "create", status: "done", codeCheck: true }]);
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.includes("build-verify"))).toBe(true);
+  });
+
+  it("still requires a build-verify declaration for legacy runs with no codeCheck stamp", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-legacy";
+    await seedComplete(store, runId);
+    await store.save(runId, "publication-check.md", PUB_NO_BUILD); // build-verify 行なし・progress イベントも無し
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.includes("build-verify"))).toBe(true);
   });
 
   it("fails when final.md is missing", async () => {
