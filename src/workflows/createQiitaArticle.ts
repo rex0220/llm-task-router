@@ -2,8 +2,8 @@ import { ModelRouter } from "../router/ModelRouter";
 import { RunStore } from "../storage/RunStore";
 import type { RefineMeta, RefineRoundMeta, RefineStoppedReason } from "../storage/RunStore";
 import type { ModelTask } from "../router/types";
-import { detectWrapText, stripWrappingCodeFence } from "../utils/text";
-import { DEFAULT_PLATFORM, qiitaSteps, toModelRequest, type QiitaStepName } from "./qiitaSteps";
+import { detectWrapText, stripWrappingCodeFence, strongEmphasisWarnings } from "../utils/text";
+import { DEFAULT_PLATFORM, qiitaSteps, STRONG_EMPHASIS_RULE, toModelRequest, type QiitaStepName } from "./qiitaSteps";
 
 export type QiitaWorkflowResult = {
   runId: string;
@@ -104,6 +104,7 @@ export async function reviseQiitaFinal(
     `次の${platform}記事を、以下の修正指示に従って改善してください。`,
     "Markdown本文だけを返してください。説明やコードフェンスで全体を囲まないでください。",
     "記事の先頭にタイトルの見出し（レベル1の \"# \"）がある場合は、修正指示で明示されない限り保持してください。",
+    STRONG_EMPHASIS_RULE,
     ...(meta.style ? ["", "作法:", meta.style] : []),
     "",
     "修正指示:",
@@ -120,7 +121,7 @@ export async function reviseQiitaFinal(
   await store.markDone(runId, "final", "final.md");
   // final.md を書いたモデルを記録（markDone の後。編集レビューの独立性に使う）。
   await store.setFinalAuthorModel(runId, { provider: response.provider, model: response.model });
-  const warnings = detectWrapText(text);
+  const warnings = [...detectWrapText(text), ...strongEmphasisWarnings(text)];
   onEvent({
     type: "step:done",
     index: 1,
@@ -750,7 +751,7 @@ export async function runQiitaArticle(
       inputTokens: response.usage?.inputTokens,
       outputTokens: response.usage?.outputTokens,
       truncated: response.truncated,
-      warnings: isProse ? detectWrapText(text) : undefined,
+      warnings: isProse ? [...detectWrapText(text), ...strongEmphasisWarnings(text)] : undefined,
     });
   }
 

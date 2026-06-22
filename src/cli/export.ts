@@ -2,20 +2,62 @@ import { access, mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { RunMeta, RunStore } from "../storage/RunStore";
 import { assertSafeOutputPath } from "./inputs";
+import { detectBrokenStrongEmphasis, STRONG_EMPHASIS_RULE_VERSION, strongEmphasisWarnings } from "../utils/text";
+import { sha256 } from "../utils/hash";
+
+export const MARKDOWN_LINT_STAMP_FILE = "markdown-lint-stamp.json";
 
 // 指定 run の final.md を、明示された出力先へエクスポートする。
 // - final.md のみを対象（他の中間成果物は出さない）。
-// - 秘密ファイル名は拒否、既存ファイルは force 無しでは上書きしない。
+// - 秘密ファイル名は拒否、既存ファイルは force 無しでは上書きしない（force は「出力先の上書き」専用）。
 // - frontMatter: true なら投稿用に front-matter（title/tags 等）を付与し、本文先頭の H1 は
 //   front-matter のタイトルへ一本化する（重複回避）。既定 false（clean な本文のまま）。
+// - 公開前ゲート（Phase 3）: front-matter 生成前の raw final.md を強調 lint し、開閉できない `**`
+//   があれば書き出さず throw する（約物が front-matter/タイトルに影響しないよう raw を対象にする）。
+//   allowBrokenMarkdown で明示オーバーライド可（理由は allowBrokenMarkdownReason でスタンプに残す）。
+//   結果は毎回 markdown-lint-stamp.json に記録する（許可の主判定は「export 直前 lint」、スタンプは監査用）。
 export async function exportFinalArticle(
   store: RunStore,
   runId: string,
   outPath: string,
-  options: { force?: boolean; frontMatter?: boolean } = {}
+  options: {
+    force?: boolean;
+    frontMatter?: boolean;
+    allowBrokenMarkdown?: boolean;
+    allowBrokenMarkdownReason?: string;
+  } = {}
 ): Promise<string> {
   let content = await store.read(runId, "final.md"); // run / final.md が無ければここで失敗
   assertSafeOutputPath(outPath);
+
+  // front-matter 付与前の raw 本文を lint し、結果をスタンプに残す（許可判定は直前 lint が主）。
+  const issues = detectBrokenStrongEmphasis(content);
+  const result = issues.length === 0 ? "pass" : "fail";
+  await store.save(
+    runId,
+    MARKDOWN_LINT_STAMP_FILE,
+    JSON.stringify(
+      {
+        finalHash: sha256(content),
+        ruleVersion: STRONG_EMPHASIS_RULE_VERSION,
+        severityMode: "error",
+        result,
+        verifiedAt: new Date().toISOString().slice(0, 10),
+        ...(result === "fail" && options.allowBrokenMarkdown
+          ? { allowedBroken: true, reason: options.allowBrokenMarkdownReason ?? "" }
+          : {}),
+      },
+      null,
+      2
+    )
+  );
+  if (result === "fail" && !options.allowBrokenMarkdown) {
+    const detail = strongEmphasisWarnings(content).join("\n  ");
+    throw new Error(
+      `final.md に開閉できない強調 ** が ${issues.length} 件あります（export 中止）。約物を ** の外へ出して修正するか、` +
+        `--allow-broken-markdown で明示的に上書きしてください。\n  ${detail}`
+    );
+  }
 
   if (options.frontMatter) {
     const meta = await store.readMeta(runId);

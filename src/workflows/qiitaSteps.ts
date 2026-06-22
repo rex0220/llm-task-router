@@ -10,6 +10,14 @@ function styleBlock(style?: string): string {
   return style ? `\n作法:\n${style}\n` : "";
 }
 
+// 強調 `**…**` の記述規約（第1層・予防）。日本語 × 約物だと CommonMark のフランキング規則で
+// `**` が文字のまま残る（例: `**「…」**の` は閉じられない）。本文生成プロンプトに必ず注入する。
+// 検出は src/utils/text.ts の detectBrokenStrongEmphasis（第2層・機械ゲート）が担う。
+export const STRONG_EMPHASIS_RULE =
+  "強調 **…** の内端（開き直後・閉じ直前）に約物（「」（）“”、。：等）を置かないでください。" +
+  "括弧・引用符・読点は ** の外に出します（×**「太陽系の化石」**の → ○「**太陽系の化石**」の、" +
+  "×**約5.4g（少量）**と → ○**約5.4g**（少量）と）。";
+
 export type QiitaStep = {
   name: QiitaStepName;
   task: ModelTask;
@@ -60,6 +68,7 @@ ${brief}
 次の構成から${platform}向けMarkdown本文を書いてください。
 記事はタイトルを最初の見出し（レベル1の "# "）として置き、続けて本文を書いてください。タイトルは構成(outline)の title を使ってください。
 タイトル見出しと本文のみを出力してください。前置き・後書き・改稿の説明・追加提案や選択肢の提示は含めないでください。
+${STRONG_EMPHASIS_RULE}
 ${styleBlock(style)}
 ${outline}
 `.trim();
@@ -91,6 +100,7 @@ ${draft}
 次のレビューを反映して、${platform}記事を改善してください。
 記事はタイトルの見出し（レベル1の "# "）から始めます。タイトル見出しは保持してください。
 タイトル見出しと本文のみを出力してください。前置き・後書き・改稿の説明・追加提案や選択肢の提示は含めないでください。
+${STRONG_EMPHASIS_RULE}
 ${styleBlock(style)}
 記事:
 ${draft}

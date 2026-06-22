@@ -329,16 +329,35 @@ program
     "--note <text>",
     "Approval / condition-resolution note recorded in the export progress event (e.g. user approval, conditional-GO resolution)"
   )
-  .action(async (options: { run: string; out: string; force?: boolean; frontMatter?: boolean; note?: string }) => {
-    const store = new RunStore();
-    const dest = await exportFinalArticle(store, options.run, options.out, {
-      force: options.force,
-      frontMatter: options.frontMatter,
-    });
-    // --note は「条件付き GO の条件解決・ユーザー承認」を台帳に残すための監査欄（任意）。
-    await recordProgress(store, options.run, { step: "export", status: "done", output: dest, note: options.note });
-    console.log(`exported: ${dest}${options.frontMatter ? " (with front-matter)" : ""}`);
-  });
+  .option(
+    "--allow-broken-markdown",
+    "Bypass the strong-emphasis (** rendering) gate and export anyway. Requires --note to record the reason. Separate from --force (which only allows overwriting the output file)."
+  )
+  .action(
+    async (options: {
+      run: string;
+      out: string;
+      force?: boolean;
+      frontMatter?: boolean;
+      note?: string;
+      allowBrokenMarkdown?: boolean;
+    }) => {
+      // 理由必須は CLI 層で検証する（関数層 exportFinalArticle は --note を見られない）。
+      if (options.allowBrokenMarkdown && !options.note) {
+        throw new Error("--allow-broken-markdown には理由が必須です。--note \"<理由>\" を付けてください。");
+      }
+      const store = new RunStore();
+      const dest = await exportFinalArticle(store, options.run, options.out, {
+        force: options.force,
+        frontMatter: options.frontMatter,
+        allowBrokenMarkdown: options.allowBrokenMarkdown,
+        allowBrokenMarkdownReason: options.note,
+      });
+      // --note は「条件付き GO の条件解決・ユーザー承認」を台帳に残すための監査欄（任意）。
+      await recordProgress(store, options.run, { step: "export", status: "done", output: dest, note: options.note });
+      console.log(`exported: ${dest}${options.frontMatter ? " (with front-matter)" : ""}`);
+    }
+  );
 
 program
   .command("article:update-diff")

@@ -110,6 +110,17 @@ describe("verifyArtifacts", () => {
     expect(r.errors).toEqual([]);
   });
 
+  // Phase 3: 強調 **…** の崩れは error（公開ブロック）。
+  it("fails (blocking) when final.md has broken strong emphasis", async () => {
+    const store = await newStore();
+    const runId = "2026-06-20-emphasis";
+    await seedComplete(store, runId);
+    await store.save(runId, "final.md", "# T\n小惑星は、**「太陽系の化石」**のような存在です。\n");
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(false); // 公開ブロック
+    expect(r.errors.some((e) => e.includes("強調がレンダリングされない") && e.includes("L2"))).toBe(true);
+  });
+
   describe("editorial-ledger gate", () => {
     it("fails when editorial-review=done but editorial-ledger.json is missing", async () => {
       const store = await newStore();

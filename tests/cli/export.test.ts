@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { exportFinalArticle } from "../../src/cli/export";
+import { exportFinalArticle, MARKDOWN_LINT_STAMP_FILE } from "../../src/cli/export";
 import { RunStore } from "../../src/storage/RunStore";
 
 describe("exportFinalArticle", () => {
@@ -175,5 +175,63 @@ describe("exportFinalArticle", () => {
     const written = await readFile(out, "utf8");
     expect(written.startsWith("---")).toBe(false);
     expect(written).toContain("# T");
+  });
+
+  // Phase 3: 強調 ** レンダリング不備の export 直前ゲート＋監査スタンプ。
+  describe("strong-emphasis export gate", () => {
+    async function makeBrokenRun(): Promise<{ store: RunStore; runId: string }> {
+      const store = new RunStore(await mkdtemp(join(tmpdir(), "exp-runs-")));
+      const runId = "run-broken";
+      await store.create(runId, "topic", ["final"], "Qiita");
+      await store.save(runId, "final.md", "# T\n\n小惑星は、**「太陽系の化石」**のような存在です。\n");
+      return { store, runId };
+    }
+
+    it("refuses to export when final.md has broken strong emphasis (and does not write the file)", async () => {
+      const { store, runId } = await makeBrokenRun();
+      const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+      await expect(exportFinalArticle(store, runId, out)).rejects.toThrow(/開閉できない強調/);
+      await expect(readFile(out, "utf8")).rejects.toThrow(); // 書き出していない
+      // result:"fail" のスタンプは残る（監査用）
+      const stamp = JSON.parse(await store.read(runId, MARKDOWN_LINT_STAMP_FILE));
+      expect(stamp.result).toBe("fail");
+      expect(stamp.severityMode).toBe("error");
+      expect(stamp.ruleVersion).toBe("strong-emphasis-v1");
+    });
+
+    it("exports with allowBrokenMarkdown and records the bypass reason in the stamp", async () => {
+      const { store, runId } = await makeBrokenRun();
+      const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+      await exportFinalArticle(store, runId, out, {
+        allowBrokenMarkdown: true,
+        allowBrokenMarkdownReason: "明示承認（既知の崩れ）",
+      });
+      expect(await readFile(out, "utf8")).toContain("太陽系の化石");
+      const stamp = JSON.parse(await store.read(runId, MARKDOWN_LINT_STAMP_FILE));
+      expect(stamp.result).toBe("fail");
+      expect(stamp.allowedBroken).toBe(true);
+      expect(stamp.reason).toBe("明示承認（既知の崩れ）");
+    });
+
+    it("lints the raw final.md (front-matter is not what gets linted)", async () => {
+      // 健全な本文。frontMatter:true でも raw を lint するので pass し、スタンプは pass。
+      const { store, runId } = await makeRun("Qiita", "# 月編\n\n「**太陽系の化石**」のような存在。\n", {
+        tags: ["Tag"],
+      });
+      const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+      await exportFinalArticle(store, runId, out, { frontMatter: true });
+      const stamp = JSON.parse(await store.read(runId, MARKDOWN_LINT_STAMP_FILE));
+      expect(stamp.result).toBe("pass");
+      expect(stamp.allowedBroken).toBeUndefined();
+    });
+
+    it("writes a pass stamp on a healthy export", async () => {
+      const { store, runId } = await makeRunWithFinal();
+      const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+      await exportFinalArticle(store, runId, out);
+      const stamp = JSON.parse(await store.read(runId, MARKDOWN_LINT_STAMP_FILE));
+      expect(stamp.result).toBe("pass");
+      expect(stamp.finalHash).toMatch(/^sha256:/);
+    });
   });
 });

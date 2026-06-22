@@ -379,6 +379,66 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
   );
 
   it(
+    "article:export blocks broken strong emphasis; --allow-broken-markdown needs --note; --force does not bypass it",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "export-emphasis-e2e-"));
+      const runId = "2026-06-22-export-emphasis";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      await store.save(runId, "final.md", "# タイトル\n小惑星は、**「太陽系の化石」**のような存在です。\n");
+      const out = join(cwd, "out.md");
+
+      // cwd=temp で実行し、非ゼロ終了（execFileSync が throw）を厳密に検証するヘルパー。
+      // 成功時は failed=false のまま assert で落ちる（sentinel を catch に混ぜない）。
+      const expectExportFail = (args: string[]): void => {
+        let failed = false;
+        let status: number | undefined;
+        try {
+          execFileSync(process.execPath, [bin, "article:export", "--run", runId, "--out", out, ...args], {
+            cwd,
+            encoding: "utf8",
+            timeout: E2E_TIMEOUT,
+          });
+        } catch (error) {
+          failed = true;
+          status = (error as { status?: number }).status;
+        }
+        expect(failed).toBe(true);
+        expect(status).toBeTypeOf("number");
+        expect(status).not.toBe(0);
+      };
+
+      // 既定: 崩れていると失敗（書き出さない）。
+      expectExportFail([]);
+      expect(existsSync(out)).toBe(false);
+
+      // --force（上書き）だけでは lint を回避できない。
+      expectExportFail(["--force"]);
+      expect(existsSync(out)).toBe(false);
+
+      // --allow-broken-markdown 単独（--note なし）は CLI 層で検証エラー。
+      expectExportFail(["--allow-broken-markdown"]);
+      expect(existsSync(out)).toBe(false);
+
+      // --allow-broken-markdown + --note なら書き出せ、note が progress event に載る。
+      execFileSync(
+        process.execPath,
+        [bin, "article:export", "--run", runId, "--out", out, "--allow-broken-markdown", "--note", "既知の崩れを明示承認"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+      expect(existsSync(out)).toBe(true);
+      const exportEvents = readFileSync(join(cwd, "runs", runId, "progress.events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { step: string; status: string; note?: string });
+      const exportEvent = exportEvents.find((e) => e.step === "export");
+      expect(exportEvent?.status).toBe("done");
+      expect(exportEvent?.note).toBe("既知の崩れを明示承認");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
     "article:record-publication --help shows --article-version (not the reserved --version)",
     () => {
       const out = run(["article:record-publication", "--help"]);
