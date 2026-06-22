@@ -3,7 +3,7 @@ import { RunStore } from "../storage/RunStore";
 import type { RefineMeta, RefineRoundMeta, RefineStoppedReason } from "../storage/RunStore";
 import type { ModelTask } from "../router/types";
 import { detectWrapText, stripWrappingCodeFence } from "../utils/text";
-import { DEFAULT_PLATFORM, qiitaSteps, toModelRequest, type QiitaStepName } from "./qiitaSteps";
+import { DEFAULT_PLATFORM, qiitaSteps, STRONG_EMPHASIS_RULE, toModelRequest, type QiitaStepName } from "./qiitaSteps";
 
 export type QiitaWorkflowResult = {
   runId: string;
@@ -104,6 +104,7 @@ export async function reviseQiitaFinal(
     `次の${platform}記事を、以下の修正指示に従って改善してください。`,
     "Markdown本文だけを返してください。説明やコードフェンスで全体を囲まないでください。",
     "記事の先頭にタイトルの見出し（レベル1の \"# \"）がある場合は、修正指示で明示されない限り保持してください。",
+    STRONG_EMPHASIS_RULE,
     ...(meta.style ? ["", "作法:", meta.style] : []),
     "",
     "修正指示:",
