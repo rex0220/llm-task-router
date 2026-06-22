@@ -218,6 +218,16 @@ export function detectBrokenStrongEmphasis(markdown: string): EmphasisLintIssue[
   return issues;
 }
 
+// 公開: 強調崩れを warning 文字列の配列で返す（verify-artifacts / 生成ワークフローで共用）。
+// label を渡すと「final.md L..」のように対象ファイルを前置する。
+export function strongEmphasisWarnings(markdown: string, options: { label?: string } = {}): string[] {
+  const where = options.label ? `${options.label} ` : "";
+  return detectBrokenStrongEmphasis(markdown).map((issue) => {
+    const what = issue.kind === "unopened" ? "開けない **" : "閉じられない **";
+    return `強調がレンダリングされない可能性: ${where}L${issue.line}:${issue.column}（${what}）。約物（「」（）“”等）を ** の外へ。`;
+  });
+}
+
 type StrongDelimiter = { pos: number; canOpen: boolean; canClose: boolean };
 
 // ちょうど 2 連の `*`（`**`）だけを候補にする（単独 `*`・`***` 以上は対象外）。

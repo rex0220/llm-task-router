@@ -6,6 +6,7 @@ import { SOURCES_BEGIN, SOURCES_END } from "./references";
 import { RunProgress } from "../progress/RunProgress";
 import { aggregate } from "../progress/aggregate";
 import { collectUnsettledWeaknesses } from "../workflows/editorialReview";
+import { strongEmphasisWarnings } from "../utils/text";
 
 // 公開前ゲート: 成果物の揃い・スキーマ・blocking を機械的にチェックする（外部通信なし）。
 // 各検証の中身は再判定しない（factcheck/build/editorial の判断は各担当に委ねる）。
@@ -33,8 +34,13 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  if ((await readOrNull(store, runId, "final.md")) === null) {
+  const finalMd = await readOrNull(store, runId, "final.md");
+  if (finalMd === null) {
     errors.push("final.md が存在しません。");
+  } else {
+    // Phase 2（非ブロック）: 強調 **…** のレンダリング不備を warning で可視化する。
+    // error 化（公開ブロック）は Phase 3。検出ロジックは src/utils/text.ts。
+    warnings.push(...strongEmphasisWarnings(finalMd, { label: "final.md" }));
   }
   if ((await readOrNull(store, runId, "final-review.md")) === null) {
     errors.push("final-review.md が存在しません。");

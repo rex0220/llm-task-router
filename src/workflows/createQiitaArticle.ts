@@ -2,7 +2,7 @@ import { ModelRouter } from "../router/ModelRouter";
 import { RunStore } from "../storage/RunStore";
 import type { RefineMeta, RefineRoundMeta, RefineStoppedReason } from "../storage/RunStore";
 import type { ModelTask } from "../router/types";
-import { detectWrapText, stripWrappingCodeFence } from "../utils/text";
+import { detectWrapText, stripWrappingCodeFence, strongEmphasisWarnings } from "../utils/text";
 import { DEFAULT_PLATFORM, qiitaSteps, STRONG_EMPHASIS_RULE, toModelRequest, type QiitaStepName } from "./qiitaSteps";
 
 export type QiitaWorkflowResult = {
@@ -121,7 +121,7 @@ export async function reviseQiitaFinal(
   await store.markDone(runId, "final", "final.md");
   // final.md を書いたモデルを記録（markDone の後。編集レビューの独立性に使う）。
   await store.setFinalAuthorModel(runId, { provider: response.provider, model: response.model });
-  const warnings = detectWrapText(text);
+  const warnings = [...detectWrapText(text), ...strongEmphasisWarnings(text)];
   onEvent({
     type: "step:done",
     index: 1,
@@ -751,7 +751,7 @@ export async function runQiitaArticle(
       inputTokens: response.usage?.inputTokens,
       outputTokens: response.usage?.outputTokens,
       truncated: response.truncated,
-      warnings: isProse ? detectWrapText(text) : undefined,
+      warnings: isProse ? [...detectWrapText(text), ...strongEmphasisWarnings(text)] : undefined,
     });
   }
 
