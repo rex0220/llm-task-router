@@ -21,6 +21,17 @@ describe("cli inputs", () => {
     expect(stderrSpy).not.toHaveBeenCalled();
   });
 
+  it("rejects an inline value that points at an existing file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "inputs-"));
+    const file = join(dir, "topic.txt");
+    await writeFile(file, "from file", "utf8");
+
+    await expect(resolveText(file, undefined, "topic", "--topic", "--topic-file")).rejects.toThrow(
+      /--topic looks like a file path/
+    );
+    expect(stderrSpy).not.toHaveBeenCalled();
+  });
+
   it("reads file content when only the file is provided", async () => {
     const dir = await mkdtemp(join(tmpdir(), "inputs-"));
     const file = join(dir, "topic.txt");
