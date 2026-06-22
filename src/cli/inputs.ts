@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { basename, resolve, sep } from "node:path";
 
 // CLIのファイル入力をLLMへ送る前の安全ガード。
@@ -56,8 +56,23 @@ export async function resolveText(
 
   const text = inline?.trim();
   if (text) {
+    if (await isExistingInputPath(text)) {
+      throw new Error(`${inlineFlag} looks like a file path: ${text}. Use ${fileFlag} <path> instead.`);
+    }
     return text;
   }
 
   throw new Error(`Provide ${label} with ${inlineFlag} "..." or ${fileFlag} <path>`);
+}
+
+async function isExistingInputPath(value: string): Promise<boolean> {
+  if (value.includes("\n") || value.includes("\r")) {
+    return false;
+  }
+  try {
+    const s = await stat(value);
+    return s.isFile();
+  } catch {
+    return false;
+  }
 }
