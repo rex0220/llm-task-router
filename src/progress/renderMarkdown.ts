@@ -113,7 +113,16 @@ export function renderProgressMarkdown(snapshot: ProgressSnapshot): string {
     const pHead = ["時刻", "工程", "状態", "概算$", ...(showPostTokens ? ["トークン(in/out)"] : []), "補足"];
     lines.push(`| ${pHead.join(" | ")} |`);
     lines.push(`|${pHead.map(() => "---").join("|")}|`);
-    for (const e of snapshot.postCompletion) {
+    const post = snapshot.postCompletion;
+    for (let i = 0; i < post.length; i++) {
+      const e = post[i];
+      // 完了済みの start は「🔄 進行中」として残さない。同じ step の terminal（done/skip/error）が
+      // 後続にあれば、その start は既に解決済み＝その terminal 行が実体を持つので描画しない。
+      // これをしないと revise を繰り返すたびに過去の「進行中」行が積み上がり、すべての revise が
+      // 進行中に見える。実際に進行中なのは「後続に terminal が無い末尾の start」だけ（それは残す）。
+      if (e.status === "start" && post.slice(i + 1).some((x) => x.step === e.step && isPostTerminal(x.status))) {
+        continue;
+      }
       const cost = e.costUsd !== undefined ? `~$${e.costUsd.toFixed(4)}` : "";
       const tokens =
         e.inputTokens !== undefined || e.outputTokens !== undefined
@@ -137,6 +146,11 @@ export function renderProgressMarkdown(snapshot: ProgressSnapshot): string {
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
+}
+
+// 完成後ログで start を畳むときの「解決済み」判定（done/skip/error は terminal）。
+function isPostTerminal(status: ProgressStepStatus): boolean {
+  return status === "done" || status === "skip" || status === "error";
 }
 
 // トークン数を桁区切りで表示（ランタイム locale 非依存に固定）。

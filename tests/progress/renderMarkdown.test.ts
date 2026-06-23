@@ -206,6 +206,41 @@ describe("renderProgressMarkdown", () => {
       const md = renderProgressMarkdown(aggregate("r", completing()));
       expect(md).not.toContain("完成後の変更ログ");
     });
+
+    it("does not render resolved revise 'start' rows as 進行中 (only the trailing in-flight start)", () => {
+      const snap = aggregate("r", [
+        ...completing(),
+        // 1回目の revise（完了済み）: start→done。start 行は描画しない（done 行が実体）。
+        tick({ step: "revise", status: "start" }),
+        tick({ step: "revise", status: "done", note: "第2版" }),
+        // 2回目の revise（完了済み）。
+        tick({ step: "revise", status: "start" }),
+        tick({ step: "revise", status: "done", note: "第3版" }),
+        // 3回目（進行中）: start のみで後続 terminal なし → これだけ 進行中 として残す。
+        tick({ step: "revise", status: "start" }),
+      ]);
+      const md = renderProgressMarkdown(snap);
+      const section = md.slice(md.indexOf("## 完成後の変更ログ"));
+      // 完了済み2件の done 行は残る。進行中（🔄）は末尾の未解決 start ちょうど1件だけ。
+      expect(section).toContain("第2版");
+      expect(section).toContain("第3版");
+      expect((section.match(/🔄 進行中/g) ?? []).length).toBe(1);
+    });
+
+    it("keeps a non-start status row even if a later same-step terminal exists (only collapses 'start')", () => {
+      // verify-artifacts: error→done。error は start ではないので畳まず両方残す（履歴を消さない）。
+      const snap = aggregate("r", [
+        ...completing(),
+        tick({ step: "verify-artifacts", status: "error", note: "FAIL" }),
+        tick({ step: "verify-artifacts", status: "done", note: "OK" }),
+      ]);
+      const section = renderProgressMarkdown(snap).slice(
+        renderProgressMarkdown(snap).indexOf("## 完成後の変更ログ")
+      );
+      expect(section).toContain("FAIL");
+      expect(section).toContain("OK");
+      expect(section).toContain("❌ error");
+    });
   });
 });
 
