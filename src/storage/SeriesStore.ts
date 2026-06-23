@@ -1,0 +1,182 @@
+import { createHash } from "node:crypto";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
+import { validateSlug } from "./meta";
+import { withTrailingNewline } from "./RunStore";
+import {
+  SERIES_FORMAT_VERSION,
+  validateSeriesData,
+  validateSeriesId,
+  type SeriesData,
+  type SeriesVoiceProvenance,
+} from "./seriesMeta";
+
+const SERIES_FILE = "series.json";
+const VOICE_FILE = "voice.md";
+
+// 保存後 UTF-8（末尾改行正規化済み）に対する sha256 hex。RunStore.save とバイト等価の規則で
+// hash を取るため withTrailingNewline を通す（series-c1-plan §5.3 / D2）。
+export function voiceHash(content: string): string {
+  return createHash("sha256").update(withTrailingNewline(content), "utf8").digest("hex");
+}
+
+// series/<slug>/ の read/write・voice 凍結・hash を担う。runs/ とは独立（RunStore は使わない）。
+export class SeriesStore {
+  private readonly root: string;
+
+  constructor(root = "series") {
+    this.root = resolve(root);
+  }
+
+  seriesPath(slug: string): string {
+    const safe = validateSlug(slug);
+    const candidate = resolve(this.root, safe);
+    if (!isInside(this.root, candidate)) {
+      throw new Error("Series path escapes series root");
+    }
+    return candidate;
+  }
+
+  private filePath(slug: string, fileName: string): string {
+    if (fileName.includes("/") || fileName.includes("\\") || fileName.includes("..")) {
+      throw new Error(`Invalid file name: ${fileName}`);
+    }
+    const candidate = resolve(join(this.seriesPath(slug), fileName));
+    if (!isInside(this.seriesPath(slug), candidate)) {
+      throw new Error("File path escapes series directory");
+    }
+    return candidate;
+  }
+
+  async exists(slug: string): Promise<boolean> {
+    return access(this.filePath(slug, SERIES_FILE)).then(
+      () => true,
+      () => false
+    );
+  }
+
+  // series.json を読む。不在は null、破損は validateSeriesData が throw（空扱いにしない）。
+  async read(slug: string): Promise<SeriesData | null> {
+    const raw = await readFile(this.filePath(slug, SERIES_FILE), "utf8").then(
+      (c) => c,
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") {
+          return null;
+        }
+        throw error;
+      }
+    );
+    if (raw === null) {
+      return null;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`Corrupt ${SERIES_FILE} (invalid JSON): ${this.filePath(slug, SERIES_FILE)}`);
+    }
+    return validateSeriesData(parsed, SERIES_FILE);
+  }
+
+  async write(slug: string, data: SeriesData): Promise<void> {
+    await mkdir(this.seriesPath(slug), { recursive: true });
+    await writeFile(this.filePath(slug, SERIES_FILE), withTrailingNewline(JSON.stringify(data, null, 2)), "utf8");
+  }
+
+  private async saveText(slug: string, fileName: string, content: string): Promise<void> {
+    await mkdir(this.seriesPath(slug), { recursive: true });
+    await writeFile(this.filePath(slug, fileName), withTrailingNewline(content), "utf8");
+  }
+
+  async readVoice(slug: string): Promise<string> {
+    return readFile(this.filePath(slug, VOICE_FILE), "utf8");
+  }
+
+  // 履歴の voice ファイル（voice.md / voice-v<N>.md のみ許可）を安全に読む。
+  // series.json が壊れて file に ../ 等が入っても、名前パターン＋filePath 検証で外に出さない。
+  async readVoiceVersionFile(slug: string, file: string): Promise<string> {
+    if (!/^voice(-v\d+)?\.md$/.test(file)) {
+      throw new Error(`Unsafe voice file name: ${file}`);
+    }
+    return readFile(this.filePath(slug, file), "utf8");
+  }
+
+  // 枠を作る。series.json（未凍結）と空の voice.md を置く。既存があればエラー（--force 相当は将来）。
+  async init(slug: string, profile: string, provenance: SeriesVoiceProvenance[] = []): Promise<SeriesData> {
+    const seriesId = validateSeriesId(slug);
+    if (await this.exists(slug)) {
+      throw new Error(`Series already exists: ${slug} (remove series/${slug} to recreate)`);
+    }
+    const data: SeriesData = {
+      version: SERIES_FORMAT_VERSION,
+      seriesId,
+      profile,
+      voice: { frozen: false, version: 0, frozenAt: "", hash: "", history: [], provenance },
+      members: [],
+    };
+    await this.write(slug, data);
+    // 手書き用の空 placeholder（正規化せず真に空。create ゲートは空/空白のみを未記入扱いにする）。
+    await writeFile(this.filePath(slug, VOICE_FILE), "", "utf8");
+    return data;
+  }
+
+  // voice を凍結する（series-c1-plan §5.3）。
+  // 初回（未凍結）: voice.md を凍結し version=1。再 freeze（凍結済み）: ① 現 voice.md を
+  // voice-v<currentVersion>.md に退避 → ② 新 voice を voice.md に保存 → ③ version+1・history 更新。
+  // newContent は CLI が解決した本文（初回は省略時 in-place の voice.md・再 freeze は別ファイル必須）。
+  async freezeVoice(slug: string, newContent: string): Promise<SeriesData> {
+    const data = await this.read(slug);
+    if (!data) {
+      throw new Error(`Series not initialized: ${slug} (run series:init first)`);
+    }
+    const now = new Date().toISOString();
+
+    if (!data.voice.frozen) {
+      // 初回凍結。
+      await this.saveText(slug, VOICE_FILE, newContent);
+      const hash = voiceHash(newContent);
+      data.voice = {
+        frozen: true,
+        version: 1,
+        frozenAt: now,
+        hash,
+        history: [{ version: 1, hash, file: VOICE_FILE }],
+        provenance: data.voice.provenance,
+      };
+      await this.write(slug, data);
+      return data;
+    }
+
+    // 再 freeze。同内容は no-op として拒否（無意味な version 増加を防ぐ）。
+    const newHash = voiceHash(newContent);
+    if (newHash === data.voice.hash) {
+      throw new Error("Refusing to re-freeze identical voice content (no-op)");
+    }
+    const currentVersion = data.voice.version;
+    const retiredFile = `voice-v${currentVersion}.md`;
+    // ① 現 voice.md を退避（先に退避してから上書き）。
+    const currentVoice = await this.readVoice(slug);
+    await this.saveText(slug, retiredFile, currentVoice);
+    // ② 新 voice を保存。
+    await this.saveText(slug, VOICE_FILE, newContent);
+    // ③ version+1・history 更新（旧版の file を退避先に付け替え、新版を末尾に）。
+    const nextVersion = currentVersion + 1;
+    const history = data.voice.history.map((h) =>
+      h.version === currentVersion ? { ...h, file: retiredFile } : h
+    );
+    history.push({ version: nextVersion, hash: newHash, file: VOICE_FILE });
+    data.voice = {
+      ...data.voice,
+      version: nextVersion,
+      frozenAt: now,
+      hash: newHash,
+      history,
+    };
+    await this.write(slug, data);
+    return data;
+  }
+}
+
+function isInside(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}${sep}`);
+}

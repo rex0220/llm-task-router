@@ -1,6 +1,6 @@
 import { ModelRouter } from "../router/ModelRouter";
 import { RunStore } from "../storage/RunStore";
-import type { RefineMeta, RefineRoundMeta, RefineStoppedReason } from "../storage/RunStore";
+import type { RefineMeta, RefineRoundMeta, RefineStoppedReason, RunSeriesMeta } from "../storage/RunStore";
 import type { ModelTask } from "../router/types";
 import { detectWrapText, stripWrappingCodeFence, strongEmphasisWarnings } from "../utils/text";
 import { DEFAULT_PLATFORM, qiitaSteps, STRONG_EMPHASIS_RULE, toModelRequest, type QiitaStepName } from "./qiitaSteps";
@@ -36,17 +36,20 @@ export async function createQiitaArticle(
   router: ModelRouter,
   store: RunStore,
   topic: string,
-  options: { runId?: string; platform?: string; style?: string; profile?: string } = {},
+  options: { runId?: string; platform?: string; style?: string; profile?: string; series?: RunSeriesMeta } = {},
   onEvent: WorkflowReporter = noop
 ): Promise<QiitaWorkflowResult> {
   const runId = options.runId ?? createRunId(topic);
+  // series は store.create に素通しし、store.create 直後＝runQiitaArticle 前に初期 meta へ同梱する
+  // （brief の中間 writeMeta は readMeta で引き継ぐため競合しない・series-c1-plan §10 D5/D6）。
   await store.create(
     runId,
     topic,
     qiitaSteps.map((step) => step.name),
     options.platform ?? DEFAULT_PLATFORM,
     options.style,
-    options.profile
+    options.profile,
+    options.series
   );
   return runQiitaArticle(router, store, runId, undefined, onEvent);
 }

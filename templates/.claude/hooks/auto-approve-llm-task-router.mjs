@@ -2,9 +2,12 @@
 // PreToolUse hook: 記事ワークフローの llm-task-router コマンドを自動承認する。
 // オペレーターが別ディレクトリから `bash -c 'cd "<記事フォルダー>" && llm-task-router article:...'`
 // の形で実行すると、コマンド先頭が `bash` になり settings.json の前方一致 allowlist が効かない。
-// このフックはコマンドを構文的に検証し、「実行される主コマンドが cd と llm-task-router article:* だけ」
-// のときに限り自動承認する（公開相当 export / record-publication も含む。公開ゲートは編集長の
-// GO/NO-GO ＋ ユーザー承認という会話レベルで担保する＝settings.json の allowlist と一貫）。
+// このフックはコマンドを構文的に検証し、「実行される主コマンドが cd と llm-task-router の
+// 許可サブコマンドだけ」のときに限り自動承認する。
+// - article:* は既存方針として接頭辞で広く許可（公開相当 export / record-publication も含む。
+//   公開ゲートは編集長の GO/NO-GO ＋ ユーザー承認という会話レベルで担保する）。
+// - series は新設のため接頭辞ではなく明示コマンド名リストに絞る（ローカルのファイル操作のみ。
+//   将来 series:extract-voice 等モデル呼び出し系が増えても先取り承認しない＝settings.json と一貫）。
 //
 // 重要（安全性）: 単純な部分一致では `llm-task-router article:status; rm -rf /` や
 // `echo llm-task-router article:create && <別コマンド>` のような連結も丸ごと自動承認されてしまう。
@@ -14,8 +17,16 @@
 
 import { readFileSync } from "node:fs";
 
-// command が「cd と llm-task-router article:* だけ」で構成されるか構文的に検証する。
-export function isArticleOnlyCommand(command) {
+// article:* は接頭辞で広く許可（既存方針）。series は新設のため明示コマンド名のみ許可（先取り承認を防ぐ）。
+const ALLOWED_ARTICLE_PREFIX = "article:";
+const ALLOWED_SERIES_COMMANDS = new Set(["series:init", "series:freeze-voice", "series:status"]);
+
+function isAllowedSubcommand(sub) {
+  return !!sub && (sub.startsWith(ALLOWED_ARTICLE_PREFIX) || ALLOWED_SERIES_COMMANDS.has(sub));
+}
+
+// command が「cd と llm-task-router の許可サブコマンドだけ」で構成されるか構文的に検証する。
+export function isWorkflowOnlyCommand(command) {
   let inner = String(command ?? "").trim();
 
   // `bash -c '<script>'` / `sh -c "<script>"` の1段ラップを剥がす（末尾に余計な追記が無いことも担保）。
@@ -71,7 +82,7 @@ export function isArticleOnlyCommand(command) {
   }
   segments.push(cur);
 
-  let sawArticle = false;
+  let sawWorkflow = false;
   for (const seg of segments) {
     const trimmed = seg.trim();
     if (trimmed === "") {
@@ -83,15 +94,15 @@ export function isArticleOnlyCommand(command) {
       continue; // 作業ディレクトリ変更は無害
     }
     if (head === "llm-task-router") {
-      if (!words[1] || !words[1].startsWith("article:")) {
-        return false; // article: 以外（--help 等）はこのフックの対象外
+      if (!isAllowedSubcommand(words[1])) {
+        return false; // article:* と許可された series コマンド以外（--help・未許可 series 等）は対象外
       }
-      sawArticle = true;
+      sawWorkflow = true;
       continue;
     }
     return false; // cd / llm-task-router 以外の主コマンドが混ざる
   }
-  return sawArticle;
+  return sawWorkflow;
 }
 
 function main() {
@@ -111,13 +122,13 @@ function main() {
 
   if (input.tool_name !== "Bash") process.exit(0);
 
-  if (isArticleOnlyCommand(input?.tool_input?.command)) {
+  if (isWorkflowOnlyCommand(input?.tool_input?.command)) {
     process.stdout.write(
       JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
           permissionDecision: "allow",
-          permissionDecisionReason: "記事ワークフローの llm-task-router コマンドを自動承認（cd ＋ article:* のみ）",
+          permissionDecisionReason: "記事ワークフローの llm-task-router コマンドを自動承認（cd ＋ article:* / series:* のみ）",
         },
       })
     );

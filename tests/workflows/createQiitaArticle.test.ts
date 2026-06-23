@@ -94,6 +94,28 @@ describe("Qiita workflow", () => {
     expect(draftCall?.input).toContain(":::message");
   });
 
+  it("embeds series meta at create and keeps it through the brief writeMeta (D5/D6)", async () => {
+    const provider = new WorkflowProvider();
+    const runId = `test-series-${Date.now()}`;
+    const router = new ModelRouter({ mock: provider }, workflowConfig(), new RunLogger(tmpLogPath()));
+    const store = new RunStore(tmpRunRoot());
+
+    await createQiitaArticle(router, store, "topic", {
+      runId,
+      style: "PROFILE\n\n# Series Voice\n\ncalm tone",
+      profile: "qiita",
+      series: { seriesId: "kagaku", role: "article", order: 1, voiceVersion: 1, voiceHash: "abc" },
+    });
+
+    const meta = await store.readMeta(runId);
+    // brief 工程が articleTitle/tags で writeMeta するが、series は readMeta で引き継がれ残る。
+    expect(meta.series).toEqual({ seriesId: "kagaku", role: "article", order: 1, voiceVersion: 1, voiceHash: "abc" });
+    expect(meta.style).toContain("# Series Voice");
+    // 合成された voice が draft プロンプトに注入されている。
+    const draftCall = provider.calls.find((c) => c.input.includes("向けMarkdown本文"));
+    expect(draftCall?.input).toContain("calm tone");
+  });
+
   it("defaults platform to Qiita when not specified", async () => {
     const provider = new WorkflowProvider();
     const runId = `test-platform-default-${Date.now()}`;

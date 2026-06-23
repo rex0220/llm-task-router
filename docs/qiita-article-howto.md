@@ -18,8 +18,8 @@ llm-task-router を使って Qiita 記事を「作成 → 評価 → 修正 → 
 
 オペレーターを Claude Code で回す場合の承認プロンプト軽減は、**`llm-task-router init` が記事フォルダーに展開する `.claude/` に同梱済み**（手順 2 参照）。中身は:
 
-- `.claude/settings.json` … 記事ワークフローの `llm-task-router article:*`（`export` / `record-publication` を含む）と `WebSearch` / `WebFetch`（裏取り用・全ドメイン）を allow。
-- `.claude/hooks/auto-approve-llm-task-router.mjs` … 別ディレクトリから `bash -c 'cd "<記事フォルダー>" && llm-task-router article:...'` の形で実行されると先頭が `bash` になり前方一致 allowlist が効かないため、**コマンド全文を見て自動承認する** PreToolUse フック（`settings.json` に登録済み）。
+- `.claude/settings.json` … 記事ワークフローの `llm-task-router article:*`（`export` / `record-publication` を含む）と、シリーズ第1段の `series:init` / `series:freeze-voice` / `series:status` の3コマンド、`WebSearch` / `WebFetch`（裏取り用・全ドメイン）を allow。`series:*` は接頭辞ではなくこの3コマンドだけ（将来のモデル呼び出し系を先取り承認しない）。
+- `.claude/hooks/auto-approve-llm-task-router.mjs` … 別ディレクトリから `bash -c 'cd "<記事フォルダー>" && llm-task-router article:... / series:...'` の形で実行されると先頭が `bash` になり前方一致 allowlist が効かないため、**コマンド全文を見て自動承認する** PreToolUse フック（`settings.json` に登録済み）。自動承認するのは `article:*`（接頭辞）と上記 `series:` 3コマンドのみで、未許可の `series:*`（例: 将来の `series:extract-voice` / `series:plan`）や連結・パイプ・置換が混ざると通常プロンプトに戻す。
 - `.claude/agents/`・`.claude/commands/`・`CLAUDE.md` … 編集長／factchecker／build-verifier と各スラッシュコマンド。
 
 公開（`article:export`）も自動承認に含めているが、**公開ゲートは編集長の GO/NO-GO ＋ ユーザー承認（会話レベル）で担保**する設計（CLAUDE.md「自走で公開しない」）。権限プロンプトでは止めない。
@@ -567,6 +567,80 @@ llm-task-router article:record-publication --run 2026-06-19-<slug>-v2 \
 - `article:export` は **コピーのみ**で meta を更新しない。公開先 URL/版の記録は `article:record-publication` の責務（責務分離）。
 - `record-publication` は同一 slug の version 退行を拒否（完全一致は no-op、訂正は `--force`）。`export` と同様の**公開相当の操作**。v0.2.31 でコマンド実行プロンプトは外れたが、再公開と新規投稿の取り違えを防ぐため**実行前に毎回 URL を内容で確認**する（編集長／ユーザーが承認）。
 - `record-publication` は **progress の canonical 工程に含めない**（公開台帳＝`meta.published`/`export/index.json` の更新であって、記事生成工程ではないため）。進捗上の完了は `export`（=公開相当の書き出し）で表す。更新リライトで公開台帳まで終えたかは `article:status` ではなく `export/index.json` で確認する。
+
+## シリーズで複数記事を同じ文体で作る（series:* / `article:create --series`）
+
+「科学解説シリーズ」のように、**独立したトピックを同じ文体（voice）で何本も書く**運用。文体をシリーズ単位で1度だけ凍結し、各記事の作成時にその voice を本文生成プロンプトへ焼き込む。各記事は作成後、通常どおり refine / factcheck / export の工程を通す（シリーズは「作成前の文体共有」と「束の管理」を足すだけで、9段の工程順は変えない）。
+
+> 仕様の詳細は [series-spec.md](series-spec.md)、実装計画は [series-c1-plan.md](series-c1-plan.md)。第1段は**科学シリーズ（同一文体・独立記事）**が対象。章送り（小説）の連続性・テーマ分割の計画（`series:plan`）・`/series` スラッシュコマンドは第2段以降の予定。
+
+### 1. シリーズの枠を作る（`series:init`）
+
+`series/<slug>/`（`series.json` と空の `voice.md`）を作る。`--profile` がそのシリーズ既定の profile になる。
+
+```bash
+llm-task-router series:init --slug kagaku --profile qiita
+# → series/kagaku/series.json（未凍結）, series/kagaku/voice.md（空・手書き用）
+```
+
+### 2. 文体（voice）を手書きして凍結する（`series:freeze-voice`）
+
+`series/<slug>/voice.md` に**共有したい文体**を手書きする（トーン・人称・語彙・禁止表現・構成の癖など。記事本文は書かない）。書けたら凍結する。
+
+```bash
+# 例: series/kagaku/voice.md を編集してから
+llm-task-router series:freeze-voice --slug kagaku
+# → voice を version 1 で凍結（first-write-wins）。hash を series.json に記録
+```
+
+- **初回**は `--voice-file` 省略可（その場の `voice.md` を凍結）。外部ファイルから取り込むなら `--voice-file path/to/voice.md`。
+- 凍結後に `voice.md` を手編集して別内容で記事を作ろうとすると **`article:create --series` が hash 不一致で拒否**する（文体のブレ防止）。文体を変えたいときは別ファイルに書いて再凍結する：
+
+```bash
+# 文体を改訂する（version 2 に上がり、旧版は voice-v1.md に保全される）
+llm-task-router series:freeze-voice --slug kagaku --voice-file voice.draft.md
+```
+
+### 3. メンバー記事を作成する（`article:create --series`）
+
+通常の `article:create` に `--series <slug>` を付けるだけ。topic は記事ごとに用意する（`--topic-file` 推奨）。
+
+```bash
+llm-task-router article:create --series kagaku --order 1 \
+  --topic-file topics/blackhole.txt
+llm-task-router article:create --series kagaku --order 2 \
+  --topic-file topics/neutrino.txt
+```
+
+- **`--profile` は省略でよい**。`--series` 指定時はシリーズの profile（手順1で決めた値）が既定になる。明示した `--profile` がシリーズと違うと拒否される（意図的にずらすなら `--allow-profile-mismatch`）。
+- **`--order N`**（1始まり）は束の中の並び順。同じ order を指定すると上書き（upsert）、省略すると末尾に追加。
+- voice は `profile.style` の後ろに `# Series Voice` 見出し付きで合成され、その記事の `meta.style` に焼き込まれる。以後その記事の `article:revise` でも同じ voice が再現される（version を上げても**既存記事は作成時の voice のまま**）。
+- 作成後は **1記事ずつ通常フロー**（`article:refine` → 方向性ゲート → factcheck → … → `article:export`）。シリーズだからといって工程は変わらない。
+
+### 4. 束の状態を確認・修復する（`series:status`）
+
+```bash
+llm-task-router series:status --slug kagaku            # メンバー一覧・順序・衝突を表示（読み取り）
+llm-task-router series:status --slug kagaku --json     # 機械処理用
+llm-task-router series:status --slug kagaku --fix      # run 側を正に series.json.members を修復
+```
+
+- 既定は**読み取りのみ**。`--fix` で `runs/` を走査して `meta.series` を正に `series.json.members` を埋め直す。
+- order 重複・runId 多重・planned slug 不一致・voiceHash 不一致などの**多義的な衝突は修復せず警告**するだけ（人が解す）。
+
+### フォルダー構成（シリーズ）
+
+```text
+qiita-articles/
+├─ series/
+│  └─ kagaku/
+│     ├─ series.json     ← マニフェスト（profile / voice 凍結印 / members）
+│     ├─ voice.md        ← 凍結中の共有文体（現行版）
+│     └─ voice-v1.md     ← 再凍結で退避された旧版（あれば）
+└─ runs/
+   ├─ 2026-06-23-blackhole/   ← メンバー記事（meta.series で kagaku に紐づく）
+   └─ 2026-06-23-neutrino/
+```
 
 ## 使うAIの目安
 

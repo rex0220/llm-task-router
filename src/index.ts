@@ -62,6 +62,18 @@ import {
 } from "./cli/references";
 import { runEditorialReview, resolveWeakness, parseWeaknessResolution } from "./workflows/editorialReview";
 import { initConfig } from "./cli/init";
+import {
+  buildSeriesMeta,
+  composeSeriesStyle,
+  readSeriesForCreate,
+  recordMember,
+  resolveSeriesProfile,
+  seriesFreezeVoice,
+  seriesInit,
+  seriesStatus,
+} from "./cli/series";
+import { validateSlug } from "./storage/meta";
+import { memberSlugFromRunId } from "./storage/seriesMeta";
 import { ExportIndex } from "./storage/ExportIndex";
 import { loadProfile } from "./workflows/profile";
 import { RunLogger } from "./logger/RunLogger";
@@ -121,28 +133,62 @@ program
   .command("article:create")
   .option("--topic <topic>", "Article topic (inline text)")
   .option("--topic-file <path>", "Path to a text file containing the topic / instructions")
-  .option("--profile <name>", "Article profile under config/profiles/ (platform + style)", "qiita")
+  .option("--profile <name>", "Article profile under config/profiles/ (platform + style). Default: qiita, or the series profile when --series is given")
   .option("--platform <name>", "Override the platform label from the profile")
   .option("--run <runId>", "Run id")
   .option("--editor-model <id>", "Editor-in-chief AI model id (e.g. claude-opus-4-8). Fixed at creation, shown in progress.md header")
   .option("--code-check", "Run code syntax/type checks (build-verify) for this article. Off by default — article code is often abbreviated samples. Fixed at creation")
+  .option("--series <slug>", "Create this article as a member of the given series (injects the frozen voice into meta.style)")
+  .option("--order <n>", "Series member order (1-based). Upserts that order slot; omit to append")
+  .option("--allow-profile-mismatch", "Allow --profile to differ from the series profile (off by default)")
   .option("--config <path>", "Path to models.yaml", "config/models.yaml")
   .action(
     async (options: {
       topic?: string;
       topicFile?: string;
-      profile: string;
+      profile?: string;
       platform?: string;
       run?: string;
       editorModel?: string;
       codeCheck?: boolean;
+      series?: string;
+      order?: string;
+      allowProfileMismatch?: boolean;
       config: string;
     }) => {
       const topic = await resolveText(options.topic, options.topicFile, "topic", "--topic", "--topic-file");
-      const profile = await loadProfile(options.profile);
+
+      const order = options.order != null ? Number(options.order) : undefined;
+      if (order != null && (!Number.isInteger(order) || order < 1)) {
+        throw new Error(`Invalid --order: ${options.order} (use a positive integer)`);
+      }
+
+      // --series 指定時は series.profile を既定にし（明示 --profile が異なれば拒否）、voice を解決する。
+      // 検証（未凍結 / voice 空 / freeze 後改変）は create の前に readSeriesForCreate で弾く。
+      const seriesRead = options.series ? await readSeriesForCreate(options.series) : undefined;
+      const effectiveProfile = seriesRead
+        ? resolveSeriesProfile(
+            seriesRead.data.profile,
+            options.profile,
+            options.allowProfileMismatch === true,
+            options.series as string
+          )
+        : options.profile ?? "qiita";
+
+      const profile = await loadProfile(effectiveProfile);
       const platform = options.platform ?? profile.platform;
       const runIdSeed = options.topicFile ? basename(options.topicFile).replace(/\.[^.]+$/, "") : topic;
       const runId = options.run ?? createRunId(runIdSeed);
+
+      let style = profile.style;
+      let series: import("./storage/RunStore").RunSeriesMeta | undefined;
+      if (seriesRead) {
+        // member slug は create の前に検証する（--run 明示で不正 slug の孤立 run を作らない・P1）。
+        validateSlug(memberSlugFromRunId(runId));
+        style = composeSeriesStyle(profile.style, seriesRead.voice);
+        series = buildSeriesMeta(seriesRead.data, order);
+      }
+
       const { router, store } = await createRuntime(options.config);
       const progress = new RunProgress(store, pkg.version);
       const reporter = createProgressReporter();
@@ -161,15 +207,90 @@ program
             router,
             store,
             topic,
-            { runId, platform, style: profile.style, profile: options.profile },
+            { runId, platform, style, profile: effectiveProfile, series },
             reporter.report
           ),
       });
+
+      // create 成功後に series.json.members を upsert（run→series.json の順・series-c1-plan §6.1）。
+      if (options.series) {
+        await recordMember(options.series, result.runId, order);
+      }
+
       reporter.printTotal();
       console.log(`runId: ${result.runId}`);
       console.log(`final: runs/${result.runId}/final.md`);
+      if (options.series) {
+        console.log(`series: ${options.series} (order ${order ?? "appended"})`);
+      }
     }
   );
+
+program
+  .command("series:init")
+  .description("Scaffold series/<slug>/ (series.json + an empty voice.md to hand-write) for a multi-article series")
+  .requiredOption("--slug <slug>", "Series slug (series/<slug>/)")
+  .option("--profile <name>", "Series profile (members default to this; create rejects a mismatch)", "qiita")
+  .action(async (options: { slug: string; profile: string }) => {
+    const data = await seriesInit(options.slug, options.profile);
+    console.log(`series: series/${data.seriesId}/ (profile=${data.profile})`);
+    console.log(`next: edit series/${data.seriesId}/voice.md, then run series:freeze-voice --slug ${data.seriesId}`);
+  });
+
+program
+  .command("series:freeze-voice")
+  .description("Freeze the series voice (first-write-wins). Re-freeze requires --voice-file (a separate file) and bumps the version")
+  .requiredOption("--slug <slug>", "Series slug")
+  .option("--voice-file <path>", "Voice file to import. Optional on the first freeze (uses the in-place voice.md); required on re-freeze")
+  .action(async (options: { slug: string; voiceFile?: string }) => {
+    const data = await seriesFreezeVoice(options.slug, options.voiceFile);
+    console.log(`series voice frozen: ${data.seriesId} version=${data.voice.version} hash=${data.voice.hash.slice(0, 12)}…`);
+  });
+
+program
+  .command("series:status")
+  .description("Show series members and reconciliation against run metadata. Read-only unless --fix is passed")
+  .requiredOption("--slug <slug>", "Series slug")
+  .option("--fix", "Repair series.json.members from run metadata (ambiguous conflicts are reported, not fixed)")
+  .option("--json", "Print the status as JSON")
+  .action(async (options: { slug: string; fix?: boolean; json?: boolean }) => {
+    const result = await seriesStatus(options.slug);
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    } else {
+      console.log(`series: ${result.data.seriesId} (profile=${result.data.profile}, voice v${result.data.voice.version})`);
+      for (const m of result.members) {
+        console.log(`  [${m.order}] ${m.status.padEnd(7)} ${m.slug}${m.runId ? ` (${m.runId})` : " (planned)"}`);
+      }
+      for (const w of result.warnings) {
+        process.stderr.write(`  ⚠ ${w}\n`);
+      }
+      for (const c of result.conflicts) {
+        process.stderr.write(`  ✗ conflict: ${c}\n`);
+      }
+    }
+
+    if (options.fix) {
+      if (result.conflicts.length > 0) {
+        process.stderr.write("  ⚠ conflicts present — members not repaired. Resolve the conflicts above first.\n");
+      } else {
+        const { SeriesStore } = await import("./storage/SeriesStore");
+        const store = new SeriesStore();
+        const data = await store.read(options.slug);
+        if (data) {
+          data.members = result.members;
+          await store.write(options.slug, data);
+          // --json 時は stdout を JSON 専有にするため、修復メッセージは stderr へ（機械処理を壊さない）。
+          const repaired = `series:status --fix: repaired series/${options.slug}/series.json members`;
+          if (options.json) {
+            process.stderr.write(`${repaired}\n`);
+          } else {
+            console.log(repaired);
+          }
+        }
+      }
+    }
+  });
 
 program
   .command("article:resume")
