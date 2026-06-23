@@ -1,6 +1,11 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { validateSafeId } from "./meta";
+
+// 保存時の末尾改行正規化（既存 save と同じ規則）。SeriesStore とバイト等価で共有するため抽出。
+export function withTrailingNewline(content: string): string {
+  return content.endsWith("\n") ? content : `${content}\n`;
+}
 
 export type RunStepStatus = "pending" | "done";
 
@@ -72,6 +77,17 @@ export type LineageMeta = {
   sourceExportPath?: string; // import 元
 };
 
+// シリーズ（横の束）の正本（series-spec §5.1）。published / lineage と並列の第3軸。
+// run がどのシリーズの何番目で、どの版・内容の voice で書かれたかを焼き込む（監査用）。
+export type RunSeriesMeta = {
+  seriesId: string; // series/<slug> に対応（series.json と一致）
+  role?: "article" | "chapter" | "seed"; // 既定 "article"。小説は "chapter"
+  order?: number; // 束内の順序（1 始まり）
+  prevRunId?: string; // 連続性の参照元（小説の前章 run）
+  voiceVersion: number; // 焼き込んだ voice の版（series.json.voice.version と対応）
+  voiceHash: string; // 同 voice の内容ハッシュ（sha256 hex・監査用）
+};
+
 // 編集レビューの独立性に使うモデル印（editorial-review-spec §5.1）。
 export type ModelStamp = { provider: string; model: string };
 // 現在の final.md を最後に生成・改稿したモデル。import 由来は "external"。
@@ -98,6 +114,8 @@ export type RunMeta = {
   // 編集レビューの独立性用（editorial-review-spec §5.1）。
   finalAuthorModel?: FinalAuthorModel; // 現 final.md を最後に書いたモデル（import は "external"）
   reviewerModel?: ModelStamp; // 直近の editorial_review 実応答モデル
+  // シリーズ（横の束）の正本（series-spec §5.1）。optional・既存 run は undefined。
+  series?: RunSeriesMeta;
 };
 
 export class RunStore {
@@ -113,7 +131,10 @@ export class RunStore {
     steps: string[],
     platform?: string,
     style?: string,
-    profile?: string
+    profile?: string,
+    // series は末尾の optional 引数（位置を並べ替えない＝既存呼び出しに非影響・series-c1-plan §9.5）。
+    // 渡されたときだけ初期 meta.json に同梱し、brief の中間 writeMeta と競合させない（§10 D6）。
+    series?: RunSeriesMeta
   ): Promise<RunMeta> {
     const meta: RunMeta = {
       runId: this.validateRunId(runId),
@@ -124,10 +145,48 @@ export class RunStore {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       steps: Object.fromEntries(steps.map((step) => [step, { status: "pending" as const }])),
+      // undefined は JSON.stringify で出力されないため、series 無しでは meta に現れない。
+      ...(series ? { series } : {}),
     };
     await mkdir(this.runPath(meta.runId), { recursive: true });
     await this.writeMeta(meta);
     return meta;
+  }
+
+  // 指定シリーズに属する run の meta を runs/ 横断で集める（series:status --fix の source of truth）。
+  // 壊れた run（meta 読込/検証不能）は握り潰さず warnings に積み、全体は止めない（series-c1-plan §9.5）。
+  // console には出さず構造で返す（責務分離・テスト容易）。
+  async listSeriesRuns(seriesId: string): Promise<{ runs: RunMeta[]; warnings: string[] }> {
+    const runs: RunMeta[] = [];
+    const warnings: string[] = [];
+    let entries: string[];
+    try {
+      entries = await readdir(this.root);
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === "ENOENT") {
+        return { runs, warnings };
+      }
+      throw error;
+    }
+    for (const entry of entries) {
+      let meta: RunMeta;
+      try {
+        meta = await this.readMeta(entry);
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        // meta.json が無い＝run ではない（export/ 等）→ 静かにスキップ。
+        // それ以外（不正 JSON・I/O・不正 runId 名）は壊れた run として警告し、全体は止めない。
+        if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") {
+          warnings.push(`Skipped ${entry}: ${err?.message ?? "meta.json unreadable"}`);
+        }
+        continue;
+      }
+      if (meta.series?.seriesId === seriesId) {
+        runs.push(meta);
+      }
+    }
+    return { runs, warnings };
   }
 
   async readMeta(runId: string): Promise<RunMeta> {
@@ -143,7 +202,7 @@ export class RunStore {
 
   async save(runId: string, fileName: string, content: string): Promise<void> {
     await mkdir(this.runPath(runId), { recursive: true });
-    await writeFile(this.filePath(runId, fileName), content.endsWith("\n") ? content : `${content}\n`, "utf8");
+    await writeFile(this.filePath(runId, fileName), withTrailingNewline(content), "utf8");
   }
 
   async read(runId: string, fileName: string): Promise<string> {
