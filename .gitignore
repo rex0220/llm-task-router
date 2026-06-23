@@ -7,6 +7,8 @@ runs/*
 !runs/.gitkeep
 work/*
 !work/.gitkeep
+# CLI が cwd 直下に作る成果物。ソース repo 内で誤って実行しても混入させない（series-c1-plan §9.5 の運用ガード）。
+series/
 
 # Ignore only the repo-root Claude Code config (local dev), not templates/.claude/
 # which is distributed scaffold copied by `init`.
