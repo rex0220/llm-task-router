@@ -49,7 +49,7 @@ describe("selectReferenceSources", () => {
     expect(selectReferenceSources(claims, sources).map((s) => s.id)).toEqual(["S001"]);
   });
 
-  it("orders primary before secondary, then by id, and dedups", () => {
+  it("orders by id ascending (regardless of sourceType) and dedups", () => {
     const claims = [
       claim({ id: "C001-aaaaaaaa", status: "verified", lifecycle: "present", sourceIds: ["S002", "S001", "S002"] }),
     ];
@@ -57,7 +57,7 @@ describe("selectReferenceSources", () => {
       source("S001", { sourceType: "secondary" }),
       source("S002", { sourceType: "primary" }),
     ];
-    expect(selectReferenceSources(claims, sources).map((s) => s.id)).toEqual(["S002", "S001"]);
+    expect(selectReferenceSources(claims, sources).map((s) => s.id)).toEqual(["S001", "S002"]);
   });
 });
 

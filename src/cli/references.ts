@@ -46,9 +46,8 @@ export function stripLlmReferenceSections(body: string): { body: string; removed
   return { body: out.join("\n"), removed };
 }
 
-const SOURCE_TYPE_ORDER: Record<Source["sourceType"], number> = { primary: 0, secondary: 1 };
-
-// present かつ verified な claim が参照する source だけを、primary→secondary・id 昇順で返す（重複排除）。
+// present かつ verified な claim が参照する source だけを、id 昇順で返す（重複排除）。
+// id は SOURCE_ID_RE（^S\d{3}$）で3桁ゼロ詰め固定なので、文字列ソートでそのまま番号順になる。
 // 防御として reachable:"dead" は参考章に出さない（死リンクを焼かない。台帳不整合の検出は verify-artifacts）。
 export function selectReferenceSources(claims: Claim[], sources: Source[]): Source[] {
   const citedIds = collectCitedSourceIds(claims);
@@ -62,9 +61,7 @@ export function selectReferenceSources(claims: Claim[], sources: Source[]): Sour
       picked.push(s);
     }
   }
-  return picked.sort(
-    (a, b) => SOURCE_TYPE_ORDER[a.sourceType] - SOURCE_TYPE_ORDER[b.sourceType] || a.id.localeCompare(b.id)
-  );
+  return picked.sort((a, b) => a.id.localeCompare(b.id));
 }
 
 // 選定済み source を参考ブロック（マーカー込み）に描画する。
