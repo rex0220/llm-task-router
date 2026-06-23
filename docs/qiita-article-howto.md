@@ -574,6 +574,8 @@ llm-task-router article:record-publication --run 2026-06-19-<slug>-v2 \
 
 > 仕様の詳細は [series-spec.md](series-spec.md)、実装計画は [series-c1-plan.md](series-c1-plan.md)。第1段は**科学シリーズ（同一文体・独立記事）**が対象。章送り（小説）の連続性・テーマ分割の計画（`series:plan`）・`/series` スラッシュコマンドは第2段以降の予定。
 
+> **必ず作業フォルダー（`llm-task-router init` 済み）で実行する**。`series/` は cwd 直下に作られるため、`series:*` は cwd が初期化済みワークスペース（`config/models.yaml` がある）でないと拒否する（llm-task-router のソース repo や未初期化ディレクトリでは止まる）。出力は作成先を**絶対パス**で表示するので、誤配置に気づける。意図的に外で実行するときだけ `--allow-outside-workspace`。
+
 ### 1. シリーズの枠を作る（`series:init`）
 
 `series/<slug>/`（`series.json` と空の `voice.md`）を作る。`--profile` がそのシリーズ既定の profile になる。

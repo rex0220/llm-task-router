@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { assertSafeInputPath, resolveText } from "./cli/inputs";
@@ -74,6 +74,7 @@ import {
 } from "./cli/series";
 import { validateSlug } from "./storage/meta";
 import { memberSlugFromRunId } from "./storage/seriesMeta";
+import { assertArticleWorkspace } from "./cli/workspace";
 import { ExportIndex } from "./storage/ExportIndex";
 import { loadProfile } from "./workflows/profile";
 import { RunLogger } from "./logger/RunLogger";
@@ -231,10 +232,12 @@ program
   .description("Scaffold series/<slug>/ (series.json + an empty voice.md to hand-write) for a multi-article series")
   .requiredOption("--slug <slug>", "Series slug (series/<slug>/)")
   .option("--profile <name>", "Series profile (members default to this; create rejects a mismatch)", "qiita")
-  .action(async (options: { slug: string; profile: string }) => {
+  .option("--allow-outside-workspace", "Allow running outside an initialized article workspace (off by default)")
+  .action(async (options: { slug: string; profile: string; allowOutsideWorkspace?: boolean }) => {
+    await assertArticleWorkspace({ allowOutsideWorkspace: options.allowOutsideWorkspace });
     const data = await seriesInit(options.slug, options.profile);
-    console.log(`series: series/${data.seriesId}/ (profile=${data.profile})`);
-    console.log(`next: edit series/${data.seriesId}/voice.md, then run series:freeze-voice --slug ${data.seriesId}`);
+    console.log(`series: ${resolve("series", data.seriesId)} (profile=${data.profile})`);
+    console.log(`next: edit ${resolve("series", data.seriesId, "voice.md")}, then run series:freeze-voice --slug ${data.seriesId}`);
   });
 
 program
@@ -242,9 +245,12 @@ program
   .description("Freeze the series voice (first-write-wins). Re-freeze requires --voice-file (a separate file) and bumps the version")
   .requiredOption("--slug <slug>", "Series slug")
   .option("--voice-file <path>", "Voice file to import. Optional on the first freeze (uses the in-place voice.md); required on re-freeze")
-  .action(async (options: { slug: string; voiceFile?: string }) => {
+  .option("--allow-outside-workspace", "Allow running outside an initialized article workspace (off by default)")
+  .action(async (options: { slug: string; voiceFile?: string; allowOutsideWorkspace?: boolean }) => {
+    await assertArticleWorkspace({ allowOutsideWorkspace: options.allowOutsideWorkspace });
     const data = await seriesFreezeVoice(options.slug, options.voiceFile);
     console.log(`series voice frozen: ${data.seriesId} version=${data.voice.version} hash=${data.voice.hash.slice(0, 12)}…`);
+    console.log(`  voice: ${resolve("series", data.seriesId, "voice.md")}`);
   });
 
 program
@@ -253,7 +259,9 @@ program
   .requiredOption("--slug <slug>", "Series slug")
   .option("--fix", "Repair series.json.members from run metadata (ambiguous conflicts are reported, not fixed)")
   .option("--json", "Print the status as JSON")
-  .action(async (options: { slug: string; fix?: boolean; json?: boolean }) => {
+  .option("--allow-outside-workspace", "Allow running outside an initialized article workspace (off by default)")
+  .action(async (options: { slug: string; fix?: boolean; json?: boolean; allowOutsideWorkspace?: boolean }) => {
+    await assertArticleWorkspace({ allowOutsideWorkspace: options.allowOutsideWorkspace });
     const result = await seriesStatus(options.slug);
     if (options.json) {
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -280,8 +288,8 @@ program
         if (data) {
           data.members = result.members;
           await store.write(options.slug, data);
-          // --json 時は stdout を JSON 専有にするため、修復メッセージは stderr へ（機械処理を壊さない）。
-          const repaired = `series:status --fix: repaired series/${options.slug}/series.json members`;
+          // --json 時は stdout を JSON 専有にするため、修復メッセージは stderr へ（機械処理を壊さない）。絶対パスで事故調査を容易に。
+          const repaired = `series:status --fix: repaired ${resolve("series", options.slug, "series.json")} members`;
           if (options.json) {
             process.stderr.write(`${repaired}\n`);
           } else {
