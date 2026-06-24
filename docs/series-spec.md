@@ -88,6 +88,9 @@ series?: {
 
 > **voice の provenance（どこから抽出したか・複数 exemplar・外部ファイル等）は `series.json` 側に集約**し（§5.2）、run 側には「**どの版・どの内容の voice で生成されたか**」だけを `voiceVersion` / `voiceHash` で焼き込む（Codex P2）。これで voice を後から明示更新しても、各記事がどの文体条件で書かれたかを監査できる。記事全文を入れる `--style-from <runId>` 案は内容混入のため不採用（課題 C2）。
 
+> **order は 1 始まりの整数（不変条件・実装済み）**。`series.json.members[].order` は読み込み時に `Number.isInteger && >= 1` を検証し、0-based / 非整数を弾く（`validateMembers`）。`article:create` の `--order` も `>= 1` のみ受け付け、省略時は末尾に自動採番して `meta.series.order` に確定値を焼き込む（create 完了後 `recordMember` が最新 `series.json` を読んで採番）。
+> **移行注意（運用）**: この検証は `SeriesStore.read` を通る**全シリーズ操作（`series:status` / `create --series` / `export` / `recordMember`）で読み取り時にハードフェイル**する。そのため **0-based の旧 `series.json` は `series:status` でも中身を開けず読み取りエラーになる**（早期検出が目的）。旧データに当たったら、まず `series.json` の `order` と各 run の `meta.series.order` を手で 1 始まりへ直してから（`series.json` の全 member を `order+1`、各 run meta も対応 order に揃える）CLI を使う。
+
 ### 5.2 `series/<slug>/`（シリーズ container・`runs/` の外）
 
 run ディレクトリと独立させる（F2）。最小フェーズでも薄く立てる（voice と未作成枠の置き場が要るため）。
@@ -172,7 +175,8 @@ series/<slug>/
 | `series:freeze-voice <slug> [--voice-file <path>]` | 手書き voice を取り込み、`hash`/`version`/`frozenAt`/`history[]` を確定し `frozen: true` に。初回は同一パス可、再 freeze は `version`+1（旧版を voice-v<N>.md に保全・§5.3） | 非 canonical |
 | `series:plan <slug>` | outline からメンバー枠を `series.json` に割り付け（テーマ分割・小説） | 非 canonical |
 | `article:create ... --series <slug> [--order N] [--prev <runId>]` | voice を `meta.style` に焼き込み（§5.3）・連続状態を注入。meta.series（voiceVersion/Hash 込み）を記録 | **既存 canonical（create）** |
-| `series:status <slug> [--fix]` | メンバー横断の進捗・概算コスト・残枠を集計。既定は dry-run 表示、`--fix` で `series.json` を修復（§6.1） | 非 canonical（`--fix` 時のみ書込） |
+| `series:status <slug> [--fix] [--write]` | メンバー横断の進捗・残枠を集計。既定は dry-run 表示、`--fix` で `series.json` を修復＋`meta.series.order` 欠落の遡及補修（§6.1）、`--write` で `series/<slug>/README.md`（人が読む一覧・派生ビュー）を生成 | 非 canonical（`--fix`/`--write` 時のみ書込） |
+| `article:export ... [--out-dir <dir>]` | シリーズメンバーを `<seriesId>-<NN>-<slug>[-<platform>].md`（NN=保存順 order 2桁）で自動命名 export。`--out` 明示が優先、両無しはエラー | 既存 canonical（export・§追加課題D） |
 
 - `series:*` は **canonical 9 段に含めない**（シリーズ管理であって記事生成工程ではない。`record-publication` を canonical に含めないのと同じ判断）。各メンバーの進捗は従来どおり run 単位の `progress.events.jsonl` に残る。
 - スキル `/series`（仮）が編集長を介して `series:init → voice 確定 → plan → メンバーごとに /write-article → series:status` を駆動する。各メンバーの作成自体は既存 `/write-article` を流用する。
@@ -271,7 +275,7 @@ series/<slug>/
 | C6 | 小説の連続性で `chapter-state.json` を**誰が生成するか**。done 出口で要約する工程の担当（CLI か編集長か別エージェントか）が未定。要約品質が次章の矛盾に直結する。 | P2 | §5.4 はデータ形だけ確定。生成工程は要設計（factcheck と同様に CLI 無し工程として編集長が記録する案）。 |
 | C7 | `series:status` のコスト集計は各 run の `progress.json` 依存。Claude Code（外側 AI）のトークンは router.log に出ないため、シリーズ合計も概算止まり（既存の単記事と同じ制約）。 | P3 | 既存制約の踏襲。概算と明記する。 |
 | C8 | runId 採番の衝突（同日に同シリーズの複数メンバーを作ると `<date>-<slug>` が衝突しうる）。 | P3 | slug にメンバー識別子（章番号等）を含める運用ガイドで回避。CLI 側の発番補助は将来拡張。 |
-| C9 | 同一シリーズの**並行作成で `series.json` が競合**（§6.2）。`recordMember` が read-modify-write でロック/CAS 無し。order 二重採番（R1）・member の lost update（R2）が race で起き得る。 | P2 | **対策確定＝案B（記帳の直列化）**: `recordMember` の read-modify-write を **`mkdir` 原子ロック**（または temp＋rename＋CAS）でシリーズ単位に排他。臨界区間はミリ秒（create 完了後の記帳のみ）で R1/R2 を根絶。LLM 生成中はロック非保持＝stale lock が残らない。粗いロック（create 全体禁止＝案A）は不採用。**R3（明示 `--order` の取り合い）はロック対象外**でユーザー誤り扱い＝`series:status` 衝突1で検出。 |
+| C9 | 同一シリーズの**並行作成で `series.json` が競合**（§6.2）。`recordMember` が read-modify-write でロック/CAS 無し。order 二重採番（R1）・member の lost update（R2）が race で起き得る。 | **解決済**（案B 実装） | `recordMember` の read-modify-write を `SeriesStore.withLock`（`series/.locks/<slug>.lock` の `mkdir` 原子ロック）でシリーズ単位に直列化。臨界区間はミリ秒（create 完了後の記帳のみ）で R1/R2 を根絶。LLM 生成中はロック非保持＝stale lock が残らない。`.locks` は slug 予約。粗いロック（案A）は不採用。**R3（明示 `--order` の取り合い）はロック対象外**でユーザー誤り扱い＝`series:status` 衝突1で検出。並行テスト＋ネガティブコントロールで担保。 |
 
 ## 10. 段階的導入
 

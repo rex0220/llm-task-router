@@ -619,30 +619,47 @@ llm-task-router article:create --series kagaku --order 2 \
 - voice は `profile.style` の後ろに `# Series Voice` 見出し付きで合成され、その記事の `meta.style` に焼き込まれる。以後その記事の `article:revise` でも同じ voice が再現される（version を上げても**既存記事は作成時の voice のまま**）。
 - 作成後は **1記事ずつ通常フロー**（`article:refine` → 方向性ゲート → factcheck → … → `article:export`）。シリーズだからといって工程は変わらない。
 
+- メンバー記事を**公開用に export する**ときは、`--out-dir` でシリーズ命名規則に従って自動命名できる:
+
+```bash
+llm-task-router article:export --run 2026-06-23-blackhole --out-dir export --front-matter
+# → export/kagaku-01-blackhole-qiita.md（<seriesId>-<NN>-<slug>-<platform>.md）
+```
+
+- `--out-dir <dir>` 指定時はファイル名を `<seriesId>-<NN>-<slug>[-<platform>].md` で自動生成（`NN` は order の2桁ゼロ詰め）。`--out <path>` を明示したらそちらが優先（両指定は `--out` 勝ち）。`--out` も `--out-dir` も無ければエラー。
+- **番号 `NN` は束の保存順（series.json の order）**であって、記事タイトルの「第N回」とは一致しない場合がある（ファイル名は機械的な並び順、タイトルは読者向け表示として分離）。
+- `--out-dir` は run が `meta.series` を持つ（＝シリーズメンバー）こと、`series.order` が確定していることが前提。order が欠落していれば先に `series:status --fix` で補修する。
+
 ### 4. 束の状態を確認・修復する（`series:status`）
 
 ```bash
 llm-task-router series:status --slug kagaku            # メンバー一覧・順序・衝突を表示（読み取り）
 llm-task-router series:status --slug kagaku --json     # 機械処理用
 llm-task-router series:status --slug kagaku --fix      # run 側を正に series.json.members を修復
+llm-task-router series:status --slug kagaku --write    # series/<slug>/README.md（人が読む一覧）を生成
 ```
 
 - 既定は**読み取りのみ**。`--fix` で `runs/` を走査して `meta.series` を正に `series.json.members` を埋め直す。
-- order 重複・runId 多重・planned slug 不一致・voiceHash 不一致などの**多義的な衝突は修復せず警告**するだけ（人が解す）。
+- `--fix` は order 重複・runId 多重・planned slug 不一致・voiceHash 不一致などの**多義的な衝突は修復せず警告**するだけ（人が解す）。あわせて、`series.json` に order があるのに `meta.json` の `series.order` が欠落している run を**遡及補修**する（conflicts なし・runId が members にちょうど1件一致のときだけ）。
+- `--write` は `series/<slug>/README.md` に `#`（保存順）/状態/タイトル/slug/run の一覧表を書き出す（**派生ビュー**＝正本は `series.json`）。タイトルは各 run の `meta.articleTitle` から拾い、planned 枠は「（未作成）」。export 先まで反映したいときは export 後にもう一度 `--write` する。
 
 ### フォルダー構成（シリーズ）
 
 ```text
 qiita-articles/
 ├─ series/
+│  ├─ .locks/            ← series.json 記帳の排他ロック（自動・通常は空）
 │  └─ kagaku/
 │     ├─ series.json     ← マニフェスト（profile / voice 凍結印 / members）
 │     ├─ voice.md        ← 凍結中の共有文体（現行版）
-│     └─ voice-v1.md     ← 再凍結で退避された旧版（あれば）
+│     ├─ voice-v1.md     ← 再凍結で退避された旧版（あれば）
+│     └─ README.md       ← series:status --write が生成する人が読む一覧（派生ビュー）
 └─ runs/
    ├─ 2026-06-23-blackhole/   ← メンバー記事（meta.series で kagaku に紐づく）
    └─ 2026-06-23-neutrino/
 ```
+
+> `series/.locks/` は並行作成時の `series.json` 競合を防ぐ排他ロックの置き場所（`SeriesStore.withLock`）。`.locks` はシリーズ slug として予約済み。通常は空で、異常終了でロックが残った場合のみ手で `rm -rf series/.locks/<slug>.lock` する。
 
 ## 使うAIの目安
 
