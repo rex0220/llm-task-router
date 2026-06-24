@@ -563,6 +563,45 @@ describe("verifyArtifacts", () => {
     expect(r.errors.join("\n")).toMatch(/参考ブロック内/);
   });
 
+  it("accepts a parenthesized source URL in the 参考 block (e.g. Wikipedia Java_(programming_language))", async () => {
+    const store = await newStore();
+    const runId = "2026-06-24-parenurl";
+    await seedComplete(store, runId);
+    const url = "https://en.wikipedia.org/wiki/Java_(programming_language)";
+    // S001 を丸括弧入り URL にし、参考ブロックにもその URL を載せる（cited / reachable:ok）。
+    await store.save(
+      runId,
+      "sources.json",
+      JSON.stringify([
+        { id: "S001", url, title: "Java", retrievedAt: "2026-06-20", sourceType: "secondary", summary: "", reachable: "ok", cited: true },
+      ])
+    );
+    await store.save(
+      runId,
+      "final.md",
+      `# T\n本文\n\n## 参考\n\n<!-- sources:begin -->\n- [S001] Java（secondary, retrieved: 2026-06-20）\n  ${url}\n<!-- sources:end -->\n`
+    );
+    const r = await verifyArtifacts(store, runId);
+    // 丸括弧で URL が切れて「sources.json に無い」と誤検出してはいけない。
+    expect(r.errors.join("\n")).not.toMatch(/参考ブロック内/);
+    expect(r.ok).toBe(true);
+  });
+
+  it("strips an unbalanced trailing ) so a known URL wrapped in prose parens is not flagged", async () => {
+    const store = await newStore();
+    const runId = "2026-06-24-wrapparen";
+    await seedComplete(store, runId); // sources.json = S001 https://example.com/doc
+    // 本文（ブロック外）で (… URL) と散文の括弧に包む。末尾 ) を剥がせば known と一致し warning が出ない。
+    await store.save(
+      runId,
+      "final.md",
+      "# T\n本文 (see https://example.com/doc) を参照。\n\n## 参考\n\n<!-- sources:begin -->\n- [S001] Doc（primary, retrieved: 2026-06-20）\n  https://example.com/doc\n<!-- sources:end -->\n"
+    );
+    const r = await verifyArtifacts(store, runId);
+    expect(r.ok).toBe(true);
+    expect(r.warnings.join("\n")).not.toMatch(/参考ブロック外/);
+  });
+
   it("FAILs when the sources markers are malformed (e.g. begin without end), not just warns", async () => {
     const store = await newStore();
     const runId = "2026-06-20-badmarker";
