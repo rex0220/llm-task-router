@@ -17,6 +17,12 @@ describe("auto-approve hook: isWorkflowOnlyCommand", () => {
     `bash -c 'cd "c:/x/e2e" && llm-task-router series:freeze-voice --slug kagaku --voice-file voice.draft.md'`,
     `llm-task-router series:status --slug kagaku --fix`,
     `bash -c 'cd "c:/x/e2e" && llm-task-router series:init --slug s && llm-task-router article:create --series s --topic-file topics/x.txt'`,
+    // 末尾の無害な stderr/標準出力リダイレクトは剥がして自動承認する（`article:status ... 2>&1` 等）。
+    `llm-task-router article:status --run r 2>&1`,
+    `llm-task-router article:status --run r 2>/dev/null`,
+    `llm-task-router article:status --run r >/dev/null 2>&1`,
+    `bash -c 'cd "c:/x/e2e" && llm-task-router article:status --run r 2>&1'`,
+    `bash -c 'llm-task-router article:status --run r' 2>&1`, // ラップ外側の末尾リダイレクトも剥がす
   ];
 
   // 連結・パイプ・背景・リダイレクト・コマンド置換・他コマンド混入・非ワークフローは自動承認しない。
@@ -28,6 +34,7 @@ describe("auto-approve hook: isWorkflowOnlyCommand", () => {
     `llm-task-router article:create --topic "$(rm -rf /)"`, // ダブルクォート内でも置換は有効
     'llm-task-router article:create --topic "`rm -rf /`"',
     `llm-task-router article:status --run x > /etc/passwd`,
+    `llm-task-router article:status --run x 2>/tmp/evil`, // 任意ファイルへの stderr 退避は剥がさない＝不許可
     `llm-task-router article:status --run x & rm -rf /`,
     `llm-task-router series:status --slug s; rm -rf /`, // series でも連結は不許可
     `llm-task-router series:extract-voice --slug s`, // 未許可の series コマンド（将来のモデル呼び出し系）は先取り承認しない
@@ -58,14 +65,17 @@ describe("auto-approve hook: isWorkflowOnlyCommand", () => {
     `LLM-Task-Router article:status --run r`,
     `Set-Location "C:/x/e2e" && llm-task-router series:init --slug s`,
     `cd "C:/x/e2e" && llm-task-router series:freeze-voice --slug s --voice-file voice.md`,
+    // 末尾の無害な stderr リダイレクトは剥がして自動承認する（PowerShell も同方針）。
+    `llm-task-router article:revise --run r --instruction-file runs/r/fix.md 2>&1`,
+    `llm-task-router article:status --run r 2>$null`,
   ];
 
   // PowerShell 特有の演算子（; パイプ &(背景/呼び出し) 部分式 $() / @() リダイレクト 2>&1 など）は不許可。
   const pwshDeny = [
     `llm-task-router article:status --run r; Remove-Item -Recurse -Force C:/`,
     `llm-task-router article:status --run r | Out-File x.txt`,
-    `llm-task-router article:revise --run r --instruction-file runs/r/fix.md 2>&1`, // リダイレクトは対象外
     `llm-task-router article:status --run r > out.txt`,
+    `llm-task-router article:status --run r 2>C:/evil.txt`, // 任意ファイルへの stderr 退避は剥がさない＝不許可
     `llm-task-router article:create --topic "$(Remove-Item -Recurse C:/)"`, // 二重引用符内の部分式
     `llm-task-router article:create --topic @(gci)`, // 配列部分式
     `llm-task-router article:status --run r & Remove-Item C:/`, // 背景/呼び出し演算子

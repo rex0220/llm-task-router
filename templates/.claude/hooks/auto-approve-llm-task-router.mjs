@@ -16,10 +16,12 @@
 // 重要（安全性）: 単純な部分一致では `llm-task-router article:status; rm -rf /` や
 // `echo llm-task-router article:create && <別コマンド>` のような連結も丸ごと自動承認されてしまう。
 // そこでクォートを考慮して top-level の `&&` で分割し、各セグメントの主コマンドが cd 系 /
-// llm-task-router article:* のみであることを確認する。連結・パイプ・バックグラウンド・リダイレクト・
-// コマンド置換（`;` `|` 単独 `&` `<` `>` 改行 `` ` `` `$(` 等）が top-level に現れたら自動承認しない
-// （通常プロンプトへ）。リダイレクト（`2>&1` / `2>$null` 等）も対象外＝コマンドは素のまま発行する
-// （Bash/PowerShell ツールとも stderr は自動捕捉されるので付ける必要はない）。
+// llm-task-router article:* のみであることを確認する。連結・パイプ・バックグラウンド・コマンド置換
+// （`;` `|` 単独 `&` 改行 `` ` `` `$(` 等）が top-level に現れたら自動承認しない（通常プロンプトへ）。
+// 例外として、**末尾の無害な stderr/標準出力リダイレクト**（fd 複製 `2>&1`/`1>&2` と null への破棄
+// `2>/dev/null` `2>$null` 等）だけは剥がしてから判定する＝`article:status ... 2>&1` のような自動付与を
+// 自動承認できる。任意ファイルへの `> file` は剥がさず、`>`/`<` として演算子検査で弾く（上書き事故防止）。
+// なお Bash/PowerShell ツールは stderr を自動捕捉するので、本来 `2>&1` を付ける必要はない。
 
 import { readFileSync } from "node:fs";
 
@@ -33,6 +35,25 @@ const PWSH_DIR_HEADS = new Set(["cd", "set-location", "sl", "pushd", "push-locat
 
 function isAllowedSubcommand(sub) {
   return !!sub && (sub.startsWith(ALLOWED_ARTICLE_PREFIX) || ALLOWED_SERIES_COMMANDS.has(sub));
+}
+
+// 末尾の「無害な stderr/標準出力の捨て先」リダイレクトだけを剥がす（コマンドはそのまま発行される）。
+// fd 複製（2>&1 / 1>&2）と null/devnull への破棄のみ許可する。任意ファイルへの `> file` は剥がさない
+// ＝後段の演算子検査で弾かれる（上書き事故を防ぐ）。クォート外の末尾トークンだけを対象にするため、
+// 文字列末尾 `$` 直前のトークンを1つずつ繰り返し剥がす（例: `>/dev/null 2>&1` の2連結も解ける）。
+// 注: クォートで閉じた文字列（例: `--note "x 2>&1"`）は末尾が `"` で一致しないため剥がれない。
+const BASH_SAFE_REDIRECT = /\s+(?:[12]>&[12]|2>\/dev\/null|>\/dev\/null|&>\/dev\/null)\s*$/;
+const PWSH_SAFE_REDIRECT = /\s+(?:[12]>&[12]|2>\$null|>\$null|\*>\$null)\s*$/i;
+
+function stripTrailingSafeRedirects(text, pattern) {
+  let out = text;
+  for (;;) {
+    const next = out.replace(pattern, "");
+    if (next === out) {
+      return out;
+    }
+    out = next;
+  }
 }
 
 // 分割済みセグメント群が「ディレクトリ変更 ＋ llm-task-router の許可サブコマンド」だけかを検証する。
@@ -188,11 +209,17 @@ function splitPwshSegments(inner) {
 export function isWorkflowOnlyCommand(command) {
   let inner = String(command ?? "").trim();
 
+  // ラップの外側に付いた末尾の安全リダイレクト（例: `bash -c '...' 2>&1`）を先に剥がす。
+  inner = stripTrailingSafeRedirects(inner, BASH_SAFE_REDIRECT);
+
   // `bash -c '<script>'` / `sh -c "<script>"` の1段ラップを剥がす（末尾に余計な追記が無いことも担保）。
   const wrap = /^(?:bash|sh)\s+-c\s+(['"])([\s\S]*)\1\s*$/.exec(inner);
   if (wrap) {
     inner = wrap[2].trim();
   }
+
+  // スクリプト内側の末尾リダイレクト（例: `... article:status --run r 2>&1`）も剥がす。
+  inner = stripTrailingSafeRedirects(inner, BASH_SAFE_REDIRECT);
 
   const segments = splitBashSegments(inner);
   if (segments === null) return false;
@@ -201,7 +228,7 @@ export function isWorkflowOnlyCommand(command) {
 
 // command が「cd 系 ＋ llm-task-router の許可サブコマンドだけ」か構文的に検証する（PowerShell 形式）。
 export function isWorkflowOnlyPwsh(command) {
-  const inner = String(command ?? "").trim();
+  const inner = stripTrailingSafeRedirects(String(command ?? "").trim(), PWSH_SAFE_REDIRECT);
   const segments = splitPwshSegments(inner);
   if (segments === null) return false;
   // PowerShell のコマンド名は大文字小文字を区別しない（cd / Set-Location / LLM-Task-Router）。

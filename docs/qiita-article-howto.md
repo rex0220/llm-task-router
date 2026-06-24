@@ -606,16 +606,17 @@ llm-task-router series:freeze-voice --slug kagaku --voice-file voice.draft.md
 
 ### 3. メンバー記事を作成する（`article:create --series`）
 
-通常の `article:create` に `--series <slug>` を付けるだけ。topic は記事ごとに用意する（`--topic-file` 推奨）。
+通常の `article:create` に `--series <slug>` を付けるだけ。topic は記事ごとに用意する（`--topic-file` 推奨）。**シリーズ記事の指示ファイルは `topics/<seriesId>-<slug>.txt`**（接頭辞でシリーズが分かる形・`/draft-topic <テーマ> --series <slug>` がこの名前で起案する）。
 
 ```bash
 llm-task-router article:create --series kagaku --order 1 \
-  --topic-file topics/blackhole.txt
+  --topic-file topics/kagaku-blackhole.txt
 llm-task-router article:create --series kagaku --order 2 \
-  --topic-file topics/neutrino.txt
+  --topic-file topics/kagaku-neutrino.txt
 ```
 
 - **`--profile` は省略でよい**。`--series` 指定時はシリーズの profile（手順1で決めた値）が既定になる。明示した `--profile` がシリーズと違うと拒否される（意図的にずらすなら `--allow-profile-mismatch`）。
+- topic 指示ファイルは `topics/<seriesId>-<slug>.txt` に置く（単発記事の `topics/<slug>.txt` と混ざらず、どのシリーズの回かが一覧で分かる）。export の自動命名 `<seriesId>-<NN>-<slug>` とも接頭辞が揃う。
 - **`--order N`**（1始まり）は束の中の並び順。同じ order を指定すると上書き（upsert）、省略すると末尾に追加。
 - voice は `profile.style` の後ろに `# Series Voice` 見出し付きで合成され、その記事の `meta.style` に焼き込まれる。以後その記事の `article:revise` でも同じ voice が再現される（version を上げても**既存記事は作成時の voice のまま**）。
 - 作成後は **1記事ずつ通常フロー**（`article:refine` → 方向性ゲート → factcheck → … → `article:export`）。シリーズだからといって工程は変わらない。
