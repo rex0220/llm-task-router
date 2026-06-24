@@ -306,10 +306,11 @@ program
         }
         // meta.series.order が欠落している run を、series.json.members の order で backpatch（既知バグの遡及補修）。
         // conflicts なしの分岐内かつ runId が members にちょうど1件一致のときだけ書く。
+        // 直前に series.json へ書いた reconcile 後の members（result.members）を正として meta を合わせる。
         if (result.nullOrderRunIds.length > 0) {
           const runStore = new RunStore();
           for (const runId of result.nullOrderRunIds) {
-            const matched = result.data.members.filter((m) => m.runId === runId);
+            const matched = result.members.filter((m) => m.runId === runId);
             if (matched.length !== 1) {
               process.stderr.write(`  ⚠ skip patch: runId ${runId} matched ${matched.length} members\n`);
               continue;

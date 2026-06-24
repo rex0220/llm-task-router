@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildSeriesMeta,
   composeSeriesStyle,
@@ -255,5 +255,33 @@ describe("recordMember concurrency serialization (Step 4)", () => {
     expect(data?.members).toHaveLength(n);
     expect(new Set(data?.members.map((m) => m.runId)).size).toBe(n);
     expect(new Set(data?.members.map((m) => m.order)).size).toBe(n);
+  });
+
+  // ネガティブコントロール（計画テスト計画 項5）: ロックを外すと R2（lost update）が再現することを
+  // 示し、上の正例テストが「ロックが効いている」ことを実際に検出できている証跡にする。
+  // 将来 recordMember の read-modify-write がよりアトミックに寄ってこの負例が pass し始めたら、
+  // 正例の検出力が落ちるサインなので、その時はテスト構造を見直す。
+  it("(negative control) loses updates WITHOUT the lock — proves the lock is what protects R2", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(tmp("ltr-vf-"), "v.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+
+    // withLock を即実行（ロック無し）に差し替える。
+    const spy = vi
+      .spyOn(SeriesStore.prototype, "withLock")
+      .mockImplementation((_slug: string, fn: () => Promise<unknown>) => fn());
+    try {
+      const n = 20;
+      const runIds = Array.from({ length: n }, (_, i) => `2026-06-23-n${String(i).padStart(2, "0")}`);
+      await Promise.all(runIds.map((id) => recordMember("kagaku", id, undefined, seriesRoot)));
+
+      // ロック無しでは全員が空 members を read→order=1 を計算→last-write-wins で取りこぼす。
+      const data = await new SeriesStore(seriesRoot).read("kagaku");
+      expect(data!.members.length).toBeLessThan(n);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
