@@ -31,6 +31,7 @@ describe("auto-approve hook: isWorkflowOnlyCommand", () => {
     `llm-task-router article:status --run r | tail -n 50`,
     `cd x && llm-task-router article:status --run r | tail -20`,
     `bash -c 'cd "c:/x/e2e" && llm-task-router article:status --run r 2>&1 | tail -20'`, // ラップ内のページャ
+    `bash -c 'llm-task-router article:status --run r' | tail -20`, // ラップ外側のページャも剥がす
   ];
 
   // 連結・パイプ・背景・リダイレクト・コマンド置換・他コマンド混入・非ワークフローは自動承認しない。
