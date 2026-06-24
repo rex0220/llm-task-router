@@ -128,8 +128,9 @@ function validateMembers(value: unknown, source: string): SeriesMember[] {
       throw new Error(`Corrupt ${source} (members[${i}] must be an object).`);
     }
     const member = m as Record<string, unknown>;
-    if (typeof member.order !== "number") {
-      throw new Error(`Corrupt ${source} (members[${i}].order must be a number).`);
+    // order は 1 始まりの整数（series-spec §5.1）。手編集での 0-based / 非整数混入を読み込み時に弾く。
+    if (typeof member.order !== "number" || !Number.isInteger(member.order) || member.order < 1) {
+      throw new Error(`Corrupt ${source} (members[${i}].order must be an integer >= 1).`);
     }
     const slug = validateSlug(String(member.slug ?? ""));
     const runId = member.runId == null ? null : validateSafeId(String(member.runId), "runId");

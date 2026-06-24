@@ -85,4 +85,14 @@ describe("validateSeriesData", () => {
     const data = validData({ members: [{ order: 1, slug: "a b", runId: null, status: "planned" }] });
     expect(() => validateSeriesData(data)).toThrow(/Invalid/);
   });
+
+  it("rejects a 0-based member order (1-based invariant)", () => {
+    const data = validData({ members: [{ order: 0, slug: "x", runId: "2026-06-23-x", status: "done" }] });
+    expect(() => validateSeriesData(data)).toThrow(/integer >= 1/);
+  });
+
+  it("rejects a non-integer member order", () => {
+    const data = validData({ members: [{ order: 1.5, slug: "x", runId: "2026-06-23-x", status: "done" }] });
+    expect(() => validateSeriesData(data)).toThrow(/integer >= 1/);
+  });
 });
