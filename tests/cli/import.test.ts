@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { importArticle } from "../../src/cli/import";
-import { RunStore } from "../../src/storage/RunStore";
+import { RunStore, type RunSeriesMeta } from "../../src/storage/RunStore";
 import { RunProgress } from "../../src/progress/RunProgress";
+import { recordMember, seriesFreezeVoice, seriesInit, seriesStatus } from "../../src/cli/series";
+import { SeriesStore, voiceHash } from "../../src/storage/SeriesStore";
 
 describe("importArticle", () => {
   beforeEach(() => {
@@ -221,5 +223,61 @@ describe("importArticle", () => {
     await importArticle(store, { from: from2, runId, profile: "qiita", force: true });
     expect(await store.read(runId, "update-base.md")).toContain("新本文");
     expect(await store.read(runId, "update-base.md")).not.toContain("旧本文");
+  });
+});
+
+describe("importArticle --series (§6.2 案A・update-article の継承)", () => {
+  beforeEach(() => {
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("repoints membership to the new run and clears the old run's meta.series (no order-duplicate conflict)", async () => {
+    const runsRoot = await mkdtemp(join(tmpdir(), "imp-runs-"));
+    const seriesRoot = await mkdtemp(join(tmpdir(), "imp-series-"));
+    const store = new RunStore(runsRoot);
+
+    // 凍結済みシリーズ＋既存メンバー（旧版）を用意。
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(await mkdtemp(join(tmpdir(), "imp-vf-")), "voice.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+    const seriesMeta: RunSeriesMeta = {
+      seriesId: "kagaku",
+      role: "article",
+      order: 1,
+      voiceVersion: 1,
+      voiceHash: voiceHash("tone"),
+    };
+    await store.create("2026-06-23-a", "t", ["brief"], "Qiita", "s", "qiita", seriesMeta);
+    await recordMember("kagaku", "2026-06-23-a", 1, seriesRoot);
+
+    // /update-article 相当: 旧版を export 起点に新 run を import（同じ runs store・seriesRoot を注入）。
+    const dir = await mkdtemp(join(tmpdir(), "imp-src-"));
+    const from = join(dir, "kagaku-a.md");
+    await writeFile(from, "# 更新版タイトル\n本文\n", "utf8");
+    const { runId: newRunId } = await importArticle(store, {
+      from,
+      profile: "qiita",
+      supersedesRunId: "2026-06-23-a",
+      series: "kagaku",
+      seriesRoot,
+    });
+
+    // 旧 run の meta.series は外れ（横の束から除外＝lineage=縦にだけ残る）、新 run が series を持つ。
+    expect((await store.readMeta("2026-06-23-a")).series).toBeUndefined();
+    expect((await store.readMeta(newRunId)).series).toMatchObject({ seriesId: "kagaku", order: 1 });
+
+    // 下流: order 重複コンフリクトが出ず、メンバーは新 run を updating で指す。
+    const status = await seriesStatus("kagaku", seriesRoot, runsRoot);
+    expect(status.conflicts.some((c) => c.includes("claimed by multiple"))).toBe(false);
+    expect(status.members).toHaveLength(1);
+    expect(status.members[0]).toMatchObject({ order: 1, runId: newRunId, status: "updating" });
+
+    // series.json メンバーの runId も新 run（横の束は現行版を指す）。
+    const data = await new SeriesStore(seriesRoot).read("kagaku");
+    expect(data?.members[0].runId).toBe(newRunId);
   });
 });

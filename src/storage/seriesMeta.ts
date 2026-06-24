@@ -26,7 +26,21 @@ export type SeriesVoice = {
   provenance: SeriesVoiceProvenance[];
 };
 
-export type SeriesMemberStatus = "planned" | "done";
+// メンバーのライフサイクル状態（series-readme-writing-status-proposal §1）。
+//   planned : 未作成枠（runId=null）
+//   writing : 作成中（run あり・未 export）
+//   updating: 更新中（done 後に変更着手・未再 export。progress に痕跡が残らないので --fix は保持に徹する）
+//   done    : 完成（export 工程 done＝公開相当の書き出し済み）
+export type SeriesMemberStatus = "planned" | "writing" | "updating" | "done";
+
+const MEMBER_STATUSES: readonly SeriesMemberStatus[] = ["planned", "writing", "updating", "done"];
+
+// 保存値を既知の status に正規化する。未知・欠落は planned に倒す（破損耐性）。
+// ⚠ validator が 4 値を通すこと（この関数）は create が writing を書き始めるより必ず先に着地させる。
+// 逆順だと writing/updating が次回読み込みで黙って planned に落ちる（silent downgrade・proposal §1）。
+export function parseMemberStatus(value: unknown): SeriesMemberStatus {
+  return MEMBER_STATUSES.includes(value as SeriesMemberStatus) ? (value as SeriesMemberStatus) : "planned";
+}
 
 export type SeriesMember = {
   order: number;
@@ -134,7 +148,8 @@ function validateMembers(value: unknown, source: string): SeriesMember[] {
     }
     const slug = validateSlug(String(member.slug ?? ""));
     const runId = member.runId == null ? null : validateSafeId(String(member.runId), "runId");
-    const status = member.status === "done" ? "done" : "planned";
+    // 4 値を保持する（done 以外を planned に潰さない）。未知値のみ planned にフォールバック。
+    const status = parseMemberStatus(member.status);
     return { order: member.order, slug, runId, status };
   });
 }

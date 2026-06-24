@@ -95,4 +95,21 @@ describe("validateSeriesData", () => {
     const data = validData({ members: [{ order: 1.5, slug: "x", runId: "2026-06-23-x", status: "done" }] });
     expect(() => validateSeriesData(data)).toThrow(/integer >= 1/);
   });
+
+  it("preserves writing/updating statuses (does not collapse them to planned)", () => {
+    const data = validData({
+      members: [
+        { order: 1, slug: "w", runId: "2026-06-23-w", status: "writing" },
+        { order: 2, slug: "u", runId: "2026-06-23-u", status: "updating" },
+        { order: 3, slug: "d", runId: "2026-06-23-d", status: "done" },
+      ],
+    });
+    const parsed = validateSeriesData(data);
+    expect(parsed.members.map((m) => m.status)).toEqual(["writing", "updating", "done"]);
+  });
+
+  it("falls back an unknown status to planned", () => {
+    const data = validData({ members: [{ order: 1, slug: "x", runId: "2026-06-23-x", status: "bogus" as never }] });
+    expect(validateSeriesData(data).members[0].status).toBe("planned");
+  });
 });

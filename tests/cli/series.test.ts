@@ -6,6 +6,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildSeriesMeta,
   composeSeriesStyle,
+  deriveMemberStatus,
+  inheritSeriesMembership,
+  markMemberDone,
+  markMemberUpdating,
   reconcileMembers,
   readSeriesForCreate,
   recordMember,
@@ -21,6 +25,7 @@ import {
 import { readFile as readFileAsync } from "node:fs/promises";
 import { RunStore, type RunSeriesMeta } from "../../src/storage/RunStore";
 import { SeriesStore, voiceHash } from "../../src/storage/SeriesStore";
+import { RunProgress } from "../../src/progress/RunProgress";
 import type { RunMeta } from "../../src/storage/RunStore";
 import type { SeriesMember } from "../../src/storage/seriesMeta";
 
@@ -44,16 +49,16 @@ describe("upsertMember", () => {
     { order: 2, slug: "b", runId: null, status: "planned" },
   ];
 
-  it("upserts an existing order slot", () => {
-    const out = upsertMember(base, { order: 2, slug: "b2", runId: "2026-06-23-b" });
-    expect(out[1]).toEqual({ order: 2, slug: "b2", runId: "2026-06-23-b", status: "done" });
+  it("upserts an existing order slot with the given status", () => {
+    const out = upsertMember(base, { order: 2, slug: "b2", runId: "2026-06-23-b", status: "writing" });
+    expect(out[1]).toEqual({ order: 2, slug: "b2", runId: "2026-06-23-b", status: "writing" });
   });
   it("appends at max order + 1 when order is omitted", () => {
-    const out = upsertMember(base, { slug: "c", runId: "2026-06-23-c" });
-    expect(out[2]).toEqual({ order: 3, slug: "c", runId: "2026-06-23-c", status: "done" });
+    const out = upsertMember(base, { slug: "c", runId: "2026-06-23-c", status: "writing" });
+    expect(out[2]).toEqual({ order: 3, slug: "c", runId: "2026-06-23-c", status: "writing" });
   });
   it("does not mutate the input", () => {
-    upsertMember(base, { order: 1, slug: "x", runId: "y" });
+    upsertMember(base, { order: 1, slug: "x", runId: "y", status: "done" });
     expect(base[0].slug).toBe("a");
   });
 });
@@ -163,9 +168,10 @@ describe("series store orchestration", () => {
     await runStore.create("2026-06-23-ai-ir", "t", ["brief"], "Qiita", "s", "qiita", seriesMeta);
     await recordMember("kagaku", "2026-06-23-ai-ir", 1, seriesRoot);
 
+    // create 直後・未 export なので「作成中」(writing)。done は export 工程 done が信号（§4）。
     const status = await seriesStatus("kagaku", seriesRoot, runsRoot);
     expect(status.members).toHaveLength(1);
-    expect(status.members[0]).toMatchObject({ order: 1, slug: "ai-ir", runId: "2026-06-23-ai-ir", status: "done" });
+    expect(status.members[0]).toMatchObject({ order: 1, slug: "ai-ir", runId: "2026-06-23-ai-ir", status: "writing" });
     expect(status.conflicts).toHaveLength(0);
   });
 
@@ -364,8 +370,8 @@ describe("renderSeriesReadme (追加課題C)", () => {
     const titles = new Map([["2026-06-23-intro", "はじめての記事"]]);
     const md = renderSeriesReadme(data as never, members, titles);
     expect(md).toContain("# シリーズ: kagaku（profile: qiita / voice v1）");
-    expect(md).toContain("| 1 | ✅ done | はじめての記事 | intro | 2026-06-23-intro |");
-    expect(md).toContain("| 2 | ⬜ planned | （未作成） | next | （planned） |");
+    expect(md).toContain("| 1 | ✅ 完成 | はじめての記事 | intro | 2026-06-23-intro |");
+    expect(md).toContain("| 2 | ⬜ 予定 | （未作成） | next | （planned） |");
     expect(md).toContain("第N回");
   });
 
@@ -373,6 +379,152 @@ describe("renderSeriesReadme (追加課題C)", () => {
     const members: SeriesMember[] = [{ order: 1, slug: "a", runId: "2026-06-23-a", status: "done" }];
     const md = renderSeriesReadme(data as never, members, new Map([["2026-06-23-a", "A | B"]]));
     expect(md).toContain("A \\| B");
+  });
+
+  it("renders writing/updating rows with Japanese labels (no EN/JA mix)", () => {
+    const members: SeriesMember[] = [
+      { order: 1, slug: "w", runId: "2026-06-23-w", status: "writing" },
+      { order: 2, slug: "u", runId: "2026-06-23-u", status: "updating" },
+    ];
+    const md = renderSeriesReadme(data as never, members, new Map());
+    expect(md).toContain("🚧 作成中");
+    expect(md).toContain("✏️ 更新中");
+    // 英語ラベルが混ざらない。
+    expect(md).not.toMatch(/done|planned/);
+  });
+});
+
+describe("deriveMemberStatus (--fix の status 導出)", () => {
+  it("promotes to done only when export is done", () => {
+    expect(deriveMemberStatus(true, undefined)).toBe("done");
+    expect(deriveMemberStatus(true, "writing")).toBe("done");
+    expect(deriveMemberStatus(true, "updating")).toBe("done");
+  });
+  it("defaults a run-but-not-exported member to writing", () => {
+    expect(deriveMemberStatus(false, undefined)).toBe("writing");
+    expect(deriveMemberStatus(false, "planned")).toBe("writing");
+    expect(deriveMemberStatus(false, "writing")).toBe("writing");
+  });
+  it("preserves existing done and updating (no downgrade)", () => {
+    expect(deriveMemberStatus(false, "done")).toBe("done"); // 旧 create 由来の done 後方互換
+    expect(deriveMemberStatus(false, "updating")).toBe("updating"); // progress に痕跡が無いので保持
+  });
+});
+
+describe("member lifecycle: writing → done → updating", () => {
+  async function frozen(seriesRoot: string): Promise<void> {
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(tmp("ltr-vf-"), "v.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+  }
+
+  async function memberRun(runsRoot: string, runId: string, order: number): Promise<RunStore> {
+    const runStore = new RunStore(runsRoot);
+    await runStore.create(runId, "t", ["brief"], "Qiita", "s", "qiita", {
+      seriesId: "kagaku",
+      role: "article",
+      order,
+      voiceVersion: 1,
+      voiceHash: voiceHash("tone"),
+    });
+    return runStore;
+  }
+
+  it("derives done when the run has an export-done progress event", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    const runsRoot = tmp("ltr-r-");
+    await frozen(seriesRoot);
+    const runStore = await memberRun(runsRoot, "2026-06-23-a", 1);
+    await recordMember("kagaku", "2026-06-23-a", 1, seriesRoot); // writing
+    // export 工程 done を progress に積む（meta.published ではなく export イベントが done の信号）。
+    await new RunProgress(runStore, "test").append("2026-06-23-a", { step: "export", status: "done" });
+
+    const status = await seriesStatus("kagaku", seriesRoot, runsRoot);
+    expect(status.members[0]).toMatchObject({ runId: "2026-06-23-a", status: "done" });
+  });
+
+  it("falls back to writing when a member run has progress but no export-done", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    const runsRoot = tmp("ltr-r-");
+    await frozen(seriesRoot);
+    const runStore = await memberRun(runsRoot, "2026-06-23-a", 1);
+    await recordMember("kagaku", "2026-06-23-a", 1, seriesRoot);
+    // create はしたが export していない（refine など別工程のイベントのみ）。
+    await new RunProgress(runStore, "test").append("2026-06-23-a", { step: "refine", status: "done" });
+
+    const status = await seriesStatus("kagaku", seriesRoot, runsRoot);
+    expect(status.members[0]).toMatchObject({ runId: "2026-06-23-a", status: "writing" });
+  });
+
+  it("markMemberDone then markMemberUpdating moves done → updating (and guards writing)", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    await recordMember("kagaku", "2026-06-23-a", 1, seriesRoot); // writing
+    const store = new SeriesStore(seriesRoot);
+
+    // writing 中の updating は退行させない（guard で no-op）。
+    await markMemberUpdating("kagaku", "2026-06-23-a", seriesRoot);
+    expect((await store.read("kagaku"))?.members[0].status).toBe("writing");
+
+    // export 相当 → done。
+    await markMemberDone("kagaku", "2026-06-23-a", seriesRoot);
+    expect((await store.read("kagaku"))?.members[0].status).toBe("done");
+
+    // done 後の変更 → updating。
+    await markMemberUpdating("kagaku", "2026-06-23-a", seriesRoot);
+    expect((await store.read("kagaku"))?.members[0].status).toBe("updating");
+  });
+
+  it("--fix preserves updating (not recoverable from progress) and does not downgrade", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    const runsRoot = tmp("ltr-r-");
+    await frozen(seriesRoot);
+    await memberRun(runsRoot, "2026-06-23-a", 1);
+    await recordMember("kagaku", "2026-06-23-a", 1, seriesRoot);
+    await markMemberDone("kagaku", "2026-06-23-a", seriesRoot);
+    await markMemberUpdating("kagaku", "2026-06-23-a", seriesRoot); // updating（progress に痕跡なし）
+
+    // reconcile（--fix 相当）を回しても updating のまま（writing に巻き戻さない）。
+    const status = await seriesStatus("kagaku", seriesRoot, runsRoot);
+    expect(status.members[0]).toMatchObject({ runId: "2026-06-23-a", status: "updating" });
+  });
+});
+
+describe("inheritSeriesMembership (§6.2 案A・update-article の継承)", () => {
+  async function frozen(seriesRoot: string): Promise<void> {
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(tmp("ltr-vf-"), "v.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+  }
+
+  it("repoints the supersedes member to the new run and marks it updating", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    await recordMember("kagaku", "2026-06-23-a", 1, seriesRoot);
+    await markMemberDone("kagaku", "2026-06-23-a", seriesRoot);
+
+    const meta = await inheritSeriesMembership("kagaku", "2026-06-24-a-v2", {
+      supersedesRunId: "2026-06-23-a",
+      seriesRoot,
+    });
+    expect(meta).toMatchObject({ seriesId: "kagaku", order: 1 });
+
+    const data = await new SeriesStore(seriesRoot).read("kagaku");
+    expect(data?.members).toHaveLength(1); // 枠は付け替え（増えない）
+    expect(data?.members[0]).toMatchObject({ order: 1, runId: "2026-06-24-a-v2", status: "updating" });
+  });
+
+  it("appends a new writing member when there is no supersedes match", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    await recordMember("kagaku", "2026-06-23-a", 1, seriesRoot);
+
+    await inheritSeriesMembership("kagaku", "2026-06-24-b", { seriesRoot });
+    const data = await new SeriesStore(seriesRoot).read("kagaku");
+    expect(data?.members).toHaveLength(2);
+    expect(data?.members[1]).toMatchObject({ order: 2, runId: "2026-06-24-b", status: "writing" });
   });
 });
 
