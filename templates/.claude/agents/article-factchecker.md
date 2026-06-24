@@ -38,7 +38,7 @@ model: opus
        "retrievedAt": "2026-06-20",
        "sourceType": "primary|secondary",
        "summary": "根拠の要約",
-       "reachable": "ok",
+       "reachable": "dead",
        "replacedByKey": "後継sourceのkey（死リンク差し替え時のみ）"
      }
    ]
@@ -49,8 +49,11 @@ model: opus
    - claim と source の紐付けは `sourceRefs` で行う。値は **URL そのもの**、または `sources.raw.json` の `key`（その raw 内だけの結合ラベル）。
    - `claim` は本文の主張を1文で。これが claim の identity（normalize が claim 文の hash で同一性を取る）。`location.heading` は補助。
    - `status`: 裏取りできたら `verified`（`sourceRefs` 必須）、要出典は `needs-source`、誤りは `incorrect`、未検証は `unverified`。
-   - **到達性**: URL が到達不能（404/403/到達不能）だったら `reachable: "dead"`（到達確認できたら `"ok"`、確認したが不明なら `"unknown"`、未確認なら省略）。**死リンクを `verified` claim の `sourceRefs` に残さない**＝到達可能な代替 source を立てて claim をそちらへ張り替える。差し替えた死リンク source には `replacedByKey: <代替の key>` を付ける（normalize が後継 id へ解決。自己参照不可）。これで死リンクは参考章に出ず、台帳上も差し替え経緯が追える。
-   - 編集長は `llm-task-router article:sources-check --run <id>`（任意・HTTP 到達確認）で reachable を機械 stamp できる（dead は 404/410 のみ・5xx/403 等は unknown の粗いふるい）。その結果を見て factchecker が差し替えを判断する。
+   - **到達性（重要・自己申告で `"ok"` を書かない）**: `reachable` の確定値 `"ok"` は **HTTP 到達確認（`article:sources-check`）だけが書ける**。factchecker（LLM）は「読んだ＝生きている」と断定しない。
+     - **明らかに死んでいる URL（404/403/到達不能を確認した）だけ `reachable: "dead"`** を書く（差し替えのヒント）。
+     - **到達確認していない（＝大多数）の source は `reachable` を省略する**（フィールドを書かない）。`"ok"` も `"unknown"` も書かない。「未記録（省略）」と「確認したが不明（`"unknown"`）」はスキーマ上区別され、`"unknown"` は機械（`sources-check`）専用の値。LLM は使わない。
+     - **死リンクを `verified` claim の `sourceRefs` に残さない**＝到達可能な代替 source を立てて claim をそちらへ張り替える。差し替えた死リンク source には `replacedByKey: <代替の key>` を付ける（normalize が後継 id へ解決。自己参照不可）。これで死リンクは参考章に出ず、台帳上も差し替え経緯が追える。
+   - **到達確認は機械に委ねる**: 編集長が公開前に `llm-task-router article:sources-check --run <id>`（HTTP 到達確認）を回し、`reachable`/`checkedAt` を機械 stamp する（dead は 404/410・NXDOMAIN 等、その他は unknown の粗いふるい）。factchecker はその結果を見て差し替えを判断する。`"ok"` の確定はこの機械確認だけが行う。
    - 観測範囲（全文か差分か）は編集長が `claims-normalize --scope full|diff` で渡す。raw 側にスコープ欄は持たない。
 
 更新リライト時（差分集中）:
