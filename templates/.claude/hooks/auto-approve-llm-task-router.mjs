@@ -18,10 +18,13 @@
 // そこでクォートを考慮して top-level の `&&` で分割し、各セグメントの主コマンドが cd 系 /
 // llm-task-router article:* のみであることを確認する。連結・パイプ・バックグラウンド・コマンド置換
 // （`;` `|` 単独 `&` 改行 `` ` `` `$(` 等）が top-level に現れたら自動承認しない（通常プロンプトへ）。
-// 例外として、**末尾の無害な stderr/標準出力リダイレクト**（fd 複製 `2>&1`/`1>&2` と null への破棄
-// `2>/dev/null` `2>$null` 等）だけは剥がしてから判定する＝`article:status ... 2>&1` のような自動付与を
-// 自動承認できる。任意ファイルへの `> file` は剥がさず、`>`/`<` として演算子検査で弾く（上書き事故防止）。
-// なお Bash/PowerShell ツールは stderr を自動捕捉するので、本来 `2>&1` を付ける必要はない。
+// 例外として、**末尾の無害な装飾**だけは剥がしてから判定する:
+//   - stderr/標準出力リダイレクト（fd 複製 `2>&1`/`1>&2`・null への破棄 `2>/dev/null` `2>$null` 等）。
+//   - 出力ページャパイプ（`| tail`/`| head`、PowerShell は `| Select-Object -First/-Last N`）。
+//     出力行数を絞る読み取り専用イディオムで、`article:create ... 2>&1 | tail -20` のような形を自動承認できる。
+// これらは末尾を削るだけで、その後に必ず既存の演算子ゲートを再通過する（新たな top-level 演算子を生まない）。
+// 任意ファイルへの `> file`・`| tee file`・`| sh`・`| Out-File` 等は剥がさず、`>`/`|` として演算子検査で弾く
+// （上書き・任意実行の防止）。なお Bash/PowerShell ツールは stderr を自動捕捉するので `2>&1` は本来不要。
 
 import { readFileSync } from "node:fs";
 
@@ -49,6 +52,65 @@ function stripTrailingSafeRedirects(text, pattern) {
   let out = text;
   for (;;) {
     const next = out.replace(pattern, "");
+    if (next === out) {
+      return out;
+    }
+    out = next;
+  }
+}
+
+// 末尾の「無害な出力ページャ」パイプ（`| tail`/`| head`、PowerShell は `| Select-Object -First/-Last N`）
+// だけを剥がす。出力行数を絞る読み取り専用イディオムで、ファイル書き込み・別コマンド実行を伴わない。
+// tee / sh / Out-File 等は許可しない（ページャ正規表現に一致しないため剥がれず、後段の `|` 検査で deny）。
+// 引数はフラグ・数値のみ許可し、位置引数（ファイルパス）や `-f`（follow）等は弾く＝ファイル読み出しもさせない。
+const BASH_PAGER = /^(?:tail|head)(?:\s+(?:-\d+|-[nc]\s*\d+|--lines=\d+|--bytes=\d+|\+\d+))*\s*$/;
+const PWSH_PAGER = /^(?:select-object|select)(?:\s+-(?:first|last)\s+\d+)+\s*$/i;
+
+// クォート外（top-level）の最後の単一 `|` の位置を返す（`||` は対象外＝後段で deny）。未閉じクォートは -1。
+// クォート判定は ' と " のトグルのみ（保守的）。誤判定はいずれも「剥がさない→後段で deny」に倒れるので安全側。
+function lastTopLevelPipeIndex(text) {
+  let quote = null;
+  let idx = -1;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "|") {
+      if (text[i + 1] === "|" || text[i - 1] === "|") {
+        i++; // `||`（論理OR）はページャではない。後段の `|` 検査で deny。
+        continue;
+      }
+      idx = i;
+    }
+  }
+  return quote ? -1 : idx;
+}
+
+// 末尾が安全なページャパイプなら、その手前（左側コマンド）だけを返す。違えば入力をそのまま返す
+// （後段の `|` 検査で deny に倒れる）。ページャ右側の末尾リダイレクト（`| tail -20 2>&1`）も許容する。
+function stripTrailingPager(text, pagerPattern, redirectPattern) {
+  const idx = lastTopLevelPipeIndex(text);
+  if (idx < 0) {
+    return text;
+  }
+  const left = text.slice(0, idx).trimEnd();
+  const right = stripTrailingSafeRedirects(text.slice(idx + 1).trim(), redirectPattern);
+  return pagerPattern.test(right) ? left : text;
+}
+
+// 末尾の無害な装飾（リダイレクト＋ページャパイプ）を、組み合わせ・順序によらず安定するまで繰り返し剥がす。
+// 例: `... 2>&1 | tail -20` / `... | tail -20 2>&1` のどちらも素のコマンドへ畳める。
+function stripTrailingDecorations(text, redirectPattern, pagerPattern) {
+  let out = text;
+  for (;;) {
+    let next = stripTrailingSafeRedirects(out, redirectPattern);
+    next = stripTrailingPager(next, pagerPattern, redirectPattern);
     if (next === out) {
       return out;
     }
@@ -209,8 +271,8 @@ function splitPwshSegments(inner) {
 export function isWorkflowOnlyCommand(command) {
   let inner = String(command ?? "").trim();
 
-  // ラップの外側に付いた末尾の安全リダイレクト（例: `bash -c '...' 2>&1`）を先に剥がす。
-  inner = stripTrailingSafeRedirects(inner, BASH_SAFE_REDIRECT);
+  // ラップの外側に付いた末尾の安全装飾（例: `bash -c '...' 2>&1 | tail -20`）を先に剥がす。
+  inner = stripTrailingDecorations(inner, BASH_SAFE_REDIRECT, BASH_PAGER);
 
   // `bash -c '<script>'` / `sh -c "<script>"` の1段ラップを剥がす（末尾に余計な追記が無いことも担保）。
   const wrap = /^(?:bash|sh)\s+-c\s+(['"])([\s\S]*)\1\s*$/.exec(inner);
@@ -218,8 +280,8 @@ export function isWorkflowOnlyCommand(command) {
     inner = wrap[2].trim();
   }
 
-  // スクリプト内側の末尾リダイレクト（例: `... article:status --run r 2>&1`）も剥がす。
-  inner = stripTrailingSafeRedirects(inner, BASH_SAFE_REDIRECT);
+  // スクリプト内側の末尾装飾（例: `... article:status --run r 2>&1 | tail -20`）も剥がす。
+  inner = stripTrailingDecorations(inner, BASH_SAFE_REDIRECT, BASH_PAGER);
 
   const segments = splitBashSegments(inner);
   if (segments === null) return false;
@@ -228,7 +290,7 @@ export function isWorkflowOnlyCommand(command) {
 
 // command が「cd 系 ＋ llm-task-router の許可サブコマンドだけ」か構文的に検証する（PowerShell 形式）。
 export function isWorkflowOnlyPwsh(command) {
-  const inner = stripTrailingSafeRedirects(String(command ?? "").trim(), PWSH_SAFE_REDIRECT);
+  const inner = stripTrailingDecorations(String(command ?? "").trim(), PWSH_SAFE_REDIRECT, PWSH_PAGER);
   const segments = splitPwshSegments(inner);
   if (segments === null) return false;
   // PowerShell のコマンド名は大文字小文字を区別しない（cd / Set-Location / LLM-Task-Router）。
