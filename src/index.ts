@@ -28,6 +28,7 @@ import {
 import { verifyArtifacts } from "./cli/verifyArtifacts";
 import { writeClaimsRecheck } from "./cli/claimsRecheck";
 import { getRunStatus } from "./cli/status";
+import { computeArticleStats, renderArticleStats } from "./cli/stats";
 import {
   collectCompletionReportData,
   mergeCompletionReport,
@@ -1260,6 +1261,26 @@ program
       return;
     }
     process.stdout.write(`${markdown}\n`);
+  });
+
+program
+  .command("article:stats")
+  .description("Report article body character counts (excludes the 参考 block; prose count drops code/markup) for length checks")
+  .requiredOption("--run <runId>", "Run id")
+  .option("--file <name>", "Run file to measure", "final.md")
+  .option("--json", "Output stats as JSON (for scripts)")
+  .action(async (options: { run: string; file: string; json?: boolean }) => {
+    const store = new RunStore();
+    await assertRunExists(store, options.run);
+    const markdown = await store.read(options.run, options.file).catch(() => {
+      throw new Error(`${options.file} がありません（runs/${options.run}/）。`);
+    });
+    const stats = computeArticleStats(markdown);
+    if (options.json) {
+      console.log(JSON.stringify({ runId: options.run, file: options.file, ...stats }, null, 2));
+      return;
+    }
+    process.stdout.write(`${renderArticleStats(options.run, options.file, stats)}\n`);
   });
 
 program
