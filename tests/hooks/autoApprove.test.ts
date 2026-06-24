@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 // テンプレート同梱の自動承認フックの判定ロジック（init で配布される実体）を直接検証する。
 // 同梱フックは型定義の無い素の .mjs（実行時アセット）なので、型解決は抑制して実体を読む。
 // @ts-expect-error: untyped .mjs asset imported for runtime-logic verification
-import { isWorkflowOnlyCommand } from "../../templates/.claude/hooks/auto-approve-llm-task-router.mjs";
+import { isWorkflowOnlyCommand, isWorkflowOnlyPwsh } from "../../templates/.claude/hooks/auto-approve-llm-task-router.mjs";
 
 describe("auto-approve hook: isWorkflowOnlyCommand", () => {
   // cd ＋ llm-task-router article:* / series:* だけで構成される正規形は許可する。
@@ -44,5 +44,44 @@ describe("auto-approve hook: isWorkflowOnlyCommand", () => {
 
   it("denies chaining / substitution / redirect / other commands / non-workflow", () => {
     for (const c of deny) expect(isWorkflowOnlyCommand(c), c).toBe(false);
+  });
+
+  // PowerShell ツール（Windows 既定シェル）経由の実行も同じ方針で判定する。
+  const pwshAllow = [
+    `llm-task-router article:references --run 2026-06-23-x`,
+    `llm-task-router article:factcheck-scope --run r`,
+    `llm-task-router article:claims-normalize --run r --scope full`,
+    `llm-task-router article:revise --run r --instruction-file runs/r/fix.md`,
+    `llm-task-router article:export --run r --out export/x.md --note "ユーザー承認済み（条件: Qiita媒体適性OK）"`,
+    `llm-task-router article:factcheck-stamp --run r --accepted-after factcheck --note "発行部数2,661万部(2024年10月調べ)・構成比50.2%"`,
+    // PowerShell のコマンド名は大小区別なし。cd 系（Set-Location/sl/pushd）＋ && 連結も許可。
+    `LLM-Task-Router article:status --run r`,
+    `Set-Location "C:/x/e2e" && llm-task-router series:init --slug s`,
+    `cd "C:/x/e2e" && llm-task-router series:freeze-voice --slug s --voice-file voice.md`,
+  ];
+
+  // PowerShell 特有の演算子（; パイプ &(背景/呼び出し) 部分式 $() / @() リダイレクト 2>&1 など）は不許可。
+  const pwshDeny = [
+    `llm-task-router article:status --run r; Remove-Item -Recurse -Force C:/`,
+    `llm-task-router article:status --run r | Out-File x.txt`,
+    `llm-task-router article:revise --run r --instruction-file runs/r/fix.md 2>&1`, // リダイレクトは対象外
+    `llm-task-router article:status --run r > out.txt`,
+    `llm-task-router article:create --topic "$(Remove-Item -Recurse C:/)"`, // 二重引用符内の部分式
+    `llm-task-router article:create --topic @(gci)`, // 配列部分式
+    `llm-task-router article:status --run r & Remove-Item C:/`, // 背景/呼び出し演算子
+    `cd C:/x`, // workflow コマンドを含まない（cd のみ）
+    `llm-task-router series:extract-voice --slug s`, // 未許可 series
+    `llm-task-router --help`,
+    `Get-ChildItem`,
+    `npm test`,
+    ``,
+  ];
+
+  it("PowerShell: allows cd系 + llm-task-router article:* / series:* only", () => {
+    for (const c of pwshAllow) expect(isWorkflowOnlyPwsh(c), c).toBe(true);
+  });
+
+  it("PowerShell: denies separators / substitution / redirect / other commands", () => {
+    for (const c of pwshDeny) expect(isWorkflowOnlyPwsh(c), c).toBe(false);
   });
 });

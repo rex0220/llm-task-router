@@ -19,7 +19,7 @@ llm-task-router を使って Qiita 記事を「作成 → 評価 → 修正 → 
 オペレーターを Claude Code で回す場合の承認プロンプト軽減は、**`llm-task-router init` が記事フォルダーに展開する `.claude/` に同梱済み**（手順 2 参照）。中身は:
 
 - `.claude/settings.json` … 記事ワークフローの `llm-task-router article:*`（`export` / `record-publication` を含む）と、シリーズ第1段の `series:init` / `series:freeze-voice` / `series:status` の3コマンド、`WebSearch` / `WebFetch`（裏取り用・全ドメイン）を allow。`series:*` は接頭辞ではなくこの3コマンドだけ（将来のモデル呼び出し系を先取り承認しない）。
-- `.claude/hooks/auto-approve-llm-task-router.mjs` … 別ディレクトリから `bash -c 'cd "<記事フォルダー>" && llm-task-router article:... / series:...'` の形で実行されると先頭が `bash` になり前方一致 allowlist が効かないため、**コマンド全文を見て自動承認する** PreToolUse フック（`settings.json` に登録済み）。自動承認するのは `article:*`（接頭辞）と上記 `series:` 3コマンドのみで、未許可の `series:*`（例: 将来の `series:extract-voice` / `series:plan`）や連結・パイプ・置換が混ざると通常プロンプトに戻す。
+- `.claude/hooks/auto-approve-llm-task-router.mjs` … 別ディレクトリから `bash -c 'cd "<記事フォルダー>" && llm-task-router article:... / series:...'` の形で実行されると先頭が `bash` になり前方一致 allowlist が効かないため、**コマンド全文を見て自動承認する** PreToolUse フック（`settings.json` に `"matcher": "Bash|PowerShell"` で登録済み）。**Bash ツールと PowerShell ツール（Windows の既定シェル）の両方**を対象にし、PowerShell 経由で直に `llm-task-router article:...` を実行した場合も同じ判定で自動承認する。自動承認するのは `cd` 系（PowerShell は `Set-Location` / `sl` / `pushd` も）＋ `article:*`（接頭辞）と上記 `series:` 3コマンドのみで、未許可の `series:*`（例: 将来の `series:extract-voice` / `series:plan`）や連結・パイプ・置換・**リダイレクト（`2>&1` / `2>$null` 等）**が混ざると通常プロンプトに戻す。リダイレクトは付けず素のコマンドで発行すれば自動承認される（Bash/PowerShell ツールとも stderr は自動捕捉される）。
 - `.claude/agents/`・`.claude/commands/`・`CLAUDE.md` … 編集長／factchecker／build-verifier と各スラッシュコマンド。
 
 公開（`article:export`）も自動承認に含めているが、**公開ゲートは編集長の GO/NO-GO ＋ ユーザー承認（会話レベル）で担保**する設計（CLAUDE.md「自走で公開しない」）。権限プロンプトでは止めない。
