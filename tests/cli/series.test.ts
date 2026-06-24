@@ -184,3 +184,76 @@ describe("series store orchestration", () => {
     expect(status.conflicts.some((c) => c.includes("voiceHash mismatch"))).toBe(true);
   });
 });
+
+describe("recordMember resolved order (Step 2)", () => {
+  async function frozen(seriesRoot: string): Promise<void> {
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(tmp("ltr-vf-"), "v.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+  }
+
+  it("returns 1 for the first member when order is omitted", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    expect(await recordMember("kagaku", "2026-06-23-a", undefined, seriesRoot)).toBe(1);
+  });
+
+  it("auto-numbers the next member at max order + 1", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    await recordMember("kagaku", "2026-06-23-a", undefined, seriesRoot);
+    await recordMember("kagaku", "2026-06-23-b", undefined, seriesRoot);
+    expect(await recordMember("kagaku", "2026-06-23-c", undefined, seriesRoot)).toBe(3);
+  });
+
+  it("returns the explicit order when given", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    expect(await recordMember("kagaku", "2026-06-23-a", 5, seriesRoot)).toBe(5);
+  });
+});
+
+describe("seriesStatus nullOrderRunIds (Step 3)", () => {
+  it("collects runs whose meta.series.order is missing", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    const runsRoot = tmp("ltr-r-");
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(tmp("ltr-vf-"), "v.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+
+    const runStore = new RunStore(runsRoot);
+    // order を欠いた run（既知バグ状態）。
+    await runStore.create("2026-06-23-noorder", "t", ["brief"], "Qiita", "s", "qiita", {
+      seriesId: "kagaku",
+      voiceVersion: 1,
+      voiceHash: voiceHash("tone"),
+    });
+    const status = await seriesStatus("kagaku", seriesRoot, runsRoot);
+    expect(status.nullOrderRunIds).toContain("2026-06-23-noorder");
+  });
+});
+
+describe("recordMember concurrency serialization (Step 4)", () => {
+  it("auto-numbers without duplicate orders or lost updates under parallel calls", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(tmp("ltr-vf-"), "v.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+
+    const n = 20;
+    const runIds = Array.from({ length: n }, (_, i) => `2026-06-23-r${String(i).padStart(2, "0")}`);
+    const orders = await Promise.all(runIds.map((id) => recordMember("kagaku", id, undefined, seriesRoot)));
+
+    // 戻り値 order は重複しない 1..n の連番（R1 根絶）。
+    expect([...orders].sort((a, b) => a - b)).toEqual(Array.from({ length: n }, (_, i) => i + 1));
+
+    // series.json には全 runId が残り（R2: lost update なし）、order も重複しない。
+    const data = await new SeriesStore(seriesRoot).read("kagaku");
+    expect(data?.members).toHaveLength(n);
+    expect(new Set(data?.members.map((m) => m.runId)).size).toBe(n);
+    expect(new Set(data?.members.map((m) => m.order)).size).toBe(n);
+  });
+});

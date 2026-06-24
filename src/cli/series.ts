@@ -17,6 +17,12 @@ export function composeSeriesStyle(profileStyle: string | undefined, voice: stri
   return base ? `${base}\n\n${head}` : head;
 }
 
+// --order 省略時の自動採番値を返す（append＝最大 order +1）。明示時はそのまま返す。
+// recordMember が「確定した order」を呼び出し元へ返すためにも使う（meta.json backpatch 用）。
+function resolveOrder(members: SeriesMember[], order: number | undefined): number {
+  return order ?? (members.reduce((max, m) => Math.max(max, m.order), 0) + 1);
+}
+
 // members に作成済み run を upsert する（series-c1-plan §4.1 / D8）。
 // order 指定ありは該当 order を upsert、無しは末尾 append（最大 order +1）。slug は呼び出し側で
 // validateSlug 済みの safe slug を渡す。返り値は更新後 members（入力は破壊しない）。
@@ -25,7 +31,7 @@ export function upsertMember(
   entry: { order?: number; slug: string; runId: string }
 ): SeriesMember[] {
   const next = members.map((m) => ({ ...m }));
-  const order = entry.order ?? (next.reduce((max, m) => Math.max(max, m.order), 0) + 1);
+  const order = resolveOrder(next, entry.order);
   const slot = next.find((m) => m.order === order);
   if (slot) {
     slot.slug = entry.slug;
@@ -196,20 +202,27 @@ export function buildSeriesMeta(data: SeriesData, order: number | undefined): Ru
 }
 
 // 作成済み run を series.json.members へ反映する（create 成功後・run→series.json の順・§6.1）。
+// 確定した order を返す（--order 省略時の自動採番値。呼び出し側が meta.json を backpatch するため）。
+// series.json の read-modify-write は withLock で直列化し、並行 create の R1/R2 を防ぐ（§6.2 / C9）。
 export async function recordMember(
   slug: string,
   runId: string,
   order: number | undefined,
   seriesRoot?: string
-): Promise<void> {
+): Promise<number> {
   const store = new SeriesStore(seriesRoot);
-  const data = await store.read(slug);
-  if (!data) {
-    throw new Error(`Series not found: ${slug}`);
-  }
-  const memberSlug = validateSlug(memberSlugFromRunId(runId));
-  data.members = upsertMember(data.members, { order, slug: memberSlug, runId });
-  await store.write(slug, data);
+  return store.withLock(slug, async () => {
+    const data = await store.read(slug);
+    if (!data) {
+      throw new Error(`Series not found: ${slug}`); // 未作成は通常エラー（ロックは取得済み）
+    }
+    const memberSlug = validateSlug(memberSlugFromRunId(runId));
+    // upsert 前に order を確定（壊れた series.json に runId 重複があっても正しい値を返せる）。
+    const resolvedOrder = resolveOrder(data.members, order);
+    data.members = upsertMember(data.members, { order: resolvedOrder, slug: memberSlug, runId });
+    await store.write(slug, data);
+    return resolvedOrder;
+  });
 }
 
 // status 集計（読取）。run を集め、reconcile した members と衝突、voiceHash 不整合を返す。
@@ -222,6 +235,7 @@ export async function seriesStatus(
   members: SeriesMember[];
   conflicts: SeriesConflict[];
   warnings: string[];
+  nullOrderRunIds: string[]; // series.order が欠落している run（--fix の meta.json backpatch 対象）
 }> {
   const seriesStore = new SeriesStore(seriesRoot);
   const data = await seriesStore.read(slug);
@@ -231,6 +245,9 @@ export async function seriesStatus(
   const runStore = new RunStore(runsRoot);
   const { runs, warnings } = await runStore.listSeriesRuns(data.seriesId);
   const { members, conflicts } = reconcileMembers(data.members, runs);
+
+  // listSeriesRuns は既に seriesId 一致の run しか返さないので、order == null だけで足りる。
+  const nullOrderRunIds = runs.filter((r) => r.series?.order == null).map((r) => r.runId);
 
   // 衝突4: 各 run の voiceHash を、その voiceVersion に対応する history ファイルの実 hash と突き合わせる。
   for (const r of runs) {
@@ -262,5 +279,5 @@ export async function seriesStatus(
     }
   }
 
-  return { data, members, conflicts, warnings };
+  return { data, members, conflicts, warnings, nullOrderRunIds };
 }

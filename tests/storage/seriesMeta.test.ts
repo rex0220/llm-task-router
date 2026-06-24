@@ -32,6 +32,9 @@ describe("validateSeriesId", () => {
     expect(() => validateSeriesId("__proto__")).toThrow(/Invalid/);
     expect(() => validateSeriesId("constructor")).toThrow(/Invalid/);
   });
+  it("rejects the lock-root name .locks (collides with series/.locks/)", () => {
+    expect(() => validateSeriesId(".locks")).toThrow(/Invalid/);
+  });
   it("rejects unsafe characters", () => {
     expect(() => validateSeriesId("a b")).toThrow(/Invalid/);
     expect(() => validateSeriesId("../escape")).toThrow(/Invalid/);

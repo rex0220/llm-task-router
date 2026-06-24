@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { validateSlug } from "./meta";
 import { withTrailingNewline } from "./RunStore";
 import {
@@ -13,6 +14,10 @@ import {
 
 const SERIES_FILE = "series.json";
 const VOICE_FILE = "voice.md";
+// シリーズ単位ロックの置き場所（series root 直下・slug 衝突回避のため .locks は RESERVED_KEYS で予約）。
+const LOCK_DIR = ".locks";
+const LOCK_TIMEOUT_MS = 5000; // 取得待ちの上限。臨界区間は ms 想定なので十分。超過は奪取せずエラー。
+const LOCK_RETRY_MS = 25; // 取得失敗時のリトライ間隔。
 
 // 保存後 UTF-8（末尾改行正規化済み）に対する sha256 hex。RunStore.save とバイト等価の規則で
 // hash を取るため withTrailingNewline を通す（series-c1-plan §5.3 / D2）。
@@ -81,6 +86,49 @@ export class SeriesStore {
   async write(slug: string, data: SeriesData): Promise<void> {
     await mkdir(this.seriesPath(slug), { recursive: true });
     await writeFile(this.filePath(slug, SERIES_FILE), withTrailingNewline(JSON.stringify(data, null, 2)), "utf8");
+  }
+
+  // シリーズ単位の排他ロック（series-spec §6.2 / 課題 C9）。並行 recordMember の
+  // series.json read-modify-write を直列化して R1（order 二重採番）・R2（lost update）を防ぐ。
+  // ロックは series 本体 series/<slug>/ ではなく series/.locks/<slug>.lock/ に置く:
+  //   - 未作成シリーズでもロック取得が ENOENT にならず、本来の "Series not found" 経路に入れる。
+  //   - ロック取得がシリーズ本体ディレクトリを副作用で作らない。
+  // mkdir は存在時に失敗する atomic test-and-set。タイムアウトしたら奪取せずエラー（手動復旧）。
+  async withLock<T>(slug: string, fn: () => Promise<T>): Promise<T> {
+    const safe = validateSlug(slug);
+    const lockRoot = resolve(this.root, LOCK_DIR);
+    if (!isInside(this.root, lockRoot)) {
+      throw new Error("Lock path escapes series root");
+    }
+    const lockDir = join(lockRoot, `${safe}.lock`);
+    await mkdir(lockRoot, { recursive: true });
+
+    const deadline = Date.now() + LOCK_TIMEOUT_MS;
+    for (;;) {
+      try {
+        await mkdir(lockDir, { recursive: false });
+        break; // 取得成功
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw error;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `Could not acquire series lock for "${safe}" within ${LOCK_TIMEOUT_MS}ms. ` +
+              `別プロセスが記帳中か、異常終了でロックが残っています。残っている場合は手動で削除してください: ` +
+              `rm -rf ${lockDir}`
+          );
+        }
+        await sleep(LOCK_RETRY_MS);
+      }
+    }
+
+    try {
+      return await fn();
+    } finally {
+      // トークンファイルを置く設計でなくても recursive 削除で確実に消す。
+      await rm(lockDir, { recursive: true, force: true });
+    }
   }
 
   private async saveText(slug: string, fileName: string, content: string): Promise<void> {

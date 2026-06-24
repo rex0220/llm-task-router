@@ -214,15 +214,23 @@ program
       });
 
       // create 成功後に series.json.members を upsert（run→series.json の順・series-c1-plan §6.1）。
+      // recordMember は確定 order を返す。create 時点の meta.series.order は --order 省略で undefined の
+      // 可能性があるため、確定値で backpatch する（meta.json は run ごと別ファイルでロック不要）。
+      let resolvedOrder: number | undefined;
       if (options.series) {
-        await recordMember(options.series, result.runId, order);
+        resolvedOrder = await recordMember(options.series, result.runId, order);
+        const runMeta = await store.readMeta(result.runId);
+        if (runMeta.series && runMeta.series.order !== resolvedOrder) {
+          runMeta.series.order = resolvedOrder;
+          await store.writeMeta(runMeta);
+        }
       }
 
       reporter.printTotal();
       console.log(`runId: ${result.runId}`);
       console.log(`final: runs/${result.runId}/final.md`);
       if (options.series) {
-        console.log(`series: ${options.series} (order ${order ?? "appended"})`);
+        console.log(`series: ${options.series} (order ${resolvedOrder})`);
       }
     }
   );
@@ -294,6 +302,29 @@ program
             process.stderr.write(`${repaired}\n`);
           } else {
             console.log(repaired);
+          }
+        }
+        // meta.series.order が欠落している run を、series.json.members の order で backpatch（既知バグの遡及補修）。
+        // conflicts なしの分岐内かつ runId が members にちょうど1件一致のときだけ書く。
+        if (result.nullOrderRunIds.length > 0) {
+          const runStore = new RunStore();
+          for (const runId of result.nullOrderRunIds) {
+            const matched = result.data.members.filter((m) => m.runId === runId);
+            if (matched.length !== 1) {
+              process.stderr.write(`  ⚠ skip patch: runId ${runId} matched ${matched.length} members\n`);
+              continue;
+            }
+            const meta = await runStore.readMeta(runId);
+            if (meta.series) {
+              meta.series.order = matched[0].order;
+              await runStore.writeMeta(meta);
+              const msg = `series:status --fix: patched meta.json series.order=${matched[0].order} for ${runId}`;
+              if (options.json) {
+                process.stderr.write(`${msg}\n`);
+              } else {
+                console.log(msg);
+              }
+            }
           }
         }
       }
