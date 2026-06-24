@@ -201,6 +201,33 @@ export function buildSeriesMeta(data: SeriesData, order: number | undefined): Ru
   };
 }
 
+// article:export --out-dir 用の自動命名（追加課題D）。
+// <seriesId>-<NN>-<slug>[-<platform>].md（NN は保存順 order の2桁ゼロ詰め・100以上は伸びる）。
+// 番号は「束の中の通し番号（保存順）」であって記事タイトルの「第N回」とは一致しない場合がある。
+// slug は series.json.members の runId 一致から取る（planned/手編集 slug と一致させる。前提: seriesId==ディレクトリ slug）。
+export async function seriesExportFileName(meta: RunMeta, seriesRoot?: string): Promise<string> {
+  const s = meta.series;
+  if (!s) {
+    throw new Error(`Run ${meta.runId} is not a series member (meta.series missing); --out-dir requires a series run`);
+  }
+  if (s.order == null) {
+    throw new Error(`Run ${meta.runId} has no series order; run "series:status --fix" first`);
+  }
+  const store = new SeriesStore(seriesRoot);
+  const data = await store.read(s.seriesId);
+  if (!data) {
+    throw new Error(`Series not found: ${s.seriesId}`);
+  }
+  const matched = data.members.filter((m) => m.runId === meta.runId);
+  if (matched.length !== 1) {
+    throw new Error(`Run ${meta.runId} matched ${matched.length} members in series ${s.seriesId}`);
+  }
+  const nn = String(s.order).padStart(2, "0");
+  const platform = (meta.platform ?? "").toLowerCase();
+  const suffix = platform ? `-${platform}` : "";
+  return `${s.seriesId}-${nn}-${matched[0].slug}${suffix}.md`;
+}
+
 // 作成済み run を series.json.members へ反映する（create 成功後・run→series.json の順・§6.1）。
 // 確定した order を返す（--order 省略時の自動採番値。呼び出し側が meta.json を backpatch するため）。
 // series.json の read-modify-write は withLock で直列化し、並行 create の R1/R2 を防ぐ（§6.2 / C9）。
@@ -280,4 +307,33 @@ export async function seriesStatus(
   }
 
   return { data, members, conflicts, warnings, nullOrderRunIds };
+}
+
+// Markdown テーブルのセル内 `|` をエスケープ（表崩れ防止）。
+function mdCell(text: string): string {
+  return text.replace(/\|/g, "\\|");
+}
+
+// series/<slug>/README.md（人が読む一覧・追加課題C）を組む純関数。series.json が正本・README は派生ビュー。
+// titleByRunId は各メンバー run の meta.articleTitle（無い run は空）。# は保存順で「第N回」とは別軸。
+export function renderSeriesReadme(
+  data: SeriesData,
+  members: SeriesMember[],
+  titleByRunId: Map<string, string>
+): string {
+  const lines: string[] = [];
+  lines.push(`# シリーズ: ${data.seriesId}（profile: ${data.profile} / voice v${data.voice.version}）`);
+  lines.push("");
+  lines.push("| # | 状態 | タイトル | slug | run |");
+  lines.push("|---|------|---------|------|-----|");
+  for (const m of members) {
+    const status = m.status === "done" ? "✅ done" : "⬜ planned";
+    const title = m.runId ? titleByRunId.get(m.runId) || "（タイトル未取得）" : "（未作成）";
+    const run = m.runId ?? "（planned）";
+    lines.push(`| ${m.order} | ${status} | ${mdCell(title)} | ${mdCell(m.slug)} | ${mdCell(run)} |`);
+  }
+  lines.push("");
+  lines.push("> `#` は保存順（series.json の order）です。記事タイトル上の回番号（「第N回」）とは一致しない場合があります。");
+  lines.push("> この一覧は `series:status --write` 実行時点のスナップショット（派生ビュー）で、照合の正本は `series.json` です。");
+  return lines.join("\n");
 }

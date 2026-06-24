@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { assertSafeInputPath, resolveText } from "./cli/inputs";
@@ -67,7 +67,9 @@ import {
   composeSeriesStyle,
   readSeriesForCreate,
   recordMember,
+  renderSeriesReadme,
   resolveSeriesProfile,
+  seriesExportFileName,
   seriesFreezeVoice,
   seriesInit,
   seriesStatus,
@@ -266,9 +268,11 @@ program
   .description("Show series members and reconciliation against run metadata. Read-only unless --fix is passed")
   .requiredOption("--slug <slug>", "Series slug")
   .option("--fix", "Repair series.json.members from run metadata (ambiguous conflicts are reported, not fixed)")
+  .option("--write", "Also write a human-readable series/<slug>/README.md (a derived snapshot of the members)")
   .option("--json", "Print the status as JSON")
   .option("--allow-outside-workspace", "Allow running outside an initialized article workspace (off by default)")
-  .action(async (options: { slug: string; fix?: boolean; json?: boolean; allowOutsideWorkspace?: boolean }) => {
+  .action(
+    async (options: { slug: string; fix?: boolean; write?: boolean; json?: boolean; allowOutsideWorkspace?: boolean }) => {
     await assertArticleWorkspace({ allowOutsideWorkspace: options.allowOutsideWorkspace });
     const result = await seriesStatus(options.slug);
     if (options.json) {
@@ -330,7 +334,34 @@ program
         }
       }
     }
-  });
+
+    if (options.write) {
+      // README は派生ビュー。--fix 済みなら修復後 members を、未指定なら現状 members を反映する。
+      const runStore = new RunStore();
+      const titleByRunId = new Map<string, string>();
+      for (const m of result.members) {
+        if (!m.runId) {
+          continue;
+        }
+        const meta = await runStore.readMeta(m.runId).catch(() => null);
+        if (meta?.articleTitle) {
+          titleByRunId.set(m.runId, meta.articleTitle);
+        }
+      }
+      const { SeriesStore } = await import("./storage/SeriesStore");
+      const seriesDir = await new SeriesStore().writeReadme(
+        options.slug,
+        renderSeriesReadme(result.data, result.members, titleByRunId)
+      );
+      const wrote = `series:status --write: wrote ${resolve(seriesDir, "README.md")}`;
+      if (options.json) {
+        process.stderr.write(`${wrote}\n`);
+      } else {
+        console.log(wrote);
+      }
+    }
+  }
+  );
 
 program
   .command("article:resume")
@@ -483,7 +514,11 @@ program
 program
   .command("article:export")
   .requiredOption("--run <runId>", "Run id")
-  .requiredOption("--out <path>", "Destination path for the final article")
+  .option("--out <path>", "Destination path for the final article (either --out or --out-dir is required; --out wins if both)")
+  .option(
+    "--out-dir <dir>",
+    "Auto-name a series member as <dir>/<seriesId>-<NN>-<slug>[-<platform>].md (requires the run to be a series member). Ignored when --out is given."
+  )
   .option("--force", "Overwrite the destination if it already exists")
   .option("--front-matter", "Prepend publish front-matter (title/tags) for Qiita/Zenn and move the body H1 into it")
   .option(
@@ -497,7 +532,8 @@ program
   .action(
     async (options: {
       run: string;
-      out: string;
+      out?: string;
+      outDir?: string;
       force?: boolean;
       frontMatter?: boolean;
       note?: string;
@@ -507,8 +543,18 @@ program
       if (options.allowBrokenMarkdown && !options.note) {
         throw new Error("--allow-broken-markdown には理由が必須です。--note \"<理由>\" を付けてください。");
       }
+      if (!options.out && !options.outDir) {
+        throw new Error("--out か --out-dir のどちらかが必須です。");
+      }
       const store = new RunStore();
-      const dest = await exportFinalArticle(store, options.run, options.out, {
+      // --out 明示なら優先。無ければ --out-dir でシリーズ命名規則に従って自動命名する。
+      let outPath = options.out;
+      if (!outPath) {
+        const meta = await store.readMeta(options.run);
+        const fileName = await seriesExportFileName(meta);
+        outPath = join(options.outDir as string, fileName);
+      }
+      const dest = await exportFinalArticle(store, options.run, outPath, {
         force: options.force,
         frontMatter: options.frontMatter,
         allowBrokenMarkdown: options.allowBrokenMarkdown,

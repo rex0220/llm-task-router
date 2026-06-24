@@ -14,6 +14,7 @@ import {
 
 const SERIES_FILE = "series.json";
 const VOICE_FILE = "voice.md";
+const README_FILE = "README.md";
 // シリーズ単位ロックの置き場所（series root 直下・slug 衝突回避のため .locks は RESERVED_KEYS で予約）。
 const LOCK_DIR = ".locks";
 const LOCK_TIMEOUT_MS = 5000; // 取得待ちの上限。臨界区間は ms 想定なので十分。超過は奪取せずエラー。
@@ -134,6 +135,12 @@ export class SeriesStore {
   private async saveText(slug: string, fileName: string, content: string): Promise<void> {
     await mkdir(this.seriesPath(slug), { recursive: true });
     await writeFile(this.filePath(slug, fileName), withTrailingNewline(content), "utf8");
+  }
+
+  // 人が読む一覧（series:status --write・追加課題C）。series.json が正本で README は派生ビュー。
+  async writeReadme(slug: string, content: string): Promise<string> {
+    await this.saveText(slug, README_FILE, content);
+    return this.seriesPath(slug);
   }
 
   async readVoice(slug: string): Promise<string> {
