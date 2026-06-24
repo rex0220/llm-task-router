@@ -67,9 +67,9 @@ import {
   composeSeriesStyle,
   readSeriesForCreate,
   recordMember,
-  renderSeriesReadme,
   resolveSeriesProfile,
   seriesExportFileName,
+  writeSeriesReadme,
   seriesFreezeVoice,
   seriesInit,
   seriesStatus,
@@ -226,6 +226,8 @@ program
           runMeta.series.order = resolvedOrder;
           await store.writeMeta(runMeta);
         }
+        // README が既にある束だけ自動再生成（派生ビュー・best-effort。本処理は止めない）。
+        await refreshSeriesReadme(options.series);
       }
 
       reporter.printTotal();
@@ -337,23 +339,8 @@ program
 
     if (options.write) {
       // README は派生ビュー。--fix 済みなら修復後 members を、未指定なら現状 members を反映する。
-      const runStore = new RunStore();
-      const titleByRunId = new Map<string, string>();
-      for (const m of result.members) {
-        if (!m.runId) {
-          continue;
-        }
-        const meta = await runStore.readMeta(m.runId).catch(() => null);
-        if (meta?.articleTitle) {
-          titleByRunId.set(m.runId, meta.articleTitle);
-        }
-      }
-      const { SeriesStore } = await import("./storage/SeriesStore");
-      const seriesDir = await new SeriesStore().writeReadme(
-        options.slug,
-        renderSeriesReadme(result.data, result.members, titleByRunId)
-      );
-      const wrote = `series:status --write: wrote ${resolve(seriesDir, "README.md")}`;
+      const seriesDir = await writeSeriesReadme(options.slug, { members: result.members });
+      const wrote = `series:status --write: wrote ${resolve(seriesDir as string, "README.md")}`;
       if (options.json) {
         process.stderr.write(`${wrote}\n`);
       } else {
@@ -563,6 +550,11 @@ program
       // --note は「条件付き GO の条件解決・ユーザー承認」を台帳に残すための監査欄（任意）。
       await recordProgress(store, options.run, { step: "export", status: "done", output: dest, note: options.note });
       console.log(`exported: ${dest}${options.frontMatter ? " (with front-matter)" : ""}`);
+      // シリーズメンバーなら README を best-effort で再生成（既にある束だけ）。
+      const meta = await store.readMeta(options.run).catch(() => null);
+      if (meta?.series?.seriesId) {
+        await refreshSeriesReadme(meta.series.seriesId);
+      }
     }
   );
 
@@ -840,6 +832,19 @@ async function safeProgress(fn: () => Promise<void>): Promise<void> {
     await fn();
   } catch (error) {
     process.stderr.write(`  ⚠ progress 記録に失敗しました（本処理は継続）: ${shortMessage(error)}\n`);
+  }
+}
+
+// create/export 後に series/<slug>/README.md を best-effort で再生成する（既にある束だけ・派生ビュー）。
+// 失敗しても本処理（作成・公開）は止めない。README が無い束は何もしない（オプトインは初回 --write）。
+async function refreshSeriesReadme(slug: string): Promise<void> {
+  try {
+    const dir = await writeSeriesReadme(slug, { onlyIfExists: true });
+    if (dir) {
+      console.log(`series README updated: ${resolve(dir, "README.md")}`);
+    }
+  } catch (error) {
+    process.stderr.write(`  ⚠ series README の再生成に失敗しました（本処理は継続）: ${shortMessage(error)}\n`);
   }
 }
 

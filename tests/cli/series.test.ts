@@ -16,7 +16,9 @@ import {
   seriesInit,
   seriesStatus,
   upsertMember,
+  writeSeriesReadme,
 } from "../../src/cli/series";
+import { readFile as readFileAsync } from "node:fs/promises";
 import { RunStore, type RunSeriesMeta } from "../../src/storage/RunStore";
 import { SeriesStore, voiceHash } from "../../src/storage/SeriesStore";
 import type { RunMeta } from "../../src/storage/RunStore";
@@ -371,5 +373,48 @@ describe("renderSeriesReadme (追加課題C)", () => {
     const members: SeriesMember[] = [{ order: 1, slug: "a", runId: "2026-06-23-a", status: "done" }];
     const md = renderSeriesReadme(data as never, members, new Map([["2026-06-23-a", "A | B"]]));
     expect(md).toContain("A \\| B");
+  });
+});
+
+describe("writeSeriesReadme onlyIfExists (自動再生成)", () => {
+  async function frozenWithRun(seriesRoot: string, runsRoot: string): Promise<void> {
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(tmp("ltr-vf-"), "v.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+    const runStore = new RunStore(runsRoot);
+    await runStore.create("2026-06-23-a", "t", ["brief"], "Qiita", "s", "qiita", {
+      seriesId: "kagaku",
+      order: 1,
+      voiceVersion: 1,
+      voiceHash: voiceHash("tone"),
+    });
+    const meta = await runStore.readMeta("2026-06-23-a");
+    meta.articleTitle = "Aの記事";
+    await runStore.writeMeta(meta);
+    await recordMember("kagaku", "2026-06-23-a", 1, seriesRoot);
+  }
+
+  it("skips (returns null) when README is absent and onlyIfExists is set", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    const runsRoot = tmp("ltr-r-");
+    await frozenWithRun(seriesRoot, runsRoot);
+    const result = await writeSeriesReadme("kagaku", { seriesRoot, runsRoot, onlyIfExists: true });
+    expect(result).toBeNull();
+    expect(await new SeriesStore(seriesRoot).hasReadme("kagaku")).toBe(false);
+  });
+
+  it("regenerates when README already exists", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    const runsRoot = tmp("ltr-r-");
+    await frozenWithRun(seriesRoot, runsRoot);
+    // 初回は無条件で生成（CLI --write 相当）。
+    await writeSeriesReadme("kagaku", { seriesRoot, runsRoot });
+    expect(await new SeriesStore(seriesRoot).hasReadme("kagaku")).toBe(true);
+    // 以降は onlyIfExists でも再生成され、タイトルが反映される。
+    const dir = await writeSeriesReadme("kagaku", { seriesRoot, runsRoot, onlyIfExists: true });
+    expect(dir).not.toBeNull();
+    const md = await readFileAsync(join(dir as string, "README.md"), "utf8");
+    expect(md).toContain("Aの記事");
   });
 });

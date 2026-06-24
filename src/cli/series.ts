@@ -314,6 +314,37 @@ function mdCell(text: string): string {
   return text.replace(/\|/g, "\\|");
 }
 
+// README を再生成して書き出す（CLI series:status --write と、create/export 後の自動再生成の共通経路）。
+// members 省略時は series.json の現状を使う。onlyIfExists=true なら README が無ければ書かずに null を返す
+// （自動再生成を「一度 --write した束だけ」に限定するため）。タイトルは各 run の meta.articleTitle から拾う。
+export async function writeSeriesReadme(
+  slug: string,
+  opts: { members?: SeriesMember[]; seriesRoot?: string; runsRoot?: string; onlyIfExists?: boolean } = {}
+): Promise<string | null> {
+  const store = new SeriesStore(opts.seriesRoot);
+  if (opts.onlyIfExists && !(await store.hasReadme(slug))) {
+    return null;
+  }
+  const data = await store.read(slug);
+  if (!data) {
+    throw new Error(`Series not found: ${slug}`);
+  }
+  const members = opts.members ?? data.members;
+  const runStore = new RunStore(opts.runsRoot);
+  const titleByRunId = new Map<string, string>();
+  for (const m of members) {
+    if (!m.runId) {
+      continue;
+    }
+    const meta = await runStore.readMeta(m.runId).catch(() => null);
+    if (meta?.articleTitle) {
+      titleByRunId.set(m.runId, meta.articleTitle);
+    }
+  }
+  await store.writeReadme(slug, renderSeriesReadme(data, members, titleByRunId));
+  return store.seriesPath(slug);
+}
+
 // series/<slug>/README.md（人が読む一覧・追加課題C）を組む純関数。series.json が正本・README は派生ビュー。
 // titleByRunId は各メンバー run の meta.articleTitle（無い run は空）。# は保存順で「第N回」とは別軸。
 export function renderSeriesReadme(

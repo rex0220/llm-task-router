@@ -143,6 +143,14 @@ export class SeriesStore {
     return this.seriesPath(slug);
   }
 
+  // README.md が既にあるか（自動再生成を「一度 --write した束だけ」に限定する判定に使う）。
+  async hasReadme(slug: string): Promise<boolean> {
+    return access(this.filePath(slug, README_FILE)).then(
+      () => true,
+      () => false
+    );
+  }
+
   async readVoice(slug: string): Promise<string> {
     return readFile(this.filePath(slug, VOICE_FILE), "utf8");
   }
