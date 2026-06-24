@@ -4,7 +4,7 @@
 
 ## 記事作成の原則
 
-- 記事の指示ファイル（topics/<slug>.txt）は `/draft-topic <テーマ>` で規約に従って起案し、承認後に `/write-article` で記事化する。
+- 記事の指示ファイル（topics/<slug>.txt、シリーズは topics/<seriesId>-<slug>.txt）は `/draft-topic <テーマ>`（シリーズは `--series <slug>`）で規約に従って起案し、承認後に `/write-article` で記事化する。
 - 記事本文は手書きしない。llm-task-router の CLI パイプライン（create / refine / evaluate / revise）で生成・修正する。
 - `final.md` を直接編集しない。修正は `llm-task-router article:revise --instruction-file` 経由で戻す（runs/ に集約し `final.bak.md` を残すため）。
 - 作成・進行・品質判断は **article-editor-in-chief**（編集長）、Web裏取りは **article-factchecker**、コードの構文/型チェック（`tsc`・実行はしない）は **article-build-verifier** に委譲する。**事実検証（factcheck）は必須**。**構文/型チェック（build-verify）は既定オフ**（記事のコードは省略されたサンプルが多く `tsc` が構造的に落ちるため）で、`article:create --code-check` を付けて作成した記事だけ実施する（run 単位で first-write-wins 固定。progress.md ヘッダと completion-report に対象/対象外が出る）。コードは構文チェックの対象外でも引き続き factcheck の対象（API 名・バージョン等の事実誤り）。実施する場合もコードは実行せず静的検証のみ。サブエージェントから結果を受け取ったら、編集長が工程の出口で進捗イベントを記録する（`done|skip|error` は必須、入口 `start` は任意。skip は理由必須＝silent skip 禁止）。
