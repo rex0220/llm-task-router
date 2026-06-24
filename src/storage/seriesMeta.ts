@@ -47,6 +47,9 @@ export type SeriesMember = {
   slug: string; // 表示・補助識別子（照合主キーは order/runId・§4.1）
   runId: string | null; // 未作成枠は null
   status: SeriesMemberStatus;
+  // 候補名（計画時の planned タイトル・series-candidate-titles-proposal §1）。任意。
+  // 作成後は run の meta.articleTitle が表示優先で、これは未作成/未取得時のフォールバック。
+  title?: string;
 };
 
 export type SeriesData = {
@@ -150,6 +153,9 @@ function validateMembers(value: unknown, source: string): SeriesMember[] {
     const runId = member.runId == null ? null : validateSafeId(String(member.runId), "runId");
     // 4 値を保持する（done 以外を planned に潰さない）。未知値のみ planned にフォールバック。
     const status = parseMemberStatus(member.status);
-    return { order: member.order, slug, runId, status };
+    // 候補名（任意）を保持する。読み込みのたびに落とさない（proposal §1 着地順の主経路）。
+    // 空文字・非文字列は undefined 扱い（トリム）。
+    const title = typeof member.title === "string" && member.title.trim() !== "" ? member.title.trim() : undefined;
+    return title === undefined ? { order: member.order, slug, runId, status } : { order: member.order, slug, runId, status, title };
   });
 }

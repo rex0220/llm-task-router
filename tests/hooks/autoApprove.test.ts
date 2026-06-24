@@ -16,6 +16,7 @@ describe("auto-approve hook: isWorkflowOnlyCommand", () => {
     `llm-task-router series:init --slug kagaku --profile qiita`,
     `bash -c 'cd "c:/x/e2e" && llm-task-router series:freeze-voice --slug kagaku --voice-file voice.draft.md'`,
     `llm-task-router series:status --slug kagaku --fix`,
+    `llm-task-router series:plan --slug kagaku --title "Black Hole Basics"`, // 候補名記録（ローカル file 操作）
     `bash -c 'cd "c:/x/e2e" && llm-task-router series:init --slug s && llm-task-router article:create --series s --topic-file topics/x.txt'`,
     // 末尾の無害な stderr/標準出力リダイレクトは剥がして自動承認する（`article:status ... 2>&1` 等）。
     `llm-task-router article:status --run r 2>&1`,
@@ -51,7 +52,6 @@ describe("auto-approve hook: isWorkflowOnlyCommand", () => {
     `llm-task-router article:status --run x & rm -rf /`,
     `llm-task-router series:status --slug s; rm -rf /`, // series でも連結は不許可
     `llm-task-router series:extract-voice --slug s`, // 未許可の series コマンド（将来のモデル呼び出し系）は先取り承認しない
-    `llm-task-router series:plan --slug s`, // 第2段以降の series コマンドも対象外
     `llm-task-router --help`, // article:/series: ではない
     `git status`,
     `bash -c 'llm-task-router article:status --run x' && rm -rf /`, // ラップ末尾に追記
@@ -78,6 +78,7 @@ describe("auto-approve hook: isWorkflowOnlyCommand", () => {
     `LLM-Task-Router article:status --run r`,
     `Set-Location "C:/x/e2e" && llm-task-router series:init --slug s`,
     `cd "C:/x/e2e" && llm-task-router series:freeze-voice --slug s --voice-file voice.md`,
+    `llm-task-router series:plan --slug s --title "Neutrino" --order 2`,
     // 末尾の無害な stderr リダイレクトは剥がして自動承認する（PowerShell も同方針）。
     `llm-task-router article:revise --run r --instruction-file runs/r/fix.md 2>&1`,
     `llm-task-router article:status --run r 2>$null`,

@@ -29,8 +29,10 @@
 import { readFileSync } from "node:fs";
 
 // article:* は接頭辞で広く許可（既存方針）。series は新設のため明示コマンド名のみ許可（先取り承認を防ぐ）。
+// いずれもローカルのファイル操作のみ（series:plan は series.json への候補名 upsert）。モデル呼び出し系
+// （将来の series:extract-voice 等）は引き続きリストに入れない。
 const ALLOWED_ARTICLE_PREFIX = "article:";
-const ALLOWED_SERIES_COMMANDS = new Set(["series:init", "series:freeze-voice", "series:status"]);
+const ALLOWED_SERIES_COMMANDS = new Set(["series:init", "series:freeze-voice", "series:status", "series:plan"]);
 
 // ディレクトリ変更のみ（無害）として許可する先頭コマンド。シェルごとに別集合。
 const BASH_DIR_HEADS = new Set(["cd"]);

@@ -129,7 +129,7 @@ series/<slug>/
     { "order": 1, "slug": "...", "runId": "2026-06-23-...", "status": "done" },
     { "order": 2, "slug": "...", "runId": "2026-06-24-...", "status": "writing" },   // 作成中
     { "order": 3, "slug": "...", "runId": "2026-06-24-...", "status": "updating" },  // done 後に更新中
-    { "order": 4, "slug": "...", "runId": null, "status": "planned" }               // 未作成枠
+    { "order": 4, "slug": "...", "runId": null, "status": "planned", "title": "候補名" } // 未作成枠＋候補名
   ]
 }
 ```
@@ -139,6 +139,7 @@ series/<slug>/
 > - **`series:status --fix` は downgrade しない**: export 工程 done なら `done`、run はあるが未 export なら `writing` を導出し、既存 `done`/`updating` は保持（`updating` は progress に痕跡が残らず復元不能なので上書きしない）。
 > - **README は `article:create --series` で必ず生成**（作成開始で束の一覧を出す）。export 等の自動再生成は従来どおり「一度でも README がある束だけ」。
 > - **公開済みメンバーの更新（`/update-article`）は `article:import --series <slug>`**: supersedes 先メンバーの runId を新 run に付け替え `updating` にし、新 run に `meta.series` を焼く（横の束は常に現行版 run を指す。旧 run は `meta.lineage` に残る）。仕様詳細は [series-readme-writing-status-proposal.md](series-readme-writing-status-proposal.md)。
+> - **記事候補名（planned タイトル・実装済み）は `members[].title`**: `series:plan --slug <s> --title "<候補名>" [--order N] [--member-slug <slug>]` で planned 枠に upsert する（`series:plan` の最小先行）。正本は `series.json`、README は派生で描画し、表示優先は実 `meta.articleTitle`＞候補 `title`＞「（未作成）」（作成・見直し後は実タイトルに自動反映）。作成済み（`runId != null`）の order への `series:plan` は巻き戻し防止で拒否、`--fix` も候補名を保持（downgrade しない）。outline 自動割り付けは第2段。仕様詳細は [series-candidate-titles-proposal.md](series-candidate-titles-proposal.md)。
 
 > voice の出所は run だけでなく「手書き指示」「複数 exemplar」「外部ファイル」もあり得るため、単一 `sourceRunId` ではなく `provenance` 配列で持つ（Codex P2）。run 側は出所を持たず `voiceVersion`/`voiceHash`（§5.1）だけを焼き込む。
 
@@ -181,7 +182,7 @@ series/<slug>/
 |---|---|---|
 | `series:init <slug> --profile <p>` | `series/<slug>/`（series.json / voice.md 枠）を作る | 非 canonical |
 | `series:freeze-voice <slug> [--voice-file <path>]` | 手書き voice を取り込み、`hash`/`version`/`frozenAt`/`history[]` を確定し `frozen: true` に。初回は同一パス可、再 freeze は `version`+1（旧版を voice-v<N>.md に保全・§5.3） | 非 canonical |
-| `series:plan <slug>` | outline からメンバー枠を `series.json` に割り付け（テーマ分割・小説） | 非 canonical |
+| `series:plan --slug <s> --title "<候補名>" [--order N] [--member-slug <slug>]` | **（実装済み・最小）** planned 枠に候補名を upsert（`members[].title`）。作成済み order は拒否。outline からの自動割り付け（テーマ分割・小説）は第2段 | 非 canonical |
 | `article:create ... --series <slug> [--order N] [--prev <runId>]` | voice を `meta.style` に焼き込み（§5.3）・連続状態を注入。meta.series（voiceVersion/Hash 込み）を記録 | **既存 canonical（create）** |
 | `series:status <slug> [--fix] [--write]` | メンバー横断の進捗・残枠を集計。既定は dry-run 表示、`--fix` で `series.json` を修復＋`meta.series.order` 欠落の遡及補修（§6.1）、`--write` で `series/<slug>/README.md`（人が読む一覧・派生ビュー）を生成 | 非 canonical（`--fix`/`--write` 時のみ書込） |
 | `article:export ... [--out-dir <dir>]` | シリーズメンバーを `<seriesId>-<NN>-<slug>[-<platform>].md`（NN=保存順 order 2桁）で自動命名 export。`--out` 明示が優先、両無しはエラー | 既存 canonical（export・§追加課題D） |

@@ -35,9 +35,12 @@ function resolveOrder(members: SeriesMember[], order: number | undefined): numbe
 // ⚠ status は必須引数（既定値を持たせない）。create と reconcile（--fix）が共有する関数なので、
 //   既定で "done"/"writing" を埋めると一方の経路で意図しない格上げ/格下げ（silent up/downgrade）が起きる。
 //   呼び出し側に status の判断を強制する（proposal §2）。
+// title（候補名）は任意。既存スロット更新では entry.title 未指定なら既存を保持（slot.title を消さない）。
+// 新規スロット（push）では entry.title を運ぶ（series:plan で planned 枠に候補名を載せる経路・proposal §2）。
+// runId は planned 枠（null）を series:plan で upsert できるよう string | null。create 経路は実 runId を渡す。
 export function upsertMember(
   members: SeriesMember[],
-  entry: { order?: number; slug: string; runId: string; status: SeriesMemberStatus }
+  entry: { order?: number; slug: string; runId: string | null; status: SeriesMemberStatus; title?: string }
 ): SeriesMember[] {
   const next = members.map((m) => ({ ...m }));
   const order = resolveOrder(next, entry.order);
@@ -46,8 +49,11 @@ export function upsertMember(
     slot.slug = entry.slug;
     slot.runId = entry.runId;
     slot.status = entry.status;
+    if (entry.title !== undefined) {
+      slot.title = entry.title; // 未指定なら既存 title を保持（フィールド代入なので触らなければ残る）
+    }
   } else {
-    next.push({ order, slug: entry.slug, runId: entry.runId, status: entry.status });
+    next.push({ order, slug: entry.slug, runId: entry.runId, status: entry.status, title: entry.title });
   }
   next.sort((a, b) => a.order - b.order);
   return next;
@@ -300,6 +306,68 @@ export async function recordMember(
   });
 }
 
+// 候補名（title）から member slug を導く（series:plan で --member-slug 省略時）。
+// 英数とハイフンに正規化。日本語タイトル等で slug 化できなければ呼び出し側に --member-slug を要求させる。
+export function deriveMemberSlug(title: string): string | null {
+  const slug = title
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return slug.length > 0 ? slug : null;
+}
+
+// series:plan（最小・第2段先行）: planned 枠に候補名を upsert する（proposal §4）。
+// withLock 内で series.json を read-modify-write。order 省略は末尾自動採番（新規＝安全）。
+// 🔴 作成済みスロット（runId != null）への明示 order は拒否する（巻き戻し防止・決定3）。
+// 返り値は確定 order。
+export async function seriesPlan(
+  slug: string,
+  options: { title: string; order?: number; memberSlug?: string },
+  seriesRoot?: string
+): Promise<number> {
+  const title = options.title.trim();
+  if (title === "") {
+    throw new Error("series:plan requires a non-empty --title");
+  }
+  const store = new SeriesStore(seriesRoot);
+  return store.withLock(slug, async () => {
+    const data = await store.read(slug);
+    if (!data) {
+      throw new Error(`Series not found: ${slug} (run series:init first)`);
+    }
+    const resolvedOrder = resolveOrder(data.members, options.order);
+    // 🔴 巻き戻し guard: 既に run が紐づく order を planned に戻さない（series:plan は planned 枠専用）。
+    const existing = data.members.find((m) => m.order === resolvedOrder);
+    if (existing && existing.runId != null) {
+      throw new Error(
+        `order ${resolvedOrder} already has a created run ${existing.runId}; series:plan fills planned slots only`
+      );
+    }
+    const memberSlug = options.memberSlug
+      ? validateSlug(options.memberSlug)
+      : validateSlug(
+          deriveMemberSlug(title) ??
+            (() => {
+              throw new Error(
+                `Could not derive a slug from title "${title}" (e.g. non-ASCII). Pass --member-slug <slug>.`
+              );
+            })()
+        );
+    data.members = upsertMember(data.members, {
+      order: resolvedOrder,
+      slug: memberSlug,
+      runId: null,
+      status: "planned",
+      title,
+    });
+    await store.write(slug, data);
+    return resolvedOrder;
+  });
+}
+
 // /update-article（article:import --supersedes）でシリーズ membership を新 run に引き継ぐ（§6.2・案A）。
 // import は新しい runId を作るため、放置すると series.json は旧 runId を指したまま＝新 run を export しても
 // markMemberDone が対象を見つけられない。そこで supersedes 先メンバーがあればその枠の runId を新 run に
@@ -501,7 +569,11 @@ export function renderSeriesReadme(
   lines.push("|---|------|---------|------|-----|");
   for (const m of members) {
     const status = MEMBER_STATUS_LABEL[m.status] ?? MEMBER_STATUS_LABEL.planned;
-    const title = m.runId ? titleByRunId.get(m.runId) || "（タイトル未取得）" : "（未作成）";
+    // 表示優先順位（proposal §3）: 実 meta.articleTitle（作成・見直し後）＞ 候補 title ＞ プレースホルダ。
+    const title =
+      (m.runId && titleByRunId.get(m.runId)) ||
+      m.title ||
+      (m.runId ? "（タイトル未取得）" : "（未作成）");
     const run = m.runId ?? "（planned）";
     lines.push(`| ${m.order} | ${status} | ${mdCell(title)} | ${mdCell(m.slug)} | ${mdCell(run)} |`);
   }
