@@ -208,7 +208,32 @@ export async function verifyArtifacts(store: RunStore, runId: string): Promise<V
   return { runId, ok: errors.length === 0, errors, warnings };
 }
 
-const URL_RE = /https?:\/\/[^\s)<>"'`\]]+/g;
+// URL 抽出: 丸括弧 `(` `)` は URL に含まれ得る（例: Wikipedia の .../Java_(programming_language)）ので
+// 文字クラスから除外しない。末尾に紛れ込む散文の句読点・閉じ括弧は trimUrlTail で釣り合いを見て剥がす。
+const URL_RE = /https?:\/\/[^\s<>"'`\]]+/g;
+
+// 抽出 URL の末尾から散文記号を剥がす。閉じ括弧 `)` は URL 内で `(` と釣り合っていれば残し
+// （.../Foo_(bar) は維持）、釣り合わない末尾 `)`（散文の括弧 例: `(... https://x )`）だけ剥がす。
+function trimUrlTail(url: string): string {
+  let u = url;
+  while (u.length > 0) {
+    const last = u[u.length - 1];
+    if (last === "." || last === "," || last === ";" || last === ":" || last === "!" || last === "?") {
+      u = u.slice(0, -1);
+      continue;
+    }
+    if (last === ")") {
+      const opens = (u.match(/\(/g) ?? []).length;
+      const closes = (u.match(/\)/g) ?? []).length;
+      if (closes > opens) {
+        u = u.slice(0, -1); // 釣り合わない末尾 ) は散文の括弧として剥がす
+        continue;
+      }
+    }
+    break;
+  }
+  return u;
+}
 
 function normalizeForCompare(url: string): string | null {
   try {
@@ -266,7 +291,7 @@ async function checkReferenceLinks(
   const blockDead = new Set<string>();
   const bodyUnknown = new Set<string>();
   for (const m of final.matchAll(URL_RE)) {
-    const raw = m[0].replace(/[.,;]+$/, "");
+    const raw = trimUrlTail(m[0]);
     const norm = normalizeForCompare(raw);
     if (norm === null) {
       continue;
