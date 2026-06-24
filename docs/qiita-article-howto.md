@@ -253,6 +253,7 @@ llm-task-router article:direction-check --run 2026-06-18-ai-ir --verdict revise 
 - `--source draft` で `draft.md` を読む**早期プレビュー**もできる。ただし draft はこの後 refine/evaluate で final が変わるため**正式ゲートにはならない**（progress は非 canonical の `direction-draft` 記録。canonical の方向性ゲートは `--source final` のみ）。
 - `--verdict revise` のときは canonical `direction` を**未通過（error）として記録**し（`article:status` の現在地は direction に留まり factcheck に進まない）、stderr で「factcheck の前に revise」と警告する。revise で直して再度 `--verdict ok` を打つと done で上書きされる。**OK が出てから** factcheck（6章）に進む。
 - `--stdout` はファイルも progress も残さない確認用。これは強制ゲートではない（factcheck/verify-artifacts を direction-check の有無でブロックしない）。
+- 分量の機械集計は `llm-task-router article:stats --run <id>`（`--json` も可）。参考ブロック（`<!-- sources:begin -->` 以降）を除いた **本文文字数**と、コード/markup/空白を除いた**概算散文文字数**、タイトルを出す。`## トーン / 制約` の「文字数の目安」に対する素早いチェックに使う（**`length` がバイト単位の awk と違い、日本語を正しく1文字＝1で数える**＝過大計上しない）。
 
 ---
 
