@@ -3,8 +3,14 @@ import { resolve } from "node:path";
 import { validateSlug } from "../storage/meta";
 import type { RunMeta, RunSeriesMeta } from "../storage/RunStore";
 import { RunStore } from "../storage/RunStore";
+import { RunProgress } from "../progress/RunProgress";
 import { SeriesStore, voiceHash } from "../storage/SeriesStore";
-import { memberSlugFromRunId, type SeriesData, type SeriesMember } from "../storage/seriesMeta";
+import {
+  memberSlugFromRunId,
+  type SeriesData,
+  type SeriesMember,
+  type SeriesMemberStatus,
+} from "../storage/seriesMeta";
 
 const SERIES_VOICE_HEADING = "# Series Voice";
 
@@ -26,9 +32,12 @@ function resolveOrder(members: SeriesMember[], order: number | undefined): numbe
 // members に作成済み run を upsert する（series-c1-plan §4.1 / D8）。
 // order 指定ありは該当 order を upsert、無しは末尾 append（最大 order +1）。slug は呼び出し側で
 // validateSlug 済みの safe slug を渡す。返り値は更新後 members（入力は破壊しない）。
+// ⚠ status は必須引数（既定値を持たせない）。create と reconcile（--fix）が共有する関数なので、
+//   既定で "done"/"writing" を埋めると一方の経路で意図しない格上げ/格下げ（silent up/downgrade）が起きる。
+//   呼び出し側に status の判断を強制する（proposal §2）。
 export function upsertMember(
   members: SeriesMember[],
-  entry: { order?: number; slug: string; runId: string }
+  entry: { order?: number; slug: string; runId: string; status: SeriesMemberStatus }
 ): SeriesMember[] {
   const next = members.map((m) => ({ ...m }));
   const order = resolveOrder(next, entry.order);
@@ -36,21 +45,51 @@ export function upsertMember(
   if (slot) {
     slot.slug = entry.slug;
     slot.runId = entry.runId;
-    slot.status = "done";
+    slot.status = entry.status;
   } else {
-    next.push({ order, slug: entry.slug, runId: entry.runId, status: "done" });
+    next.push({ order, slug: entry.slug, runId: entry.runId, status: entry.status });
   }
   next.sort((a, b) => a.order - b.order);
   return next;
+}
+
+// --fix（reconcile）でメンバーの status を run 側から導出する（proposal §影響範囲）。
+//   - done への昇格は「export 工程 done」のときだけ（信号は §4 トリガと統一）。
+//   - 既存 done は保持（旧 create 由来の done を巻き戻さない＝後方互換）。
+//   - 既存 updating は保持（progress に痕跡が残らず復元できないため上書きしない）。
+//   - それ以外（run はあるが未 export）は writing。
+// downgrade は一切しない（done/updating を writing に落とさない）。
+export function deriveMemberStatus(exportDone: boolean, prior: SeriesMemberStatus | undefined): SeriesMemberStatus {
+  if (exportDone) {
+    return "done";
+  }
+  if (prior === "done") {
+    return "done";
+  }
+  if (prior === "updating") {
+    return "updating";
+  }
+  return "writing";
+}
+
+// run の進捗（progress.events.jsonl が正本）に export 工程の done イベントがあるかを返す。
+// best-effort（events が読めなければ false）。meta.steps.export は export が markDone を呼ばないため
+// 当てにならない。export は recordProgress(step:"export", status:"done") を events に残すのでそれを見る。
+export async function isExportDone(progress: RunProgress, runId: string): Promise<boolean> {
+  const events = await progress.readEvents(runId).catch(() => []);
+  return events.some((e) => e.step === "export" && e.status === "done");
 }
 
 export type SeriesConflict = string;
 
 // series:status --fix 用の集計＋衝突検出（series-c1-plan §5 / D7）。
 // 多義的状態は修復せず conflicts に積む（CLI が警告表示）。reconciled は run 側を正に埋め直した members。
+// exportedRunIds は「export 工程 done」の run 集合（status 導出に使う・proposal §影響範囲）。
+// 省略時は空集合＝全 run を未 export 扱い（既存 done/updating は deriveMemberStatus が保持する）。
 export function reconcileMembers(
   existing: SeriesMember[],
-  runs: RunMeta[]
+  runs: RunMeta[],
+  exportedRunIds: ReadonlySet<string> = new Set()
 ): { members: SeriesMember[]; conflicts: SeriesConflict[] } {
   const conflicts: SeriesConflict[] = [];
 
@@ -88,7 +127,10 @@ export function reconcileMembers(
     if (order == null || dupOrder) {
       continue; // order 不明・重複は自動修復しない（警告のみ）。
     }
-    members = upsertMember(members, { order, slug, runId: r.runId });
+    // 既存スロットの status を踏まえて run 側から status を導出（done/updating は保持・downgrade しない）。
+    const prior = existing.find((m) => m.order === order)?.status;
+    const status = deriveMemberStatus(exportedRunIds.has(r.runId), prior);
+    members = upsertMember(members, { order, slug, runId: r.runId, status });
 
     // 衝突3: planned 枠の slug と runId 由来 slug が食い違う。
     const slot = existing.find((m) => m.order === order);
@@ -246,10 +288,89 @@ export async function recordMember(
     const memberSlug = validateSlug(memberSlugFromRunId(runId));
     // upsert 前に order を確定（壊れた series.json に runId 重複があっても正しい値を返せる）。
     const resolvedOrder = resolveOrder(data.members, order);
-    data.members = upsertMember(data.members, { order: resolvedOrder, slug: memberSlug, runId });
+    // create 時点は「作成中」。done への昇格は export 工程（§4）が担う（proposal §2）。
+    data.members = upsertMember(data.members, {
+      order: resolvedOrder,
+      slug: memberSlug,
+      runId,
+      status: "writing",
+    });
     await store.write(slug, data);
     return resolvedOrder;
   });
+}
+
+// /update-article（article:import --supersedes）でシリーズ membership を新 run に引き継ぐ（§6.2・案A）。
+// import は新しい runId を作るため、放置すると series.json は旧 runId を指したまま＝新 run を export しても
+// markMemberDone が対象を見つけられない。そこで supersedes 先メンバーがあればその枠の runId を新 run に
+// 付け替え（status=updating＝更新中）、無ければ末尾に新規追加（status=writing）。旧 runId は新 run の
+// meta.lineage に残るので情報は失われない（横の束は常に現行版の run を指す）。
+// 返り値は新 run に焼く RunSeriesMeta（seriesId/order/voice）。withLock 内で series.json を read-modify-write。
+export async function inheritSeriesMembership(
+  slug: string,
+  newRunId: string,
+  opts: { supersedesRunId?: string; seriesRoot?: string } = {}
+): Promise<RunSeriesMeta> {
+  const store = new SeriesStore(opts.seriesRoot);
+  return store.withLock(slug, async () => {
+    const data = await store.read(slug);
+    if (!data) {
+      throw new Error(`Series not found: ${slug}`);
+    }
+    const memberSlug = validateSlug(memberSlugFromRunId(newRunId));
+    const prior = opts.supersedesRunId
+      ? data.members.find((m) => m.runId === opts.supersedesRunId)
+      : undefined;
+    const order = prior?.order ?? resolveOrder(data.members, undefined);
+    // supersedes 先があれば「更新中」、無ければ（新規メンバー）「作成中」。
+    const status: SeriesMemberStatus = prior ? "updating" : "writing";
+    data.members = upsertMember(data.members, { order, slug: memberSlug, runId: newRunId, status });
+    await store.write(slug, data);
+    return buildSeriesMeta(data, order);
+  });
+}
+
+// runId 一致のメンバーの status を更新する共通処理（withLock 内 read-modify-write・best-effort）。
+// 束やメンバーが無ければ no-op（呼び出し側の本処理＝export/revise は止めない）。guard を渡すと
+// 現 status が guard を満たすメンバーだけ更新する（変化なしなら書き込まない）。
+async function setMemberStatusByRunId(
+  slug: string,
+  runId: string,
+  status: SeriesMemberStatus,
+  seriesRoot: string | undefined,
+  guard?: (current: SeriesMemberStatus) => boolean
+): Promise<void> {
+  const store = new SeriesStore(seriesRoot);
+  await store.withLock(slug, async () => {
+    const data = await store.read(slug);
+    if (!data) {
+      return; // 束が無ければ何もしない（best-effort）
+    }
+    let changed = false;
+    data.members = data.members.map((m) => {
+      if (m.runId !== runId || m.status === status) {
+        return m;
+      }
+      if (guard && !guard(m.status)) {
+        return m;
+      }
+      changed = true;
+      return { ...m, status };
+    });
+    if (changed) {
+      await store.write(slug, data);
+    }
+  });
+}
+
+// export 成功後にメンバーを done にする（§4・runId 一致のメンバーのみ）。
+export async function markMemberDone(slug: string, runId: string, seriesRoot?: string): Promise<void> {
+  await setMemberStatusByRunId(slug, runId, "done", seriesRoot);
+}
+
+// done のメンバーが変更着手したら updating に戻す（§6.1・done のときだけ。writing 中は退行させない）。
+export async function markMemberUpdating(slug: string, runId: string, seriesRoot?: string): Promise<void> {
+  await setMemberStatusByRunId(slug, runId, "updating", seriesRoot, (current) => current === "done");
 }
 
 // status 集計（読取）。run を集め、reconcile した members と衝突、voiceHash 不整合を返す。
@@ -271,7 +392,18 @@ export async function seriesStatus(
   }
   const runStore = new RunStore(runsRoot);
   const { runs, warnings } = await runStore.listSeriesRuns(data.seriesId);
-  const { members, conflicts } = reconcileMembers(data.members, runs);
+
+  // 各 run の progress（正本 events.jsonl）から export 工程 done を best-effort で集める。
+  // 読めない run は exported に入れない＝writing 扱いにフォールバック（reconcile 全体は落とさない）。
+  // done への昇格信号を §4 トリガ（export）と統一する（meta.published は別工程なので使わない・proposal §影響範囲）。
+  const progress = new RunProgress(runStore);
+  const exportedRunIds = new Set<string>();
+  for (const r of runs) {
+    if (await isExportDone(progress, r.runId)) {
+      exportedRunIds.add(r.runId);
+    }
+  }
+  const { members, conflicts } = reconcileMembers(data.members, runs, exportedRunIds);
 
   // listSeriesRuns は既に seriesId 一致の run しか返さないので、order == null だけで足りる。
   const nullOrderRunIds = runs.filter((r) => r.series?.order == null).map((r) => r.runId);
@@ -313,6 +445,16 @@ export async function seriesStatus(
 function mdCell(text: string): string {
   return text.replace(/\|/g, "\\|");
 }
+
+// README（人が読む日本語の派生ビュー）の状態ラベル。日本語に統一する（英語/日本語の混在を避ける・proposal §5）。
+// done は「公開済み」ではなく「完成」（トリガは export＝書き出しで、公開台帳 record-publication とは別工程）。
+// コンソール（series:status）は生 status キーの技術ビューとして英語のまま（役割で分ける）。
+const MEMBER_STATUS_LABEL: Record<SeriesMemberStatus, string> = {
+  planned: "⬜ 予定",
+  writing: "🚧 作成中",
+  updating: "✏️ 更新中",
+  done: "✅ 完成",
+};
 
 // README を再生成して書き出す（CLI series:status --write と、create/export 後の自動再生成の共通経路）。
 // members 省略時は series.json の現状を使う。onlyIfExists=true なら README が無ければ書かずに null を返す
@@ -358,7 +500,7 @@ export function renderSeriesReadme(
   lines.push("| # | 状態 | タイトル | slug | run |");
   lines.push("|---|------|---------|------|-----|");
   for (const m of members) {
-    const status = m.status === "done" ? "✅ done" : "⬜ planned";
+    const status = MEMBER_STATUS_LABEL[m.status] ?? MEMBER_STATUS_LABEL.planned;
     const title = m.runId ? titleByRunId.get(m.runId) || "（タイトル未取得）" : "（未作成）";
     const run = m.runId ?? "（planned）";
     lines.push(`| ${m.order} | ${status} | ${mdCell(title)} | ${mdCell(m.slug)} | ${mdCell(run)} |`);

@@ -127,10 +127,18 @@ series/<slug>/
   },
   "members": [
     { "order": 1, "slug": "...", "runId": "2026-06-23-...", "status": "done" },
-    { "order": 2, "slug": "...", "runId": null, "status": "planned" }  // 未作成枠
+    { "order": 2, "slug": "...", "runId": "2026-06-24-...", "status": "writing" },   // 作成中
+    { "order": 3, "slug": "...", "runId": "2026-06-24-...", "status": "updating" },  // done 後に更新中
+    { "order": 4, "slug": "...", "runId": null, "status": "planned" }               // 未作成枠
   ]
 }
 ```
+
+> **メンバーの状態（4値・実装済み）**: `planned`（未作成枠・runId=null）→ `writing`（作成中・`article:create --series` で記帳）→ `done`（完成・`article:export` 工程 done が信号）→ `updating`（done 後に `article:revise` か `article:import --series` で変更着手）。README は日本語ラベル（`⬜ 予定 / 🚧 作成中 / ✏️ 更新中 / ✅ 完成`）、コンソールは生キー（技術ビュー）。
+> - **`done` の信号は「export 工程 done」に統一**（progress.events.jsonl が正本）。`meta.published`（公開台帳＝`record-publication`）は別工程なので使わない。両方を信号にすると「export 済み・公開台帳記録前」のメンバーが `series:status --fix` で `done`→`writing` に巻き戻る（silent downgrade）。トリガ（export）と `--fix` 導出を同一信号にして防ぐ。
+> - **`series:status --fix` は downgrade しない**: export 工程 done なら `done`、run はあるが未 export なら `writing` を導出し、既存 `done`/`updating` は保持（`updating` は progress に痕跡が残らず復元不能なので上書きしない）。
+> - **README は `article:create --series` で必ず生成**（作成開始で束の一覧を出す）。export 等の自動再生成は従来どおり「一度でも README がある束だけ」。
+> - **公開済みメンバーの更新（`/update-article`）は `article:import --series <slug>`**: supersedes 先メンバーの runId を新 run に付け替え `updating` にし、新 run に `meta.series` を焼く（横の束は常に現行版 run を指す。旧 run は `meta.lineage` に残る）。仕様詳細は [series-readme-writing-status-proposal.md](series-readme-writing-status-proposal.md)。
 
 > voice の出所は run だけでなく「手書き指示」「複数 exemplar」「外部ファイル」もあり得るため、単一 `sourceRunId` ではなく `provenance` 配列で持つ（Codex P2）。run 側は出所を持たず `voiceVersion`/`voiceHash`（§5.1）だけを焼き込む。
 

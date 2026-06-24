@@ -66,6 +66,8 @@ import { initConfig } from "./cli/init";
 import {
   buildSeriesMeta,
   composeSeriesStyle,
+  markMemberDone,
+  markMemberUpdating,
   readSeriesForCreate,
   recordMember,
   resolveSeriesProfile,
@@ -227,8 +229,8 @@ program
           runMeta.series.order = resolvedOrder;
           await store.writeMeta(runMeta);
         }
-        // README が既にある束だけ自動再生成（派生ビュー・best-effort。本処理は止めない）。
-        await refreshSeriesReadme(options.series);
+        // 作成開始で README を必ず生成（無ければ作る）。member は recordMember で writing 記帳済み。
+        await refreshSeriesReadme(options.series, { create: true });
       }
 
       reporter.printTotal();
@@ -283,7 +285,7 @@ program
     } else {
       console.log(`series: ${result.data.seriesId} (profile=${result.data.profile}, voice v${result.data.voice.version})`);
       for (const m of result.members) {
-        console.log(`  [${m.order}] ${m.status.padEnd(7)} ${m.slug}${m.runId ? ` (${m.runId})` : " (planned)"}`);
+        console.log(`  [${m.order}] ${m.status.padEnd(8)} ${m.slug}${m.runId ? ` (${m.runId})` : " (planned)"}`);
       }
       for (const w of result.warnings) {
         process.stderr.write(`  ⚠ ${w}\n`);
@@ -427,6 +429,12 @@ program
     reporter.printTotal();
     console.log(`runId: ${result.runId}`);
     console.log(`final: runs/${result.runId}/final.md (previous: runs/${result.runId}/final.bak.md)`);
+    // done 済みのシリーズメンバーを改稿したら updating に戻す（§6.1・writing 中は退行させない）。README も更新。
+    const meta = await store.readMeta(result.runId).catch(() => null);
+    if (meta?.series?.seriesId) {
+      await markSeriesMember(meta.series.seriesId, result.runId, "updating");
+      await refreshSeriesReadme(meta.series.seriesId);
+    }
   });
 
 program
@@ -441,6 +449,7 @@ program
   .option("--criteria-file <path>", "Brush-up brief saved as runs/<runId>/brushup-criteria.md (auto-used by evaluate)")
   .option("--supersedes <runId>", "Previous run this update supersedes (recorded in meta.lineage)")
   .option("--root <runId>", "Root run of the lineage (first version, recorded in meta.lineage)")
+  .option("--series <slug>", "Inherit series membership: repoint the supersedes member to this run and mark it updating (for /update-article on a series member)")
   .option("--tags <list>", "Comma-separated publish tags (else inherited from --supersedes run)")
   .option("--code-check", "Run code syntax/type checks (build-verify) for this run. Off by default. Fixed at import (first-write-wins), same as article:create")
   .option("--force", "Replace an existing run with the same id as an import run")
@@ -455,6 +464,7 @@ program
       criteriaFile?: string;
       supersedes?: string;
       root?: string;
+      series?: string;
       tags?: string;
       codeCheck?: boolean;
       force?: boolean;
@@ -482,6 +492,7 @@ program
         criteria,
         supersedesRunId: options.supersedes,
         rootRunId: options.root,
+        series: options.series,
         tags,
         codeCheck: options.codeCheck === true,
         toolVersion: pkg.version,
@@ -551,9 +562,10 @@ program
       // --note は「条件付き GO の条件解決・ユーザー承認」を台帳に残すための監査欄（任意）。
       await recordProgress(store, options.run, { step: "export", status: "done", output: dest, note: options.note });
       console.log(`exported: ${dest}${options.frontMatter ? " (with front-matter)" : ""}`);
-      // シリーズメンバーなら README を best-effort で再生成（既にある束だけ）。
+      // シリーズメンバーなら done に更新（§4・export 工程 done が done の信号）し、README を再生成（既にある束だけ）。
       const meta = await store.readMeta(options.run).catch(() => null);
       if (meta?.series?.seriesId) {
+        await markSeriesMember(meta.series.seriesId, options.run, "done");
         await refreshSeriesReadme(meta.series.seriesId);
       }
     }
@@ -836,11 +848,26 @@ async function safeProgress(fn: () => Promise<void>): Promise<void> {
   }
 }
 
-// create/export 後に series/<slug>/README.md を best-effort で再生成する（既にある束だけ・派生ビュー）。
-// 失敗しても本処理（作成・公開）は止めない。README が無い束は何もしない（オプトインは初回 --write）。
-async function refreshSeriesReadme(slug: string): Promise<void> {
+// series/<slug>/README.md を best-effort で（再）生成する（派生ビュー）。失敗しても本処理は止めない。
+// create=false（既定・export 等）: README が既にある束だけ更新する（オプトインは初回 --write を尊重）。
+// create=true（article:create）: README が無くても作る。作成開始で束の一覧を必ず出す（proposal §3）。
+// シリーズメンバーの status を best-effort で更新する（export→done / revise→updating）。
+// 失敗しても本処理（公開・改稿）は止めない。updating は done のメンバーだけ戻す（markMemberUpdating が guard）。
+async function markSeriesMember(slug: string, runId: string, status: "done" | "updating"): Promise<void> {
   try {
-    const dir = await writeSeriesReadme(slug, { onlyIfExists: true });
+    if (status === "done") {
+      await markMemberDone(slug, runId);
+    } else {
+      await markMemberUpdating(slug, runId);
+    }
+  } catch (error) {
+    process.stderr.write(`  ⚠ series メンバー状態の更新に失敗しました（本処理は継続）: ${shortMessage(error)}\n`);
+  }
+}
+
+async function refreshSeriesReadme(slug: string, opts: { create?: boolean } = {}): Promise<void> {
+  try {
+    const dir = await writeSeriesReadme(slug, { onlyIfExists: !opts.create });
     if (dir) {
       console.log(`series README updated: ${resolve(dir, "README.md")}`);
     }

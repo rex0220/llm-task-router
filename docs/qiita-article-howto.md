@@ -642,7 +642,8 @@ llm-task-router series:status --slug kagaku --write    # series/<slug>/README.md
 
 - 既定は**読み取りのみ**。`--fix` で `runs/` を走査して `meta.series` を正に `series.json.members` を埋め直す。
 - `--fix` は order 重複・runId 多重・planned slug 不一致・voiceHash 不一致などの**多義的な衝突は修復せず警告**するだけ（人が解す）。あわせて、`series.json` に order があるのに `meta.json` の `series.order` が欠落している run を**遡及補修**する（conflicts なし・runId が members にちょうど1件一致のときだけ）。
-- `--write` は `series/<slug>/README.md` に `#`（保存順）/状態/タイトル/slug/run の一覧表を書き出す（**派生ビュー**＝正本は `series.json`）。タイトルは各 run の `meta.articleTitle` から拾い、planned 枠は「（未作成）」。**一度 `--write` した束は、以後メンバーの作成（`article:create --series`）や `article:export` のたびに README が自動再生成される**（best-effort・既にある束だけ）。手動 `--write` は初回のオプトインと、明示的に最新化したいときだけでよい。
+- `--write` は `series/<slug>/README.md` に `#`（保存順）/状態/タイトル/slug/run の一覧表を書き出す（**派生ビュー**＝正本は `series.json`）。タイトルは各 run の `meta.articleTitle` から拾い、planned 枠は「（未作成）」。状態は4値で日本語ラベル表示（`⬜ 予定 / 🚧 作成中 / ✏️ 更新中 / ✅ 完成`）。**`article:create --series` は作成開始時に README を必ず生成する**（束の一覧をすぐ出すため。初回の手動 `--write` は不要になった）。それ以外（`article:export`・`article:revise` など）の自動再生成は従来どおり**一度でも README がある束だけ**（best-effort）。手動 `--write` は明示的に最新化したいときだけでよい。
+- 状態は `planned`（未作成枠）→ `writing`（作成中＝`article:create --series` で記帳）→ `done`（完成＝`article:export` 工程 done が信号）→ `updating`（done 後に `article:revise` か `article:import --series` で変更着手）と遷移する。`series:status --fix` は run の進捗（export 工程 done）から `done`/`writing` を導出し、`updating` と既存 `done` は保持する（progress に痕跡が残らない `updating` を巻き戻さない）。`done` の信号は `meta.published`（公開台帳＝`record-publication`）ではなく **export 工程 done**（§ trigger と --fix を同一信号に統一）。
 
 ### フォルダー構成（シリーズ）
 

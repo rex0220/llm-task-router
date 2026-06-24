@@ -13,7 +13,7 @@ article-editor-in-chief サブエージェントを使い、**既に公開済み
 
 進行:
 1. **解決**: `export/index.json` で slug → 最新 run / 公開 URL / articleId / version を引く。次版の新 runId を決める。
-2. **起点化**: `llm-task-router article:import --from export/<slug>.md --run <new-id> --supersedes <前の runId> --root <根 runId> --profile qiita`。これで `update-base.md`（版の正本）が固定保存され、`lineage` が meta に記録される。**構文/型チェックは既定オフ**（create と同じ）。更新で runnable なコードを足す/直す場合だけ `--code-check` を付ける（import 時に first-write-wins で固定）。
+2. **起点化**: `llm-task-router article:import --from export/<slug>.md --run <new-id> --supersedes <前の runId> --root <根 runId> --profile qiita`。これで `update-base.md`（版の正本）が固定保存され、`lineage` が meta に記録される。**構文/型チェックは既定オフ**（create と同じ）。更新で runnable なコードを足す/直す場合だけ `--code-check` を付ける（import 時に first-write-wins で固定）。**更新対象がシリーズメンバーなら `--series <slug>` も付ける**（supersedes 先メンバーの runId を新 run に付け替え `updating`＝更新中にする。忘れると束が旧 run を指したままで再 export で `done` に閉じられない）。
 3. **棚卸し → 差分指示**: 更新トリガー（バージョン追従／事実の陳腐化／読者FB）を確認し、変更点を `runs/<new-id>/update-instruction.md` に列挙する。各点に一次情報（新版の --help 実出力・公式リリースノート等）を根拠として添える。
 4. **差分適用**: `llm-task-router article:revise --run <new-id> --instruction-file runs/<new-id>/update-instruction.md` → `llm-task-router article:update-diff --run <new-id>` で `update-diff.md` / `changed-sections.json` を生成。
 4.5. **再検証対象の抽出**: `llm-task-router article:claims-recheck --run <new-id>` で `claims-recheck.md` を生成（更新前の版＝supersedes 元 run の `claims.json` を参照し、変更セクションに属する既存 claim を価格・API・バージョン優先で列挙しつつ、追加行から新規 claim を抽出すべきセクションも列挙）。

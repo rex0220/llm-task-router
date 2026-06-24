@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import type { RunStore } from "../storage/RunStore";
 import type { LineageMeta } from "../storage/RunStore";
 import { validateSafeId } from "../storage/meta";
+import { inheritSeriesMembership } from "./series";
 import { loadProfile } from "../workflows/profile";
 import { createRunId } from "../workflows/createQiitaArticle";
 import { DEFAULT_PLATFORM, qiitaSteps } from "../workflows/qiitaSteps";
@@ -20,6 +21,10 @@ export type ImportArticleOptions = {
   // 更新リライト運用の系譜（§5.2）。/update-article が台帳から解決して渡す。
   supersedesRunId?: string;
   rootRunId?: string;
+  // シリーズメンバーの更新（§6.2・案A）。supersedes 先メンバーの runId を新 run に付け替え status=updating。
+  series?: string;
+  // series container のルート（既定は SeriesStore のデフォルト＝./series）。テストで差し替えるためだけに公開。
+  seriesRoot?: string;
   // 投稿用タグ。未指定なら supersedes 元 run の tags を継承する。
   tags?: string[];
   // 構文/型チェック（build-verify）の実施対象か。create の --code-check と対称で、import（更新フローの起点）でも
@@ -144,6 +149,25 @@ export async function importArticle(store: RunStore, options: ImportArticleOptio
     lineage.rootRunId = validateSafeId(options.rootRunId, "root run id");
   }
   meta.lineage = lineage;
+  // シリーズメンバーの更新（§6.2・案A）: supersedes 先メンバーを新 run に付け替え（status=updating）、
+  // 新 run に meta.series を焼く（後続の export が markMemberDone で done に閉じられるようにする）。
+  if (options.series) {
+    meta.series = await inheritSeriesMembership(options.series, runId, {
+      supersedesRunId: options.supersedesRunId,
+      seriesRoot: options.seriesRoot,
+    });
+    // 旧版（supersedes 先）を横の束から外す。listSeriesRuns は seriesId 一致の run を全部返し
+    // superseded を除外しないため、旧 run の meta.series を残すと旧+新が同じ order を主張して
+    // reconcileMembers の衝突1（order 重複）が恒久化し、その order が --fix でも skip される。
+    // 旧版は meta.lineage（縦＝版系譜）にだけ残す（横の束は常に現行版 run を指す・案A の不変条件）。
+    if (options.supersedesRunId) {
+      const prev = await store.readMeta(options.supersedesRunId).catch(() => null);
+      if (prev?.series) {
+        delete prev.series;
+        await store.writeMeta(prev);
+      }
+    }
+  }
   // import 由来の本文は外部/人間作。編集レビューの独立性チェックは免除（external）。
   meta.finalAuthorModel = "external";
   // 投稿用メタ: タイトルは本文 H1 / topic を流用、タグは指定 > supersedes 継承。

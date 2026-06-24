@@ -84,6 +84,7 @@ export type RunMeta = {
 2. `ImportArticleOptions` に lineage 入力を追加し、与えられたら `meta.lineage` を記録:
    - `sourceExportPath`: 既定で `--from` の値（import 元）。
    - `supersedesRunId` / `rootRunId`: 新フラグ `--supersedes <runId>` / `--root <runId>`（任意）。`/update-article` が台帳から解決して渡す。
+   - `series`: 新フラグ `--series <slug>`（任意・シリーズメンバーの更新時）。supersedes 先メンバーの runId を新 run に付け替え `updating` にし、新 run に `meta.series` を焼く（後続 export が `done` に閉じられる）。仕様は [series-readme-writing-status-proposal.md §6.2](series-readme-writing-status-proposal.md)。
 3. `staleArtifacts`（[import.ts:28-45](../src/cli/import.ts#L28-L45)）に **`update-base.md` を追加**。`--force` 再 import で版の正本も作り直す。
 4. `update-base.md` を「全 import で書く」か「更新フロー時のみ」か → **全 import で書く**ことを推奨（コピー1回で安価、通常ブラッシュアップでも回帰起点になる）。§8 の区分は「新規・必須」。
 
