@@ -18,8 +18,8 @@ llm-task-router を使って Qiita 記事を「作成 → 評価 → 修正 → 
 
 オペレーターを Claude Code で回す場合の承認プロンプト軽減は、**`llm-task-router init` が記事フォルダーに展開する `.claude/` に同梱済み**（手順 2 参照）。中身は:
 
-- `.claude/settings.json` … 記事ワークフローの `llm-task-router article:*`（`export` / `record-publication` を含む）と、シリーズ第1段の `series:init` / `series:freeze-voice` / `series:status` の3コマンド、`WebSearch` / `WebFetch`（裏取り用・全ドメイン）を allow。`series:*` は接頭辞ではなくこの3コマンドだけ（将来のモデル呼び出し系を先取り承認しない）。
-- `.claude/hooks/auto-approve-llm-task-router.mjs` … 別ディレクトリから `bash -c 'cd "<記事フォルダー>" && llm-task-router article:... / series:...'` の形で実行されると先頭が `bash` になり前方一致 allowlist が効かないため、**コマンド全文を見て自動承認する** PreToolUse フック（`settings.json` に `"matcher": "Bash|PowerShell"` で登録済み）。**Bash ツールと PowerShell ツール（Windows の既定シェル）の両方**を対象にし、PowerShell 経由で直に `llm-task-router article:...` を実行した場合も同じ判定で自動承認する。自動承認するのは `cd` 系（PowerShell は `Set-Location` / `sl` / `pushd` も）＋ `article:*`（接頭辞）と上記 `series:` 3コマンドのみで、未許可の `series:*`（例: 将来の `series:extract-voice` / `series:plan`）や連結・パイプ・置換・**リダイレクト（`2>&1` / `2>$null` 等）**が混ざると通常プロンプトに戻す。リダイレクトは付けず素のコマンドで発行すれば自動承認される（Bash/PowerShell ツールとも stderr は自動捕捉される）。
+- `.claude/settings.json` … 記事ワークフローの `llm-task-router article:*`（`export` / `record-publication` を含む）と、シリーズの `series:init` / `series:freeze-voice` / `series:status` / `series:plan` の4コマンド、`WebSearch` / `WebFetch`（裏取り用・全ドメイン）を allow。`series:*` は接頭辞ではなくこの4コマンドだけ（いずれもローカル file 操作。将来のモデル呼び出し系を先取り承認しない）。
+- `.claude/hooks/auto-approve-llm-task-router.mjs` … 別ディレクトリから `bash -c 'cd "<記事フォルダー>" && llm-task-router article:... / series:...'` の形で実行されると先頭が `bash` になり前方一致 allowlist が効かないため、**コマンド全文を見て自動承認する** PreToolUse フック（`settings.json` に `"matcher": "Bash|PowerShell"` で登録済み）。**Bash ツールと PowerShell ツール（Windows の既定シェル）の両方**を対象にし、PowerShell 経由で直に `llm-task-router article:...` を実行した場合も同じ判定で自動承認する。自動承認するのは `cd` 系（PowerShell は `Set-Location` / `sl` / `pushd` も）＋ `article:*`（接頭辞）と上記 `series:` 4コマンドのみで、未許可の `series:*`（例: 将来の `series:extract-voice`）や連結・置換・任意ファイルへのリダイレクト/パイプが混ざると通常プロンプトに戻す。ただし**末尾の無害な装飾は剥がしてから判定**するので自動承認される: stderr/標準出力リダイレクト（`2>&1` / `2>/dev/null` / `2>$null` 等）と、出力ページャパイプ（`| tail` / `| head`、PowerShell は `| Select-Object -First/-Last N`）。`| tee` / `| sh` / `| Out-File` / `> file` 等は引き続き不許可。
 - `.claude/agents/`・`.claude/commands/`・`CLAUDE.md` … 編集長／factchecker／build-verifier と各スラッシュコマンド。
 
 公開（`article:export`）も自動承認に含めているが、**公開ゲートは編集長の GO/NO-GO ＋ ユーザー承認（会話レベル）で担保**する設計（CLAUDE.md「自走で公開しない」）。権限プロンプトでは止めない。
@@ -573,7 +573,7 @@ llm-task-router article:record-publication --run 2026-06-19-<slug>-v2 \
 
 「科学解説シリーズ」のように、**独立したトピックを同じ文体（voice）で何本も書く**運用。文体をシリーズ単位で1度だけ凍結し、各記事の作成時にその voice を本文生成プロンプトへ焼き込む。各記事は作成後、通常どおり refine / factcheck / export の工程を通す（シリーズは「作成前の文体共有」と「束の管理」を足すだけで、9段の工程順は変えない）。
 
-> 仕様の詳細は [series-spec.md](series-spec.md)、実装計画は [series-c1-plan.md](series-c1-plan.md)。第1段は**科学シリーズ（同一文体・独立記事）**が対象。章送り（小説）の連続性・テーマ分割の計画（`series:plan`）・`/series` スラッシュコマンドは第2段以降の予定。
+> 仕様の詳細は [series-spec.md](series-spec.md)、実装計画は [series-c1-plan.md](series-c1-plan.md)。第1段は**科学シリーズ（同一文体・独立記事）**が対象。`series:plan` は**候補名の記録（最小）まで実装済み**（[series-candidate-titles-proposal.md](series-candidate-titles-proposal.md)）。outline からの自動割り付け・章送り（小説）の連続性・`/series` スラッシュコマンドは第2段以降の予定。
 
 > **必ず作業フォルダー（`llm-task-router init` 済み）で実行する**。`series/` は cwd 直下に作られるため、`series:*` は cwd が初期化済みワークスペース（`config/models.yaml` がある）でないと拒否する（llm-task-router のソース repo や未初期化ディレクトリでは止まる）。出力は作成先を**絶対パス**で表示するので、誤配置に気づける。意図的に外で実行するときだけ `--allow-outside-workspace`。
 
@@ -603,6 +603,24 @@ llm-task-router series:freeze-voice --slug kagaku
 # 文体を改訂する（version 2 に上がり、旧版は voice-v1.md に保全される）
 llm-task-router series:freeze-voice --slug kagaku --voice-file voice.draft.md
 ```
+
+### 2.5 記事候補名（ラインナップ）を記録する（任意・`series:plan`）
+
+作成前に「この束はどんな回で構成するか」を決めているなら、候補名を planned 枠として記録しておける。
+作成前から README に一覧が出て、作成・見直しが進むと実タイトルへ自動で置き換わる。
+
+```bash
+llm-task-router series:plan --slug kagaku --title "ブラックホール入門" --member-slug blackhole
+llm-task-router series:plan --slug kagaku --title "ニュートリノ天文学" --member-slug neutrino --order 2
+```
+
+- 候補名の**正本は `series.json` の `members[].title`**、README は派生（手書きしない）。表示優先は
+  実 `meta.articleTitle`（作成後）＞候補名＞「（未作成）」。
+- `--member-slug` は省略すると `--title` から英数で導出。**日本語タイトルは slug 化できないので `--member-slug` 必須**。
+- `--order` 省略は末尾に追加。**作成済み（run 紐づき）の order を指定すると巻き戻し防止で拒否**される
+  （`series:plan` は planned 枠の新設／候補名更新のみ）。
+- `series:status --fix` は候補名を保持する（消さない）。
+- 候補を使わずいきなり `article:create --series` でも従来どおり作れる（`series:plan` は任意）。
 
 ### 3. メンバー記事を作成する（`article:create --series`）
 

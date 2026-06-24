@@ -16,6 +16,7 @@ import {
   renderSeriesReadme,
   resolveSeriesProfile,
   seriesExportFileName,
+  seriesPlan,
   seriesFreezeVoice,
   seriesInit,
   seriesStatus,
@@ -60,6 +61,24 @@ describe("upsertMember", () => {
   it("does not mutate the input", () => {
     upsertMember(base, { order: 1, slug: "x", runId: "y", status: "done" });
     expect(base[0].slug).toBe("a");
+  });
+
+  it("carries the title onto a new (push) slot", () => {
+    const out = upsertMember(base, { slug: "c", runId: null, status: "planned", title: "候補C" });
+    expect(out[2]).toEqual({ order: 3, slug: "c", runId: null, status: "planned", title: "候補C" });
+  });
+
+  it("preserves an existing slot's title when title is not passed", () => {
+    const withTitle: SeriesMember[] = [{ order: 1, slug: "a", runId: null, status: "planned", title: "候補A" }];
+    // create 相当（title 未指定）で runId/status を更新しても title は残る。
+    const out = upsertMember(withTitle, { order: 1, slug: "a", runId: "2026-06-24-a", status: "writing" });
+    expect(out[0]).toMatchObject({ runId: "2026-06-24-a", status: "writing", title: "候補A" });
+  });
+
+  it("updates an existing slot's title when title is passed", () => {
+    const withTitle: SeriesMember[] = [{ order: 1, slug: "a", runId: null, status: "planned", title: "旧" }];
+    const out = upsertMember(withTitle, { order: 1, slug: "a", runId: null, status: "planned", title: "新" });
+    expect(out[0].title).toBe("新");
   });
 });
 
@@ -381,6 +400,21 @@ describe("renderSeriesReadme (追加課題C)", () => {
     expect(md).toContain("A \\| B");
   });
 
+  it("title precedence: real meta.articleTitle > candidate title > placeholder", () => {
+    const members: SeriesMember[] = [
+      { order: 1, slug: "a", runId: "2026-06-24-a", status: "done", title: "候補A" }, // 実タイトル優先
+      { order: 2, slug: "b", runId: "2026-06-24-b", status: "writing", title: "候補B" }, // 実未取得→候補
+      { order: 3, slug: "c", runId: null, status: "planned", title: "候補C" }, // 未作成→候補
+      { order: 4, slug: "d", runId: null, status: "planned" }, // 候補なし→（未作成）
+    ];
+    const titles = new Map([["2026-06-24-a", "実タイトルA"]]); // b は未取得
+    const md = renderSeriesReadme(data as never, members, titles);
+    expect(md).toContain("| 1 | ✅ 完成 | 実タイトルA |"); // 実 > 候補
+    expect(md).toContain("| 2 | 🚧 作成中 | 候補B |"); // runId あり・実未取得・候補あり → 候補（挙動変化を固定）
+    expect(md).toContain("| 3 | ⬜ 予定 | 候補C |"); // planned・候補あり
+    expect(md).toContain("| 4 | ⬜ 予定 | （未作成） |"); // 候補なし
+  });
+
   it("renders writing/updating rows with Japanese labels (no EN/JA mix)", () => {
     const members: SeriesMember[] = [
       { order: 1, slug: "w", runId: "2026-06-23-w", status: "writing" },
@@ -525,6 +559,73 @@ describe("inheritSeriesMembership (§6.2 案A・update-article の継承)", () =
     const data = await new SeriesStore(seriesRoot).read("kagaku");
     expect(data?.members).toHaveLength(2);
     expect(data?.members[1]).toMatchObject({ order: 2, runId: "2026-06-24-b", status: "writing" });
+  });
+});
+
+describe("seriesPlan (候補名・series:plan 最小)", () => {
+  async function frozen(seriesRoot: string): Promise<void> {
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(tmp("ltr-vf-"), "v.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+  }
+
+  it("appends a planned slot with the candidate title (auto order, derived slug)", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    const order = await seriesPlan("kagaku", { title: "Black Hole Basics" }, seriesRoot);
+    expect(order).toBe(1);
+    const data = await new SeriesStore(seriesRoot).read("kagaku");
+    expect(data?.members[0]).toEqual({
+      order: 1,
+      slug: "black-hole-basics",
+      runId: null,
+      status: "planned",
+      title: "Black Hole Basics",
+    });
+  });
+
+  it("requires --member-slug when the title cannot derive an ASCII slug", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    await expect(seriesPlan("kagaku", { title: "ブラックホール入門" }, seriesRoot)).rejects.toThrow(/--member-slug/);
+    // --member-slug を渡せば planned 枠が作れる（日本語タイトルを候補名に保持）。
+    const order = await seriesPlan("kagaku", { title: "ブラックホール入門", memberSlug: "blackhole" }, seriesRoot);
+    const data = await new SeriesStore(seriesRoot).read("kagaku");
+    expect(data?.members[order - 1]).toMatchObject({ slug: "blackhole", title: "ブラックホール入門", status: "planned" });
+  });
+
+  it("🔴 refuses an explicit --order that already has a created run (no rollback)", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    await recordMember("kagaku", "2026-06-24-a", 1, seriesRoot); // order 1 は作成済み（runId あり）
+    await expect(
+      seriesPlan("kagaku", { title: "上書き候補", order: 1, memberSlug: "x" }, seriesRoot)
+    ).rejects.toThrow(/already has a created run/);
+    // 巻き戻っていない（runId/status は維持）。
+    const data = await new SeriesStore(seriesRoot).read("kagaku");
+    expect(data?.members[0]).toMatchObject({ order: 1, runId: "2026-06-24-a", status: "writing" });
+  });
+
+  it("--fix preserves a planned candidate title (does not reset to （未作成）)", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    const runsRoot = tmp("ltr-r-");
+    await frozen(seriesRoot);
+    // order 2 を候補として計画（runId なし）。order 1 は実 run。
+    const runStore = new RunStore(runsRoot);
+    await runStore.create("2026-06-24-a", "t", ["brief"], "Qiita", "s", "qiita", {
+      seriesId: "kagaku",
+      order: 1,
+      voiceVersion: 1,
+      voiceHash: voiceHash("tone"),
+    });
+    await recordMember("kagaku", "2026-06-24-a", 1, seriesRoot);
+    await seriesPlan("kagaku", { title: "次回候補", order: 2, memberSlug: "next" }, seriesRoot);
+
+    // reconcile（seriesStatus）後も planned 枠の候補名が残る。
+    const status = await seriesStatus("kagaku", seriesRoot, runsRoot);
+    const planned = status.members.find((m) => m.order === 2);
+    expect(planned).toMatchObject({ runId: null, status: "planned", title: "次回候補" });
   });
 });
 

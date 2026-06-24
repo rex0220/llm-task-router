@@ -112,4 +112,23 @@ describe("validateSeriesData", () => {
     const data = validData({ members: [{ order: 1, slug: "x", runId: "2026-06-23-x", status: "bogus" as never }] });
     expect(validateSeriesData(data).members[0].status).toBe("planned");
   });
+
+  it("preserves a member candidate title (does not drop it on read)", () => {
+    const data = validData({
+      members: [{ order: 1, slug: "p", runId: null, status: "planned", title: "候補タイトル" } as never],
+    });
+    expect(validateSeriesData(data).members[0].title).toBe("候補タイトル");
+  });
+
+  it("trims a title and treats empty/whitespace as undefined", () => {
+    const data = validData({
+      members: [
+        { order: 1, slug: "a", runId: null, status: "planned", title: "  pad  " } as never,
+        { order: 2, slug: "b", runId: null, status: "planned", title: "   " } as never,
+      ],
+    });
+    const parsed = validateSeriesData(data);
+    expect(parsed.members[0].title).toBe("pad");
+    expect(parsed.members[1].title).toBeUndefined();
+  });
 });

@@ -72,6 +72,7 @@ import {
   recordMember,
   resolveSeriesProfile,
   seriesExportFileName,
+  seriesPlan,
   writeSeriesReadme,
   seriesFreezeVoice,
   seriesInit,
@@ -267,6 +268,34 @@ program
     console.log(`series voice frozen: ${data.seriesId} version=${data.voice.version} hash=${data.voice.hash.slice(0, 12)}…`);
     console.log(`  voice: ${resolve("series", data.seriesId, "voice.md")}`);
   });
+
+program
+  .command("series:plan")
+  .description("Record a candidate (planned) article in the series: adds/updates a planned member with a title. Fills planned slots only (refuses orders that already have a created run).")
+  .requiredOption("--slug <slug>", "Series slug")
+  .requiredOption("--title <text>", "Candidate article title (planned name shown in README until the article is created)")
+  .option("--order <n>", "Slot order (1-based). Omit to append at the end", (v) => parseInt(v, 10))
+  .option("--member-slug <slug>", "Member slug for the planned slot (default: derived from --title; required for non-ASCII titles)")
+  .option("--allow-outside-workspace", "Allow running outside an initialized article workspace (off by default)")
+  .action(
+    async (options: {
+      slug: string;
+      title: string;
+      order?: number;
+      memberSlug?: string;
+      allowOutsideWorkspace?: boolean;
+    }) => {
+      await assertArticleWorkspace({ allowOutsideWorkspace: options.allowOutsideWorkspace });
+      const order = await seriesPlan(options.slug, {
+        title: options.title,
+        order: options.order,
+        memberSlug: options.memberSlug,
+      });
+      console.log(`series:plan: ${options.slug} order ${order} = "${options.title}" (planned)`);
+      // 計画段階でも一覧を出す（無ければ作る・create と同じ方針）。
+      await refreshSeriesReadme(options.slug, { create: true });
+    }
+  );
 
 program
   .command("series:status")
