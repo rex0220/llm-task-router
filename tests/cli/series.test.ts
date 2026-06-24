@@ -2,14 +2,16 @@ import { mkdtempSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildSeriesMeta,
   composeSeriesStyle,
   reconcileMembers,
   readSeriesForCreate,
   recordMember,
+  renderSeriesReadme,
   resolveSeriesProfile,
+  seriesExportFileName,
   seriesFreezeVoice,
   seriesInit,
   seriesStatus,
@@ -182,5 +184,192 @@ describe("series store orchestration", () => {
     });
     const status = await seriesStatus("kagaku", seriesRoot, runsRoot);
     expect(status.conflicts.some((c) => c.includes("voiceHash mismatch"))).toBe(true);
+  });
+});
+
+describe("recordMember resolved order (Step 2)", () => {
+  async function frozen(seriesRoot: string): Promise<void> {
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(tmp("ltr-vf-"), "v.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+  }
+
+  it("returns 1 for the first member when order is omitted", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    expect(await recordMember("kagaku", "2026-06-23-a", undefined, seriesRoot)).toBe(1);
+  });
+
+  it("auto-numbers the next member at max order + 1", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    await recordMember("kagaku", "2026-06-23-a", undefined, seriesRoot);
+    await recordMember("kagaku", "2026-06-23-b", undefined, seriesRoot);
+    expect(await recordMember("kagaku", "2026-06-23-c", undefined, seriesRoot)).toBe(3);
+  });
+
+  it("returns the explicit order when given", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    expect(await recordMember("kagaku", "2026-06-23-a", 5, seriesRoot)).toBe(5);
+  });
+});
+
+describe("seriesStatus nullOrderRunIds (Step 3)", () => {
+  it("collects runs whose meta.series.order is missing", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    const runsRoot = tmp("ltr-r-");
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(tmp("ltr-vf-"), "v.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+
+    const runStore = new RunStore(runsRoot);
+    // order を欠いた run（既知バグ状態）。
+    await runStore.create("2026-06-23-noorder", "t", ["brief"], "Qiita", "s", "qiita", {
+      seriesId: "kagaku",
+      voiceVersion: 1,
+      voiceHash: voiceHash("tone"),
+    });
+    const status = await seriesStatus("kagaku", seriesRoot, runsRoot);
+    expect(status.nullOrderRunIds).toContain("2026-06-23-noorder");
+  });
+});
+
+describe("recordMember concurrency serialization (Step 4)", () => {
+  it("auto-numbers without duplicate orders or lost updates under parallel calls", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(tmp("ltr-vf-"), "v.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+
+    const n = 20;
+    const runIds = Array.from({ length: n }, (_, i) => `2026-06-23-r${String(i).padStart(2, "0")}`);
+    const orders = await Promise.all(runIds.map((id) => recordMember("kagaku", id, undefined, seriesRoot)));
+
+    // 戻り値 order は重複しない 1..n の連番（R1 根絶）。
+    expect([...orders].sort((a, b) => a - b)).toEqual(Array.from({ length: n }, (_, i) => i + 1));
+
+    // series.json には全 runId が残り（R2: lost update なし）、order も重複しない。
+    const data = await new SeriesStore(seriesRoot).read("kagaku");
+    expect(data?.members).toHaveLength(n);
+    expect(new Set(data?.members.map((m) => m.runId)).size).toBe(n);
+    expect(new Set(data?.members.map((m) => m.order)).size).toBe(n);
+  });
+
+  // ネガティブコントロール（計画テスト計画 項5）: ロックを外すと R2（lost update）が再現することを
+  // 示し、上の正例テストが「ロックが効いている」ことを実際に検出できている証跡にする。
+  // 将来 recordMember の read-modify-write がよりアトミックに寄ってこの負例が pass し始めたら、
+  // 正例の検出力が落ちるサインなので、その時はテスト構造を見直す。
+  it("(negative control) loses updates WITHOUT the lock — proves the lock is what protects R2", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(tmp("ltr-vf-"), "v.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+
+    // withLock を即実行（ロック無し）に差し替える。
+    const spy = vi
+      .spyOn(SeriesStore.prototype, "withLock")
+      .mockImplementation((_slug: string, fn: () => Promise<unknown>) => fn());
+    try {
+      const n = 20;
+      const runIds = Array.from({ length: n }, (_, i) => `2026-06-23-n${String(i).padStart(2, "0")}`);
+      await Promise.all(runIds.map((id) => recordMember("kagaku", id, undefined, seriesRoot)));
+
+      // ロック無しでは全員が空 members を read→order=1 を計算→last-write-wins で取りこぼす。
+      const data = await new SeriesStore(seriesRoot).read("kagaku");
+      expect(data!.members.length).toBeLessThan(n);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("seriesExportFileName (追加課題D)", () => {
+  async function setup(seriesRoot: string, runsRoot: string, opts: { order?: number; platform?: string } = {}) {
+    await seriesInit("kagaku", "qiita", seriesRoot);
+    const vf = join(tmp("ltr-vf-"), "v.md");
+    await writeFile(vf, "tone", "utf8");
+    await seriesFreezeVoice("kagaku", vf, seriesRoot);
+    const runStore = new RunStore(runsRoot);
+    const seriesMeta: RunSeriesMeta = {
+      seriesId: "kagaku",
+      role: "article",
+      order: opts.order,
+      voiceVersion: 1,
+      voiceHash: voiceHash("tone"),
+    };
+    await runStore.create("2026-06-23-ai-ir", "t", ["brief"], opts.platform ?? "Qiita", "s", "qiita", seriesMeta);
+    await recordMember("kagaku", "2026-06-23-ai-ir", opts.order, seriesRoot);
+    return runStore;
+  }
+
+  it("names <seriesId>-<NN>-<slug>-<platform>.md with zero-padded order", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    const runsRoot = tmp("ltr-r-");
+    const runStore = await setup(seriesRoot, runsRoot, { order: 2 });
+    const meta = await runStore.readMeta("2026-06-23-ai-ir");
+    expect(await seriesExportFileName(meta, seriesRoot)).toBe("kagaku-02-ai-ir-qiita.md");
+  });
+
+  it("omits the platform suffix when platform is empty", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    const runsRoot = tmp("ltr-r-");
+    const runStore = await setup(seriesRoot, runsRoot, { order: 1, platform: "" });
+    const meta = await runStore.readMeta("2026-06-23-ai-ir");
+    expect(await seriesExportFileName(meta, seriesRoot)).toBe("kagaku-01-ai-ir.md");
+  });
+
+  it("rejects a run without series.order (suggests series:status --fix)", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    const runsRoot = tmp("ltr-r-");
+    const runStore = new RunStore(runsRoot);
+    await runStore.create("2026-06-23-x", "t", ["brief"], "Qiita", "s", "qiita", {
+      seriesId: "kagaku",
+      voiceVersion: 1,
+      voiceHash: "h",
+    });
+    const meta = await runStore.readMeta("2026-06-23-x");
+    await expect(seriesExportFileName(meta, seriesRoot)).rejects.toThrow(/no series order/);
+  });
+
+  it("rejects a non-series run", async () => {
+    const runsRoot = tmp("ltr-r-");
+    const runStore = new RunStore(runsRoot);
+    await runStore.create("2026-06-23-solo", "t", ["brief"], "Qiita", "s", "qiita");
+    const meta = await runStore.readMeta("2026-06-23-solo");
+    await expect(seriesExportFileName(meta)).rejects.toThrow(/not a series member/);
+  });
+});
+
+describe("renderSeriesReadme (追加課題C)", () => {
+  const data = {
+    version: 1,
+    seriesId: "kagaku",
+    profile: "qiita",
+    voice: { frozen: true, version: 1, frozenAt: "", hash: "h", history: [], provenance: [] },
+    members: [],
+  };
+
+  it("renders a table with titles, planned rows, and the order-vs-第N回 note", () => {
+    const members: SeriesMember[] = [
+      { order: 1, slug: "intro", runId: "2026-06-23-intro", status: "done" },
+      { order: 2, slug: "next", runId: null, status: "planned" },
+    ];
+    const titles = new Map([["2026-06-23-intro", "はじめての記事"]]);
+    const md = renderSeriesReadme(data as never, members, titles);
+    expect(md).toContain("# シリーズ: kagaku（profile: qiita / voice v1）");
+    expect(md).toContain("| 1 | ✅ done | はじめての記事 | intro | 2026-06-23-intro |");
+    expect(md).toContain("| 2 | ⬜ planned | （未作成） | next | （planned） |");
+    expect(md).toContain("第N回");
+  });
+
+  it("escapes pipe characters in titles", () => {
+    const members: SeriesMember[] = [{ order: 1, slug: "a", runId: "2026-06-23-a", status: "done" }];
+    const md = renderSeriesReadme(data as never, members, new Map([["2026-06-23-a", "A | B"]]));
+    expect(md).toContain("A \\| B");
   });
 });

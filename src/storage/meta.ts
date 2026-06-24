@@ -6,7 +6,9 @@
 export const SAFE_ID = /^[A-Za-z0-9._-]+$/;
 
 // JSON object のキーに使う slug のプロトタイプ汚染対策。
-const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+// ".locks" はシリーズロックの置き場所 series/.locks/ と衝突させないため予約する
+// （SeriesStore.withLock。slug ".locks" のシリーズ本体ディレクトリと同一パスになるのを防ぐ）。
+const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype", ".locks"]);
 
 export function validateSafeId(value: string, label: string): string {
   if (!SAFE_ID.test(value) || value === "." || value === ".." || value.includes("..")) {

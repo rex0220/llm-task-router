@@ -32,6 +32,9 @@ describe("validateSeriesId", () => {
     expect(() => validateSeriesId("__proto__")).toThrow(/Invalid/);
     expect(() => validateSeriesId("constructor")).toThrow(/Invalid/);
   });
+  it("rejects the lock-root name .locks (collides with series/.locks/)", () => {
+    expect(() => validateSeriesId(".locks")).toThrow(/Invalid/);
+  });
   it("rejects unsafe characters", () => {
     expect(() => validateSeriesId("a b")).toThrow(/Invalid/);
     expect(() => validateSeriesId("../escape")).toThrow(/Invalid/);
@@ -81,5 +84,15 @@ describe("validateSeriesData", () => {
   it("rejects an unsafe member slug", () => {
     const data = validData({ members: [{ order: 1, slug: "a b", runId: null, status: "planned" }] });
     expect(() => validateSeriesData(data)).toThrow(/Invalid/);
+  });
+
+  it("rejects a 0-based member order (1-based invariant)", () => {
+    const data = validData({ members: [{ order: 0, slug: "x", runId: "2026-06-23-x", status: "done" }] });
+    expect(() => validateSeriesData(data)).toThrow(/integer >= 1/);
+  });
+
+  it("rejects a non-integer member order", () => {
+    const data = validData({ members: [{ order: 1.5, slug: "x", runId: "2026-06-23-x", status: "done" }] });
+    expect(() => validateSeriesData(data)).toThrow(/integer >= 1/);
   });
 });
