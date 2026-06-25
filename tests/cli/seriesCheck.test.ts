@@ -139,6 +139,22 @@ describe("stripReferenceBlock", () => {
     expect(stripReferenceBlock(md)).not.toContain("青森県公式");
   });
 
+  it("also drops the custom reference heading line preceding the marker block", () => {
+    // カスタム見出しに variant が混じっても見出し行ごと落とす（本文として誤照合しない）。
+    const md = "本文。\n\n## 青森県の参考\n\n<!-- sources:begin -->\n- [S1] x\n<!-- sources:end -->\n\n後文。";
+    const out = stripReferenceBlock(md, ["青森県の参考"]);
+    expect(out).not.toContain("## 青森県の参考");
+    expect(out).toContain("本文。");
+    expect(out).toContain("後文。");
+  });
+
+  it("drops the default 参考 heading line preceding the marker block too", () => {
+    const md = "本文。\n\n## 参考\n<!-- sources:begin -->\n- [S1] x\n<!-- sources:end -->";
+    const out = stripReferenceBlock(md);
+    expect(out).not.toContain("## 参考");
+    expect(out).toContain("本文。");
+  });
+
   it("falls back to the 参考 heading up to the next same-or-higher heading", () => {
     const md = "本文。\n\n## 参考\n- [S1] 青森県公式\n\n## 次の節\n青森県の本文。";
     const out = stripReferenceBlock(md);
@@ -157,6 +173,15 @@ describe("stripReferenceBlock", () => {
   it("treats 参考リンク / 出典 as reference headings too", () => {
     expect(stripReferenceBlock("本文。\n\n## 参考リンク\n- 青森県公式")).not.toContain("青森県公式");
     expect(stripReferenceBlock("本文。\n\n## 出典\n- 青森県公式")).not.toContain("青森県公式");
+  });
+
+  it("strips a custom reference heading passed via extraHeadings (markerless fallback)", () => {
+    const md = "本文。\n\n## 参考・題材として確認した公式情報\n- 青森県公式\n\n## 次の節\n青森県の本文。";
+    // 既定見出しには無いカスタム見出しは、extraHeadings を渡したときだけ参考章扱いになる。
+    expect(stripReferenceBlock(md)).toContain("青森県公式"); // 渡さなければ素通し
+    const out = stripReferenceBlock(md, ["参考・題材として確認した公式情報"]);
+    expect(out).not.toContain("青森県公式");
+    expect(out).toContain("## 次の節");
   });
 
   it("leaves markdown without a reference block unchanged", () => {
@@ -280,6 +305,64 @@ describe("runSeriesCheck", () => {
     expect(byOrder[3].skipped).toBe("final.md missing");
     expect(byOrder[4].skipped).toBe("planned");
     expect(report.totalFindings).toBe(2);
+  });
+
+  it("uses a member's meta.referencesHeading to strip a markerless custom reference section", async () => {
+    const seriesRoot = tmp("ltr-gs-");
+    const runsRoot = tmp("ltr-gr-");
+    const seriesStore = new SeriesStore(seriesRoot);
+    const runStore = new RunStore(runsRoot);
+    await seriesStore.write("jomon-2026", {
+      version: SERIES_FORMAT_VERSION,
+      seriesId: "jomon-2026",
+      profile: "qiita",
+      voice: { frozen: false, version: 0, frozenAt: "", hash: "", history: [], provenance: [] },
+      members: [{ order: 1, slug: "jomon-1", runId: "2026-06-23-jomon-1", status: "done" }],
+    });
+    const yaml = [
+      "schemaVersion: 1",
+      "seriesId: jomon-2026",
+      "terms:",
+      "  - preferred: 竪穴建物",
+      "    variants: [竪穴住居]",
+      "",
+    ].join("\n");
+    await writeFile(join(seriesStore.seriesPath("jomon-2026"), "glossary.yaml"), yaml, "utf8");
+    // meta にカスタム見出しを焼き、本文はマーカー無しのカスタム参考章に variant（竪穴住居）を置く。
+    await runStore.create("2026-06-23-jomon-1", "T", ["create"], "qiita", undefined, undefined, undefined, "参考・確認元");
+    await runStore.save(
+      "2026-06-23-jomon-1",
+      "final.md",
+      "竪穴建物が並ぶ。\n\n## 参考・確認元\n- 竪穴住居（出典側の表記）"
+    );
+    const report = await runSeriesCheck("jomon-2026", { seriesStore, runStore });
+    // 参考章扱いで除外されるので、variant の揺れは findings に出ない。
+    expect(report.members[0].findings).toHaveLength(0);
+    expect(report.totalFindings).toBe(0);
+  });
+
+  it("does not apply the series default heading when a run baked its own (no double-adoption)", async () => {
+    const seriesRoot = tmp("ltr-gs-");
+    const runsRoot = tmp("ltr-gr-");
+    const seriesStore = new SeriesStore(seriesRoot);
+    const runStore = new RunStore(runsRoot);
+    // series 既定は B。member run は明示的に A を焼いている。
+    await seriesStore.write("jomon-2026", {
+      version: SERIES_FORMAT_VERSION,
+      seriesId: "jomon-2026",
+      profile: "qiita",
+      voice: { frozen: false, version: 0, frozenAt: "", hash: "", history: [], provenance: [] },
+      members: [{ order: 1, slug: "jomon-1", runId: "2026-06-23-jomon-1", status: "done" }],
+      referencesHeading: "参考B",
+    });
+    const yaml = ["schemaVersion: 1", "seriesId: jomon-2026", "terms:", "  - preferred: 竪穴建物", "    variants: [竪穴住居]", ""].join("\n");
+    await writeFile(join(seriesStore.seriesPath("jomon-2026"), "glossary.yaml"), yaml, "utf8");
+    await runStore.create("2026-06-23-jomon-1", "T", ["create"], "qiita", undefined, undefined, undefined, "参考A");
+    // マーカーレス本文に、series 既定 B を見出しにした「通常章」を置き、中に variant を含める。
+    // run は A を採用しているので B は参考章扱いされず、variant の揺れが findings に出る。
+    await runStore.save("2026-06-23-jomon-1", "final.md", "竪穴建物が並ぶ。\n\n## 参考B\n竪穴住居の話題。");
+    const report = await runSeriesCheck("jomon-2026", { seriesStore, runStore });
+    expect(report.members[0].findings.length).toBeGreaterThanOrEqual(1); // B は除外されない
   });
 
   it("returns missingGlossary when glossary.yaml is absent (no throw)", async () => {

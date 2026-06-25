@@ -153,9 +153,14 @@ export function reconcileMembers(
 
 // --- store orchestration ---
 
-export async function seriesInit(slug: string, profile: string, seriesRoot?: string): Promise<SeriesData> {
+export async function seriesInit(
+  slug: string,
+  profile: string,
+  seriesRoot?: string,
+  referencesHeading?: string
+): Promise<SeriesData> {
   const store = new SeriesStore(seriesRoot);
-  return store.init(slug, profile);
+  return store.init(slug, profile, [], referencesHeading);
 }
 
 export async function seriesFreezeVoice(

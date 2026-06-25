@@ -207,7 +207,12 @@ export class SeriesStore {
   }
 
   // 枠を作る。series.json（未凍結）と空の voice.md を置く。既存があればエラー（--force 相当は将来）。
-  async init(slug: string, profile: string, provenance: SeriesVoiceProvenance[] = []): Promise<SeriesData> {
+  async init(
+    slug: string,
+    profile: string,
+    provenance: SeriesVoiceProvenance[] = [],
+    referencesHeading?: string
+  ): Promise<SeriesData> {
     const seriesId = validateSeriesId(slug);
     if (await this.exists(slug)) {
       throw new Error(`Series already exists: ${slug} (remove series/${slug} to recreate)`);
@@ -218,6 +223,7 @@ export class SeriesStore {
       profile,
       voice: { frozen: false, version: 0, frozenAt: "", hash: "", history: [], provenance },
       members: [],
+      ...(referencesHeading ? { referencesHeading } : {}),
     };
     await this.write(slug, data);
     // 手書き用の空 placeholder（正規化せず真に空。create ゲートは空/空白のみを未記入扱いにする）。

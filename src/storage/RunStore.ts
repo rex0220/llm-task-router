@@ -116,6 +116,9 @@ export type RunMeta = {
   reviewerModel?: ModelStamp; // 直近の editorial_review 実応答モデル
   // シリーズ（横の束）の正本（series-spec §5.1）。optional・既存 run は undefined。
   series?: RunSeriesMeta;
+  // 機械生成参考章の見出し（既定 "参考"・`## ` は含めない）。run 単位 first-write-wins。
+  // 未設定 run は "参考"（後方互換）。正本はマーカーで見出しはブロック外＝検証ゲートは見出し非依存。
+  referencesHeading?: string;
 };
 
 export class RunStore {
@@ -134,7 +137,9 @@ export class RunStore {
     profile?: string,
     // series は末尾の optional 引数（位置を並べ替えない＝既存呼び出しに非影響・series-c1-plan §9.5）。
     // 渡されたときだけ初期 meta.json に同梱し、brief の中間 writeMeta と競合させない（§10 D6）。
-    series?: RunSeriesMeta
+    series?: RunSeriesMeta,
+    // 参考章見出し（既定 "参考"）。series の後ろの optional 引数（既存呼び出しに非影響）。
+    referencesHeading?: string
   ): Promise<RunMeta> {
     const meta: RunMeta = {
       runId: this.validateRunId(runId),
@@ -147,6 +152,7 @@ export class RunStore {
       steps: Object.fromEntries(steps.map((step) => [step, { status: "pending" as const }])),
       // undefined は JSON.stringify で出力されないため、series 無しでは meta に現れない。
       ...(series ? { series } : {}),
+      ...(referencesHeading ? { referencesHeading } : {}),
     };
     await mkdir(this.runPath(meta.runId), { recursive: true });
     await this.writeMeta(meta);
