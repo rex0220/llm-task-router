@@ -1,5 +1,7 @@
 # 実装計画：シリーズ用語・表記一貫性チェック 第1段（series:check / glossary）
 
+> ステータス: **実装済み**（`feat/series-glossary-check`）。`glossaryMeta` / `SeriesStore.readGlossary`・`glossaryHash`・`writeGlossaryReport` / `seriesCheck`（純関数＋`runSeriesCheck`）/ `series:check` CLI ＋ tests（glossaryMeta・seriesCheck・bin.e2e）＋ auto-approve allowlist。
+
 対象: [docs/series-glossary-consistency-proposal.md](series-glossary-consistency-proposal.md)（v3・Codex レビュー2巡反映）の **層B 第1段**。
 
 この文書は実装計画のみ（コードは含まない）。提案書 §3 / §3.1 / §4 で確定した設計を、既存の series 実装（[SeriesStore](../src/storage/SeriesStore.ts) / [seriesMeta](../src/storage/seriesMeta.ts) / [series CLI](../src/cli/series.ts)）の上に最小スコープで載せる。

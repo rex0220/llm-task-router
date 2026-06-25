@@ -5,6 +5,7 @@
       "Bash(llm-task-router series:init:*)",
       "Bash(llm-task-router series:freeze-voice:*)",
       "Bash(llm-task-router series:status:*)",
+      "Bash(llm-task-router series:check:*)",
       "Bash(llm-task-router series:plan:*)",
       "Bash(llm-task-router --help)",
       "Bash(llm-task-router -v)",

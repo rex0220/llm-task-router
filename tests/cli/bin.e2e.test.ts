@@ -3,8 +3,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { writeFile } from "node:fs/promises";
 import { beforeAll, describe, expect, it } from "vitest";
 import { RunStore } from "../../src/storage/RunStore";
+import { SeriesStore } from "../../src/storage/SeriesStore";
+import { SERIES_FORMAT_VERSION } from "../../src/storage/seriesMeta";
 
 const root = process.cwd();
 const bin = join(root, "dist", "llm-task-router.js");
@@ -726,6 +729,90 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
       // version 表示で早期 exit していたら stderr は空でこの assertion が壊れる。
       expect(stderr).not.toBe(pkg.version);
       expect(stderr.length).toBeGreaterThan(0);
+    },
+    E2E_TIMEOUT
+  );
+
+  async function setupGlossaryWorkspace(withGlossary: boolean): Promise<string> {
+    const cwd = await mkdtemp(join(tmpdir(), "glossary-e2e-"));
+    const seriesStore = new SeriesStore(join(cwd, "series"));
+    const runStore = new RunStore(join(cwd, "runs"));
+    await seriesStore.write("jomon-2026", {
+      version: SERIES_FORMAT_VERSION,
+      seriesId: "jomon-2026",
+      profile: "qiita",
+      voice: { frozen: false, version: 0, frozenAt: "", hash: "", history: [], provenance: [] },
+      members: [
+        { order: 1, slug: "jomon-1", runId: "2026-06-23-jomon-1", status: "done" },
+        { order: 2, slug: "jomon-2", runId: "2026-06-23-jomon-2", status: "done" },
+        { order: 3, slug: "jomon-3", runId: null, status: "planned" },
+      ],
+    });
+    await runStore.save("2026-06-23-jomon-1", "final.md", "三内丸山遺跡は青森市にある。\n\n竪穴建物が並ぶ。");
+    await runStore.save("2026-06-23-jomon-2", "final.md", "三内丸山遺跡は青森県にある。\n\n竪穴住居が見つかった。");
+    if (withGlossary) {
+      const yaml = [
+        "schemaVersion: 1",
+        "seriesId: jomon-2026",
+        "terms:",
+        "  - preferred: 竪穴建物",
+        "    variants: [竪穴住居]",
+        "nouns:",
+        "  - canonical: 三内丸山遺跡",
+        "    attributes:",
+        "      location:",
+        "        preferred: 青森市",
+        "        variants: [青森県]",
+        "        contextPatterns: [三内丸山遺跡, 所在地]",
+        "",
+      ].join("\n");
+      await writeFile(join(seriesStore.seriesPath("jomon-2026"), "glossary.yaml"), yaml, "utf8");
+    }
+    return cwd;
+  }
+
+  it(
+    "series:check --json reports findings, skips, and writes a report",
+    async () => {
+      const cwd = await setupGlossaryWorkspace(true);
+      const out = execFileSync(
+        process.execPath,
+        [bin, "series:check", "--slug", "jomon-2026", "--json", "--allow-outside-workspace"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+      const report = JSON.parse(out) as {
+        missingGlossary: boolean;
+        totalFindings: number;
+        members: { order: number; findings: unknown[]; skipped?: string }[];
+      };
+      expect(report.missingGlossary).toBe(false);
+      expect(report.totalFindings).toBe(2);
+      const byOrder = Object.fromEntries(report.members.map((m) => [m.order, m]));
+      expect(byOrder[1].findings).toHaveLength(0);
+      expect(byOrder[2].findings).toHaveLength(2);
+      expect(byOrder[3].skipped).toBe("planned");
+      // レポートが series/<slug>/ に書かれる。
+      expect(existsSync(join(cwd, "series", "jomon-2026", "series-check-report.json"))).toBe(true);
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "series:check --strict exits non-zero when glossary is missing",
+    async () => {
+      const cwd = await setupGlossaryWorkspace(false);
+      try {
+        execFileSync(
+          process.execPath,
+          [bin, "series:check", "--slug", "jomon-2026", "--strict", "--allow-outside-workspace"],
+          { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+        );
+        throw new Error("expected a non-zero exit");
+      } catch (error) {
+        const e = error as { status?: number; stderr?: string; stdout?: string };
+        expect(e.status).toBe(1);
+        expect(String(e.stdout ?? "")).toContain("glossary not configured");
+      }
     },
     E2E_TIMEOUT
   );
