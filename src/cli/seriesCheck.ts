@@ -221,9 +221,47 @@ export function matchNouns(paragraphs: Paragraph[], nouns: GlossaryNoun[]): Find
   return findings;
 }
 
-// 本文 1 件分の照合（純関数・テスト容易）。
+// 機械生成の参考章（## 参考）を照合対象から外す（第1.5段・rereview-findings §3-A）。
+// 参考章のソース正式名（例「（青森県公式）」）は本文の表記ゆれではないので、本文照合から除く。
+// 参考章の台帳一致は verify-artifacts が別途担保する（series:check は本文に集中）。
+const SOURCES_BEGIN = "<!-- sources:begin -->";
+const SOURCES_END = "<!-- sources:end -->";
+// fallback 用の参考見出し（references で機械生成の `## 参考` に一本化済みだが、旧 run の別名も拾う）。
+const REF_HEADING = /^##\s+(参考|参考リンク|出典)\s*$/;
+// 同階層以上（# / ##）の見出し＝参考章の終端。### 以下は参考章の内側とみなす。
+const SAME_OR_HIGHER_HEADING = /^#{1,2}\s/;
+
+export function stripReferenceBlock(markdown: string): string {
+  // 第一優先: マーカー区間 <!-- sources:begin --> … <!-- sources:end --> を除去（最も確実）。
+  const begin = markdown.indexOf(SOURCES_BEGIN);
+  if (begin >= 0) {
+    const end = markdown.indexOf(SOURCES_END, begin);
+    if (end >= 0) {
+      return markdown.slice(0, begin) + markdown.slice(end + SOURCES_END.length);
+    }
+    // begin はあるが end が無い（閉じ忘れ）: begin 以降を落とす保険。
+    return markdown.slice(0, begin);
+  }
+  // fallback: マーカーが無い場合のみ、`## 参考` 見出しから
+  // 「次の同階層以上（# / ##）の見出し、または EOF まで」を除去する。
+  const lines = markdown.split(/\r?\n/);
+  const start = lines.findIndex((l) => REF_HEADING.test(l.trim()));
+  if (start < 0) {
+    return markdown;
+  }
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (SAME_OR_HIGHER_HEADING.test(lines[i].trim())) {
+      end = i;
+      break;
+    }
+  }
+  return [...lines.slice(0, start), ...lines.slice(end)].join("\n");
+}
+
+// 本文 1 件分の照合（純関数・テスト容易）。参考章を除いてから段落分割する。
 export function checkArticle(markdown: string, glossary: GlossaryData): Finding[] {
-  const paragraphs = splitParagraphs(markdown);
+  const paragraphs = splitParagraphs(stripReferenceBlock(markdown));
   return [...matchTerms(paragraphs, glossary.terms), ...matchNouns(paragraphs, glossary.nouns)];
 }
 
