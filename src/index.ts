@@ -81,6 +81,7 @@ import {
   seriesInit,
   seriesStatus,
 } from "./cli/series";
+import { runSeriesCheck } from "./cli/seriesCheck";
 import { validateSlug } from "./storage/meta";
 import { memberSlugFromRunId } from "./storage/seriesMeta";
 import { assertArticleWorkspace } from "./cli/workspace";
@@ -383,6 +384,66 @@ program
       }
     }
   }
+  );
+
+program
+  .command("series:check")
+  .description("Check cross-article term/notation consistency against series/<slug>/glossary.yaml. Read-only; writes a report (suppress with --no-report)")
+  .requiredOption("--slug <slug>", "Series slug")
+  .option("--no-report", "Do not write series/<slug>/series-check-report.json (print only)")
+  .option("--json", "Print the report as JSON to stdout")
+  .option("--strict", "Exit non-zero when findings exist or glossary is missing (for CI)")
+  .option("--allow-outside-workspace", "Allow running outside an initialized article workspace (off by default)")
+  .action(
+    async (options: { slug: string; report?: boolean; json?: boolean; strict?: boolean; allowOutsideWorkspace?: boolean }) => {
+      await assertArticleWorkspace({ allowOutsideWorkspace: options.allowOutsideWorkspace });
+      const report = await runSeriesCheck(options.slug);
+
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+      } else {
+        const head = report.missingGlossary
+          ? `series:check ${report.seriesId}: glossary not configured (series/${options.slug}/glossary.yaml)`
+          : `series:check ${report.seriesId}: ${report.totalFindings} findings (glossary ${report.glossary?.hash.slice(0, 12)})`;
+        console.log(head);
+        for (const m of report.members) {
+          if (m.skipped) {
+            console.log(`  [${m.order}] ${m.slug}: skipped (${m.skipped})`);
+          } else {
+            console.log(`  [${m.order}] ${m.slug}: ${m.findings.length} findings`);
+            for (const f of m.findings) {
+              const where = f.attribute ? `${f.preferred}（${f.attribute}）` : f.preferred;
+              console.log(`      - "${f.found}" → ${where}  ${f.snippet}`);
+            }
+          }
+        }
+        for (const w of report.warnings) {
+          process.stderr.write(`  ⚠ ${w}\n`);
+        }
+      }
+
+      // --report は commander の --no-report で false になる（既定 true）。
+      if (options.report !== false) {
+        const { SeriesStore } = await import("./storage/SeriesStore");
+        const path = await new SeriesStore().writeGlossaryReport(options.slug, report);
+        const wrote = `series:check: wrote ${path}`;
+        if (options.json) {
+          process.stderr.write(`${wrote}\n`);
+        } else {
+          console.log(wrote);
+        }
+      }
+
+      // --strict: 揺れがある or glossary 未設定で非ゼロ終了（CI で「未設定なのに通る」を防ぐ）。
+      if (options.strict && (report.totalFindings > 0 || report.missingGlossary)) {
+        if (report.missingGlossary) {
+          process.stderr.write(
+            `  ✗ strict: glossary not configured. Add series/${options.slug}/glossary.yaml or drop --strict.\n`
+          );
+        }
+        process.exitCode = 1;
+      }
+    }
   );
 
 program

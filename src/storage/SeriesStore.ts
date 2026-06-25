@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { parse as parseYaml } from "yaml";
 import { validateSlug } from "./meta";
 import { withTrailingNewline } from "./RunStore";
+import { validateGlossaryData, type GlossaryData } from "./glossaryMeta";
 import {
   SERIES_FORMAT_VERSION,
   validateSeriesData,
@@ -15,6 +17,8 @@ import {
 const SERIES_FILE = "series.json";
 const VOICE_FILE = "voice.md";
 const README_FILE = "README.md";
+const GLOSSARY_FILE = "glossary.yaml";
+const GLOSSARY_REPORT_FILE = "series-check-report.json";
 // シリーズ単位ロックの置き場所（series root 直下・slug 衝突回避のため .locks は RESERVED_KEYS で予約）。
 const LOCK_DIR = ".locks";
 const LOCK_TIMEOUT_MS = 5000; // 取得待ちの上限。臨界区間は ms 想定なので十分。超過は奪取せずエラー。
@@ -24,6 +28,12 @@ const LOCK_RETRY_MS = 25; // 取得失敗時のリトライ間隔。
 // hash を取るため withTrailingNewline を通す（series-c1-plan §5.3 / D2）。
 export function voiceHash(content: string): string {
   return createHash("sha256").update(withTrailingNewline(content), "utf8").digest("hex");
+}
+
+// glossary.yaml の監査キー。voiceHash と同一規則（withTrailingNewline 後 UTF-8 の sha256 hex）だが、
+// 対象は「パース前の生 YAML 文字列」＝ファイルそのもの（パース→再シリアライズの揺れを避ける・実装計画 T2）。
+export function glossaryHash(rawYaml: string): string {
+  return createHash("sha256").update(withTrailingNewline(rawYaml), "utf8").digest("hex");
 }
 
 // series/<slug>/ の read/write・voice 凍結・hash を担う。runs/ とは独立（RunStore は使わない）。
@@ -162,6 +172,38 @@ export class SeriesStore {
       throw new Error(`Unsafe voice file name: ${file}`);
     }
     return readFile(this.filePath(slug, file), "utf8");
+  }
+
+  // glossary.yaml を読む（series:check の正本・実装計画 T2）。不在は null（glossary 未設定のシリーズ）。
+  // 生 YAML で hash を取ってから parse→validate する（hash 対象はファイルそのもの＝glossaryHash）。
+  async readGlossary(slug: string): Promise<{ data: GlossaryData; hash: string } | null> {
+    const raw = await readFile(this.filePath(slug, GLOSSARY_FILE), "utf8").then(
+      (c) => c,
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") {
+          return null;
+        }
+        throw error;
+      }
+    );
+    if (raw === null) {
+      return null;
+    }
+    const hash = glossaryHash(raw);
+    let parsed: unknown;
+    try {
+      parsed = parseYaml(raw);
+    } catch {
+      throw new Error(`Corrupt ${GLOSSARY_FILE} (invalid YAML): ${this.filePath(slug, GLOSSARY_FILE)}`);
+    }
+    return { data: validateGlossaryData(parsed, GLOSSARY_FILE), hash };
+  }
+
+  // series:check のレポートを書く（series.json が正本・レポートは派生／最新を上書き・実装計画 T4）。
+  // 整形は series.json と同じ 2 スペースで固定し差分を安定させる。
+  async writeGlossaryReport(slug: string, report: unknown): Promise<string> {
+    await this.saveText(slug, GLOSSARY_REPORT_FILE, JSON.stringify(report, null, 2));
+    return this.filePath(slug, GLOSSARY_REPORT_FILE);
   }
 
   // 枠を作る。series.json（未凍結）と空の voice.md を置く。既存があればエラー（--force 相当は将来）。
