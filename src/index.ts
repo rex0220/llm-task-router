@@ -22,10 +22,13 @@ import {
   checkSources,
   applyReachabilityToRaw,
   summarize,
+  DEFAULT_RETRY,
   type Fetcher,
   type FetchOutcome,
+  type ErrorKind,
 } from "./cli/sourcesCheck";
 import { verifyArtifacts } from "./cli/verifyArtifacts";
+import { auditRuns } from "./cli/linkGate";
 import { writeClaimsRecheck } from "./cli/claimsRecheck";
 import { getRunStatus } from "./cli/status";
 import { computeArticleStats, renderArticleStats } from "./cli/stats";
@@ -1635,19 +1638,55 @@ program
     }
   });
 
+// fetch エラーを errorKind に分類する（D）。undici の error.cause.code を主に見る。
+// nxdomain（ENOTFOUND）だけが dead 昇格対象（C-1）。EAI_AGAIN は一時 DNS 障害なので timeout 扱い。
+function classifyErrorKind(error: unknown, aborted: boolean): ErrorKind {
+  if (aborted) {
+    return "timeout"; // 自前の AbortController による打ち切り＝timeout
+  }
+  const err = error as { name?: string; code?: string; cause?: { code?: string; message?: string } };
+  const code = err?.cause?.code ?? err?.code ?? "";
+  if (err?.name === "TimeoutError") {
+    return "timeout";
+  }
+  if (code === "ENOTFOUND") {
+    return "nxdomain"; // DNS 名前解決失敗＝恒久的に存在しない
+  }
+  if (code === "EAI_AGAIN" || code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT" || code === "UND_ERR_HEADERS_TIMEOUT") {
+    return "timeout"; // 一時的な DNS/接続/応答タイムアウト（再試行で結論が変わりうる）
+  }
+  if (code === "ECONNREFUSED" || code === "ECONNRESET") {
+    return "connrefused"; // TCP 接続拒否/切断（メンテ等もあり dead に上げない）
+  }
+  const tls = String(err?.cause?.code ?? err?.cause?.message ?? "");
+  if (code.startsWith("ERR_TLS") || /CERT_|SELF_SIGNED|TLS|SSL/i.test(tls)) {
+    return "tls";
+  }
+  return "other";
+}
+
 // 実 fetcher: まず HEAD（redirect follow）。HEAD が 2xx 以外（error 含む）なら GET で最終判定する。
 // HEAD だけ壊れていて GET は 200、というサイトは珍しくないので、dead(404/410) 確定は GET の結果のみに
 // 委ねる（「dead は誤爆させない」方針。dead は公開前ゲートを強く動かすため保守的に）。
+// UA はブラウザ相当にして bot ブロック由来の偽 unknown を減らす（D）。リトライは checkSources が司る。
 const realFetcher: Fetcher = async (url, { timeoutMs }): Promise<FetchOutcome> => {
-  const headers = { "user-agent": "llm-task-router/sources-check" };
+  const headers = {
+    "user-agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  };
   const attempt = async (method: "HEAD" | "GET"): Promise<FetchOutcome> => {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let aborted = false;
+    const timer = setTimeout(() => {
+      aborted = true;
+      ctrl.abort();
+    }, timeoutMs);
     try {
       const res = await fetch(url, { method, redirect: "follow", signal: ctrl.signal, headers });
       return { status: res.status };
     } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
+      return { error: error instanceof Error ? error.message : String(error), errorKind: classifyErrorKind(error, aborted) };
     } finally {
       clearTimeout(timer);
     }
@@ -1718,7 +1757,8 @@ program
       }
 
       const today = new Date().toISOString().slice(0, 10);
-      const results = await checkSources(urls, realFetcher, { concurrency, timeoutMs, today });
+      // D: 既定リトライ（timeout/接続拒否/NXDOMAIN を指数バックオフで再確認・合計上限つき）を効かせる。
+      const results = await checkSources(urls, realFetcher, { concurrency, timeoutMs, today, retry: DEFAULT_RETRY });
       const summary = summarize(results);
 
       // dead/unknown の URL を列挙（要対応）。
@@ -1761,6 +1801,87 @@ program
       if (!options.dryRun) {
         console.log(
           `next: dead は verified claim から到達可能な代替へ張り替え → article:claims-normalize で sources.json に反映`
+        );
+      }
+    }
+  );
+
+program
+  .command("article:links-audit")
+  .description(
+    "Audit cited reference links across a series or all published runs from the ledger (no network). Lists stale/unverified/dead/unknown cited sources to re-check."
+  )
+  .option("--series <slug>", "Audit all runs belonging to this series")
+  .option("--all-published", "Audit the latest published run of every article in export/index.json")
+  .option("--freshness-days <n>", "Days after which a checkedAt is considered stale", "90")
+  .option("--json", "Print the audit as JSON")
+  .action(
+    async (options: { series?: string; allPublished?: boolean; freshnessDays: string; json?: boolean }) => {
+      if (!options.series && !options.allPublished) {
+        throw new Error("--series <slug> か --all-published のどちらかが必須です。");
+      }
+      if (options.series && options.allPublished) {
+        throw new Error("--series と --all-published は同時に指定できません。");
+      }
+      const freshnessDays = Number(options.freshnessDays);
+      if (!Number.isInteger(freshnessDays) || freshnessDays < 0) {
+        throw new Error(`Invalid --freshness-days: ${options.freshnessDays}（0 以上の整数）`);
+      }
+      const store = new RunStore();
+
+      // 対象 runId を集める（series は束の全 run、all-published は台帳の最新 run）。
+      let runIds: string[];
+      if (options.series) {
+        const { runs, warnings } = await store.listSeriesRuns(options.series);
+        for (const w of warnings) {
+          process.stderr.write(`Warning: ${w}\n`);
+        }
+        runIds = runs.map((m) => m.runId);
+      } else {
+        const data = await new ExportIndex().read();
+        runIds = Object.values(data.articles).map((e) => e.runId);
+      }
+
+      // 各 run の claims.json/sources.json を読む（無ければ null＝skipped）。
+      const runsData = await Promise.all(
+        runIds.map(async (runId) => {
+          const claimsText = await store.read(runId, CLAIMS_FILE).catch(() => null);
+          const sourcesText = await store.read(runId, SOURCES_FILE).catch(() => null);
+          return {
+            runId,
+            claims: claimsText === null ? null : ClaimsSchema.parse(JSON.parse(claimsText)),
+            sources: sourcesText === null ? null : SourcesSchema.parse(JSON.parse(sourcesText)),
+          };
+        })
+      );
+
+      const today = new Date().toISOString().slice(0, 10);
+      const audits = auditRuns(runsData, { today, freshnessDays });
+
+      if (options.json) {
+        console.log(JSON.stringify({ today, freshnessDays, audits }, null, 2));
+        return;
+      }
+      let flaggedRuns = 0;
+      for (const a of audits) {
+        if (a.result === null) {
+          console.log(`- ${a.runId}: skip（${a.skippedReason}）`);
+          continue;
+        }
+        const items = [...a.result.fails, ...a.result.warnings];
+        if (items.length === 0) {
+          console.log(`- ${a.runId}: OK（cited ${a.result.checkedCited} 件・要対応なし）`);
+          continue;
+        }
+        flaggedRuns += 1;
+        console.log(`- ${a.runId}: 要対応 ${items.length} 件（cited ${a.result.checkedCited} 件）`);
+        for (const f of items) {
+          console.log(`    ${f.category}: ${f.id} ${f.url}`);
+        }
+      }
+      if (flaggedRuns > 0) {
+        console.log(
+          `next: 要対応の run は article:sources-check --run <id> --only-cited で HTTP 再確認し、dead/unknown を解決`
         );
       }
     }

@@ -333,6 +333,55 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
   );
 
   it(
+    "article:links-audit --series lists stale/unverified cited links from the ledger (no network)",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "la-"));
+      const runId = "2026-06-21-la-a";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita", {
+        seriesId: "demo",
+        voiceVersion: 1,
+        voiceHash: "x",
+      });
+      await store.save(
+        runId,
+        "claims.json",
+        JSON.stringify([
+          { id: "C001-aaaaaaaa", claim: "x", location: { heading: "## h", anchorHash: "aaaaaaaa" }, type: "general", status: "verified", lifecycle: "present", sourceIds: ["S001"], severity: "minor", note: "" },
+        ])
+      );
+      // checkedAt 無し＝未検証として要対応に出る。
+      await store.save(
+        runId,
+        "sources.json",
+        JSON.stringify([
+          { id: "S001", url: "https://example.com/s1", title: "S1", retrievedAt: "2026-06-20", sourceType: "primary", summary: "", cited: true, reachable: "ok" },
+        ])
+      );
+
+      const out = execFileSync(
+        process.execPath,
+        [bin, "article:links-audit", "--series", "demo", "--json"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+      const parsed = JSON.parse(out) as { audits: { runId: string; result: { fails: { category: string }[] } }[] };
+      const a = parsed.audits.find((x) => x.runId === runId)!;
+      expect(a.result.fails.map((f) => f.category)).toContain("unverified");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:links-audit requires exactly one of --series / --all-published",
+    () => {
+      const neither = runFail(["article:links-audit"]);
+      expect(neither.status).toBe(1);
+      expect(neither.stderr).toContain("--series");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
     "article:references --help shows --run and --stdout",
     () => {
       const out = run(["article:references", "--help"]);

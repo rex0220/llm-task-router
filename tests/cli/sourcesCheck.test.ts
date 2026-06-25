@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   classifyReachable,
   checkSources,
+  checkOneWithRetry,
+  isRetryable,
   applyReachabilityToRaw,
   summarize,
   type Fetcher,
+  type FetchOutcome,
+  type RetryOptions,
 } from "../../src/cli/sourcesCheck";
 import { urlHash } from "../../src/cli/claimsNormalize";
 import type { RawSource } from "../../src/schemas/ClaimsSchema";
@@ -27,9 +31,76 @@ describe("classifyReachable", () => {
       expect(classifyReachable({ status: s })).toBe("unknown");
     }
   });
-  it("maps network errors/timeouts to unknown", () => {
-    expect(classifyReachable({ error: "ECONNREFUSED" })).toBe("unknown");
-    expect(classifyReachable({ error: "aborted" })).toBe("unknown");
+  it("maps connrefused/timeout/tls/other errors to unknown (no false dead)", () => {
+    expect(classifyReachable({ error: "refused", errorKind: "connrefused" })).toBe("unknown");
+    expect(classifyReachable({ error: "aborted", errorKind: "timeout" })).toBe("unknown");
+    expect(classifyReachable({ error: "cert", errorKind: "tls" })).toBe("unknown");
+    expect(classifyReachable({ error: "?", errorKind: "other" })).toBe("unknown");
+  });
+  it("promotes NXDOMAIN to dead (C-1)", () => {
+    expect(classifyReachable({ error: "ENOTFOUND", errorKind: "nxdomain" })).toBe("dead");
+  });
+});
+
+describe("isRetryable", () => {
+  it("retries timeout/connrefused/nxdomain, not status results or tls/other", () => {
+    expect(isRetryable({ error: "x", errorKind: "timeout" })).toBe(true);
+    expect(isRetryable({ error: "x", errorKind: "connrefused" })).toBe(true);
+    expect(isRetryable({ error: "x", errorKind: "nxdomain" })).toBe(true);
+    expect(isRetryable({ error: "x", errorKind: "tls" })).toBe(false);
+    expect(isRetryable({ error: "x", errorKind: "other" })).toBe(false);
+    expect(isRetryable({ status: 200 })).toBe(false);
+    expect(isRetryable({ status: 404 })).toBe(false);
+  });
+});
+
+describe("checkOneWithRetry", () => {
+  // 決定的にするため sleep/now は注入（実時間に依存しない）。
+  function fakeClock(): { now: () => number; sleep: (ms: number) => Promise<void> } {
+    let t = 0;
+    return { now: () => t, sleep: async (ms) => { t += ms; } };
+  }
+  const base = (over: Partial<RetryOptions>): RetryOptions => ({
+    timeoutMs: 1000,
+    maxRetries: 2,
+    backoffMs: [500, 1500],
+    maxTotalMs: 15_000,
+    ...fakeClock(),
+    ...over,
+  });
+
+  it("does not retry a confirmed status result (404)", async () => {
+    let calls = 0;
+    const fetcher: Fetcher = async () => { calls++; return { status: 404 }; };
+    const r = await checkOneWithRetry("https://x", fetcher, base({}));
+    expect(calls).toBe(1);
+    expect(classifyReachable(r)).toBe("dead");
+  });
+
+  it("retries a transient timeout then succeeds", async () => {
+    const seq: FetchOutcome[] = [{ error: "t", errorKind: "timeout" }, { status: 200 }];
+    let i = 0;
+    const fetcher: Fetcher = async () => seq[Math.min(i++, seq.length - 1)];
+    const r = await checkOneWithRetry("https://x", fetcher, base({}));
+    expect(i).toBe(2); // 1 retry
+    expect(classifyReachable(r)).toBe("ok");
+  });
+
+  it("re-confirms NXDOMAIN across retries before classifying dead", async () => {
+    let calls = 0;
+    const fetcher: Fetcher = async () => { calls++; return { error: "ENOTFOUND", errorKind: "nxdomain" }; };
+    const r = await checkOneWithRetry("https://x", fetcher, base({ maxRetries: 2 }));
+    expect(calls).toBe(3); // 初回 + 2 retries
+    expect(classifyReachable(r)).toBe("dead");
+  });
+
+  it("stops retrying once the total wait budget would be exceeded", async () => {
+    let calls = 0;
+    const fetcher: Fetcher = async () => { calls++; return { error: "t", errorKind: "timeout" }; };
+    // backoff 500 で2回目以降 maxTotalMs=600 を超えるので、初回+1回で打ち切り。
+    const r = await checkOneWithRetry("https://x", fetcher, base({ maxRetries: 5, backoffMs: [500, 1500], maxTotalMs: 600 }));
+    expect(calls).toBe(2);
+    expect(classifyReachable(r)).toBe("unknown");
   });
 });
 

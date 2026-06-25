@@ -122,3 +122,32 @@ export function linkGate(claims: Claim[], sources: Source[], opts: LinkGateOptio
 
   return { pass: fails.length === 0, fails, warnings, checkedCited };
 }
+
+// --- 提案E: 複数 run（シリーズ／公開済み）の一括再確認（記録ベース・通信しない） ---
+// checkedAt が古い（鮮度切れ）cited source を「再確認推奨」として一覧にするための集約。
+// 実際の HTTP 再確認は各 run に sources-check --only-cited を回す（このコマンドは台帳から拾うだけ）。
+
+export type RunLinkAudit = {
+  runId: string;
+  result: LinkGateResult | null; // claims/sources が無い run は null（skipped）
+  skippedReason?: string;
+};
+
+// 各 run を bulk モードで判定する（stale は warning・dead/unknown/unverified は fails に出る）。
+// claims/sources が読めなかった run は null（理由つき）でスキップする。
+export function auditRuns(
+  runs: { runId: string; claims: Claim[] | null; sources: Source[] | null }[],
+  opts: { today: string; freshnessDays?: number }
+): RunLinkAudit[] {
+  return runs.map(({ runId, claims, sources }) => {
+    if (claims === null || sources === null) {
+      return { runId, result: null, skippedReason: "claims.json/sources.json が無い（normalize 未実行）" };
+    }
+    const result = linkGate(claims, sources, {
+      today: opts.today,
+      freshnessDays: opts.freshnessDays,
+      mode: "bulk",
+    });
+    return { runId, result };
+  });
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { daysBetween, linkGate } from "../../src/cli/linkGate";
+import { auditRuns, daysBetween, linkGate } from "../../src/cli/linkGate";
 import type { Claim, Source } from "../../src/schemas/ClaimsSchema";
 
 function claim(over: Partial<Claim> & Pick<Claim, "id" | "status" | "lifecycle" | "sourceIds">): Claim {
@@ -116,5 +116,28 @@ describe("linkGate", () => {
     const r = linkGate(claims, sources, { today: TODAY });
     expect(r.checkedCited).toBe(0);
     expect(r.pass).toBe(true);
+  });
+});
+
+describe("auditRuns (提案E・bulk・記録ベース)", () => {
+  it("flags stale as bulk warning, skips runs without ledgers, and reports clean runs", () => {
+    const claims = [citedClaim(["S001"])];
+    const fresh = [source("S001", { reachable: "ok", checkedAt: "2026-06-20" })];
+    const stale = [source("S001", { reachable: "ok", checkedAt: "2026-01-01" })];
+    const audits = auditRuns(
+      [
+        { runId: "r-fresh", claims, sources: fresh },
+        { runId: "r-stale", claims, sources: stale },
+        { runId: "r-missing", claims: null, sources: null },
+      ],
+      { today: TODAY }
+    );
+    expect(audits[0].result?.pass).toBe(true);
+    expect(audits[0].result?.warnings).toEqual([]);
+    // bulk モードでは stale は FAIL ではなく warning（一括点検は止めない）。
+    expect(audits[1].result?.pass).toBe(true);
+    expect(audits[1].result?.warnings.map((f) => f.category)).toEqual(["stale"]);
+    expect(audits[2].result).toBeNull();
+    expect(audits[2].skippedReason).toMatch(/normalize/);
   });
 });
