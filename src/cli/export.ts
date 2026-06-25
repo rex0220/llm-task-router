@@ -4,8 +4,53 @@ import type { RunMeta, RunStore } from "../storage/RunStore";
 import { assertSafeOutputPath } from "./inputs";
 import { detectBrokenStrongEmphasis, STRONG_EMPHASIS_RULE_VERSION, strongEmphasisWarnings } from "../utils/text";
 import { sha256 } from "../utils/hash";
+import { ClaimsSchema, SourcesSchema } from "../schemas/ClaimsSchema";
+import { CLAIMS_FILE, SOURCES_FILE } from "./claimsNormalize";
+import { DEFAULT_FRESHNESS_DAYS, linkGate, type LinkGateResult } from "./linkGate";
 
 export const MARKDOWN_LINT_STAMP_FILE = "markdown-lint-stamp.json";
+export const LINK_GATE_STAMP_FILE = "link-gate-stamp.json";
+
+// 公開前到達性ゲート（提案B）が「旧 run の未検証を warning に降格」する作成日カットオフ。
+// これより前に作られた run は、ゲート導入前なので checkedAt 欠落を FAIL でなく warning にする
+// （§6 #8。これ以降に作る run は sources-check を回す前提なので未検証は FAIL）。
+export const LINK_GATE_SINCE = "2026-06-25";
+
+// claims.json / sources.json を読んで公開前ゲートを評価し、結果をスタンプに残す（通信しない）。
+// claims/sources がまだ無い run（normalize 未実行）はゲート対象外として skipped を返す（後方互換）。
+export async function evaluateLinkGate(
+  store: RunStore,
+  runId: string,
+  today: string,
+  legacyGrace: boolean
+): Promise<LinkGateResult | { skipped: true; reason: string }> {
+  const claimsRaw = await store.read(runId, CLAIMS_FILE).catch(() => null);
+  const sourcesRaw = await store.read(runId, SOURCES_FILE).catch(() => null);
+  if (claimsRaw === null || sourcesRaw === null) {
+    return { skipped: true, reason: `${CLAIMS_FILE}/${SOURCES_FILE} が無い（claims-normalize 未実行）` };
+  }
+  const claims = ClaimsSchema.parse(JSON.parse(claimsRaw));
+  const sources = SourcesSchema.parse(JSON.parse(sourcesRaw));
+  const result = linkGate(claims, sources, { today, mode: "export", legacyGrace });
+  await store.save(
+    runId,
+    LINK_GATE_STAMP_FILE,
+    JSON.stringify(
+      {
+        verifiedAt: today,
+        freshnessDays: DEFAULT_FRESHNESS_DAYS,
+        legacyGrace,
+        result: result.pass ? "pass" : "fail",
+        checkedCited: result.checkedCited,
+        fails: result.fails,
+        warnings: result.warnings,
+      },
+      null,
+      2
+    )
+  );
+  return result;
+}
 
 // 指定 run の final.md を、明示された出力先へエクスポートする。
 // - final.md のみを対象（他の中間成果物は出さない）。
@@ -25,10 +70,39 @@ export async function exportFinalArticle(
     frontMatter?: boolean;
     allowBrokenMarkdown?: boolean;
     allowBrokenMarkdownReason?: string;
+    allowUnverifiedLinks?: boolean;
+    allowUnverifiedLinksReason?: string;
   } = {}
 ): Promise<string> {
   let content = await store.read(runId, "final.md"); // run / final.md が無ければここで失敗
   assertSafeOutputPath(outPath);
+
+  // 公開前到達性ゲート（提案B）。cited な source の到達性メタを記録から判定する（通信しない）。
+  // FAIL は --allow-unverified-links --note でのみ override（理由はスタンプに残す）。
+  const today = new Date().toISOString().slice(0, 10);
+  const meta0 = await store.readMeta(runId).catch(() => null);
+  const legacyGrace = meta0?.createdAt ? meta0.createdAt.slice(0, 10) < LINK_GATE_SINCE : false;
+  const gate = await evaluateLinkGate(store, runId, today, legacyGrace);
+  if ("skipped" in gate) {
+    process.stderr.write(`Warning: 公開前到達性ゲートをスキップしました（${gate.reason}）。\n`);
+  } else {
+    for (const w of gate.warnings) {
+      process.stderr.write(`Warning: 参考リンク到達性: ${w.message}\n`);
+    }
+    if (!gate.pass && !options.allowUnverifiedLinks) {
+      const detail = gate.fails.map((f) => `  ${f.message}`).join("\n");
+      throw new Error(
+        `cited な参考リンクに未検証/未解決/死リンクが ${gate.fails.length} 件あります（export 中止）。` +
+          `\n  article:sources-check --run ${runId} --only-cited で確認し、dead は代替へ張り替え・unknown は解決してください。` +
+          `\n  公開を強行する場合は --allow-unverified-links --note "<理由>" を付けてください。\n${detail}`
+      );
+    }
+    if (!gate.pass && options.allowUnverifiedLinks) {
+      process.stderr.write(
+        `Warning: 未検証/未解決の参考リンク ${gate.fails.length} 件を override で許可しました（理由: ${options.allowUnverifiedLinksReason ?? ""}）。\n`
+      );
+    }
+  }
 
   // front-matter 付与前の raw 本文を lint し、結果をスタンプに残す（許可判定は直前 lint が主）。
   const issues = detectBrokenStrongEmphasis(content);

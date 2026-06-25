@@ -557,6 +557,10 @@ program
     "--allow-broken-markdown",
     "Bypass the strong-emphasis (** rendering) gate and export anyway. Requires --note to record the reason. Separate from --force (which only allows overwriting the output file)."
   )
+  .option(
+    "--allow-unverified-links",
+    "Bypass the pre-publication reachability gate (unverified/unresolved/dead cited links) and export anyway. Requires --note to record the reason. Separate from --force."
+  )
   .action(
     async (options: {
       run: string;
@@ -566,10 +570,14 @@ program
       frontMatter?: boolean;
       note?: string;
       allowBrokenMarkdown?: boolean;
+      allowUnverifiedLinks?: boolean;
     }) => {
       // 理由必須は CLI 層で検証する（関数層 exportFinalArticle は --note を見られない）。
       if (options.allowBrokenMarkdown && !options.note) {
         throw new Error("--allow-broken-markdown には理由が必須です。--note \"<理由>\" を付けてください。");
+      }
+      if (options.allowUnverifiedLinks && !options.note) {
+        throw new Error("--allow-unverified-links には理由が必須です。--note \"<理由>\" を付けてください。");
       }
       if (!options.out && !options.outDir) {
         throw new Error("--out か --out-dir のどちらかが必須です。");
@@ -587,6 +595,8 @@ program
         frontMatter: options.frontMatter,
         allowBrokenMarkdown: options.allowBrokenMarkdown,
         allowBrokenMarkdownReason: options.note,
+        allowUnverifiedLinks: options.allowUnverifiedLinks,
+        allowUnverifiedLinksReason: options.note,
       });
       // --note は「条件付き GO の条件解決・ユーザー承認」を台帳に残すための監査欄（任意）。
       await recordProgress(store, options.run, { step: "export", status: "done", output: dest, note: options.note });
