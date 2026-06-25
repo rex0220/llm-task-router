@@ -28,7 +28,8 @@ export type Finding = {
 const STRUCTURAL_START = /^(#{1,6}\s|[-*+]\s|\d+[.)]\s|\|)/;
 
 // 本文を段落に分割する。空行・コードフェンス・構造行の開始で区切り、フェンス内は code:true。
-// 構造行の継続（インデントされた続き行）は直前の段落に連ねる。
+// 構造行（見出し/リスト項目/表の行）は各行を単独段落にし、続く非構造行は別段落になる
+// （細かく割れるが、別項目の混在による誤検出を防ぐ＝false-negative 許容）。
 export function splitParagraphs(markdown: string): Paragraph[] {
   const paragraphs: Paragraph[] = [];
   const lines = markdown.split(/\r?\n/);
