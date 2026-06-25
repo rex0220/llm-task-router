@@ -163,6 +163,24 @@ describe("stripReferenceBlock", () => {
     const md = "本文。\n\n三内丸山遺跡は青森県にある。";
     expect(stripReferenceBlock(md)).toBe(md);
   });
+
+  it("ignores markers and 参考 headings inside a code fence (fence-aware)", () => {
+    // コード例の中の sources:begin / ## 参考 は参考章のトリガにしない。後続本文は残す。
+    const md = [
+      "本文。",
+      "",
+      "```",
+      "## 参考",
+      "<!-- sources:begin -->",
+      "<!-- sources:end -->",
+      "```",
+      "",
+      "三内丸山遺跡は青森県にある。",
+    ].join("\n");
+    const out = stripReferenceBlock(md);
+    expect(out).toBe(md); // 何も削らない
+    expect(out).toContain("三内丸山遺跡は青森県にある。");
+  });
 });
 
 describe("checkArticle", () => {
@@ -178,6 +196,24 @@ describe("checkArticle", () => {
     // 本文に揺れは無く、参考章のソース名にだけ青森県がある＝検出ゼロ（第1.5段の効果）。
     const md = "三内丸山遺跡は青森市にある。\n\n## 参考\n\n<!-- sources:begin -->\n- [S6] 三内丸山遺跡とは（青森県公式）\n<!-- sources:end -->";
     expect(checkArticle(md, glossary())).toHaveLength(0);
+  });
+
+  it("keeps body findings when a fenced code example contains a fake reference block (no false negative)", () => {
+    // コードフェンス内に sources マーカーがあっても、後続本文の揺れは消えない。
+    const md = [
+      "竪穴住居が見つかった。",
+      "",
+      "```yaml",
+      "# 例: 参考ブロック",
+      "<!-- sources:begin -->",
+      "<!-- sources:end -->",
+      "```",
+      "",
+      "三内丸山遺跡は青森県にある。",
+    ].join("\n");
+    const findings = checkArticle(md, glossary());
+    expect(findings.filter((f) => f.kind === "term")).toHaveLength(1);
+    expect(findings.filter((f) => f.kind === "noun")).toHaveLength(1);
   });
 });
 
