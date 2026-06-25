@@ -380,6 +380,8 @@ llm-task-router article:references --run 2026-06-18-ai-ir   # --stdout で生成
 - **公開前の到達性チェック（標準工程・死リンク機械ふるい）**: `llm-task-router article:sources-check --run <id> --only-cited` で cited な source の URL を HTTP 確認し `reachable`/`checkedAt` を stamp する。`--dry-run`（非書き込み）/`--json` も可。判定は保守的で **dead は 404/410・NXDOMAIN 等**（5xx・401/403・通信エラーは unknown）。dead は到達可能な代替へ張り替え（factchecker）→ `article:claims-normalize` → `article:references` を回し直す。unknown は公開前に解決する。
   - **`reachable` の確定 `"ok"` は機械確認だけが書く**: factchecker（LLM）は `"ok"` を書かず、未到達確認の source は `reachable` を省略する（`"dead"` のヒントのみ・`"unknown"` は機械専用）。「読んだ＝生きている」と断定しないため。
   - **外部通信なので明示承認を取る**: `sources-check` は allowlist に入れず、実行はユーザー承認を得てから（自走で通信しない）。`verify-artifacts` は通信しないので、到達確認はこのコマンドに閉じる。
+  - **export は公開前ゲートで止まる**: cited な参考リンクに未検証（`checkedAt` 無し）・未解決（unknown）・死リンク（dead）・鮮度切れ（`checkedAt` が 90 日超）があると `article:export` が FAIL する。`sources-check` で解決してから export する（強行は `--allow-unverified-links --note "<理由>"`。旧 run は未検証が warning に降格）。
+  - **公開済み・シリーズの一括点検（link rot）**: `llm-task-router article:links-audit --series <slug>`（または `--all-published`）で、台帳から鮮度切れ・未検証・dead/unknown の cited を run 横断で一覧できる（記録ベース・通信なし）。要対応の run に `sources-check --run <id> --only-cited` を回して HTTP 再確認する。
   - 設計・再発防止の全体像は [課題-対策-実装計画-死リンク再発防止.md](課題-対策-実装計画-死リンク再発防止.md)。
 
 2. 編集長が `runs/<id>/publication-check.md` にゲート実施チェックリストを書き出したら、公開前ゲートを機械チェックする：
