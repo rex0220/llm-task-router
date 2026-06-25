@@ -488,6 +488,76 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
   );
 
   it(
+    "article:export link gate blocks unverified cited links; --allow-unverified-links needs --note",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "export-linkgate-e2e-"));
+      const runId = "2026-06-25-export-linkgate";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      await store.save(runId, "final.md", "# タイトル\n本文。\n");
+      // cited な S001 が checkedAt 無し＝未検証 → ゲートで FAIL。
+      await store.save(
+        runId,
+        "claims.json",
+        JSON.stringify([
+          { id: "C001-aaaaaaaa", claim: "x", location: { heading: "## h", anchorHash: "aaaaaaaa" }, type: "general", status: "verified", lifecycle: "present", sourceIds: ["S001"], severity: "minor", note: "" },
+        ])
+      );
+      await store.save(
+        runId,
+        "sources.json",
+        JSON.stringify([
+          { id: "S001", url: "https://example.com/s1", title: "S1", retrievedAt: "2026-06-20", sourceType: "primary", summary: "", cited: true, reachable: "ok" },
+        ])
+      );
+      const out = join(cwd, "out.md");
+
+      // temp cwd で実行し非ゼロ終了を厳密に検証する（runFail は cwd=root 固定で temp run を見ないため使わない）。
+      const expectExportFail = (args: string[]): void => {
+        let failed = false;
+        let status: number | undefined;
+        try {
+          execFileSync(process.execPath, [bin, "article:export", "--run", runId, "--out", out, ...args], {
+            cwd,
+            encoding: "utf8",
+            timeout: E2E_TIMEOUT,
+          });
+        } catch (error) {
+          failed = true;
+          status = (error as { status?: number }).status;
+        }
+        expect(failed).toBe(true);
+        expect(status).not.toBe(0);
+      };
+
+      // 既定: 未検証 cited で失敗（書き出さない）。
+      expectExportFail([]);
+      expect(existsSync(out)).toBe(false);
+
+      // --allow-unverified-links 単独（--note なし）は CLI 層で検証エラー。
+      expectExportFail(["--allow-unverified-links"]);
+      expect(existsSync(out)).toBe(false);
+
+      // --allow-unverified-links + --note なら書き出せ、note が export イベントに載る。
+      execFileSync(
+        process.execPath,
+        [bin, "article:export", "--run", runId, "--out", out, "--allow-unverified-links", "--note", "offline 承認"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+      expect(existsSync(out)).toBe(true);
+      const stamp = JSON.parse(readFileSync(join(cwd, "runs", runId, "link-gate-stamp.json"), "utf8")) as {
+        result: string;
+        allowedUnverified?: boolean;
+        reason?: string;
+      };
+      expect(stamp.result).toBe("fail");
+      expect(stamp.allowedUnverified).toBe(true);
+      expect(stamp.reason).toBe("offline 承認");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
     "article:record-publication --help shows --article-version (not the reserved --version)",
     () => {
       const out = run(["article:record-publication", "--help"]);

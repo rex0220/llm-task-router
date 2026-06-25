@@ -22,7 +22,9 @@ export async function evaluateLinkGate(
   store: RunStore,
   runId: string,
   today: string,
-  legacyGrace: boolean
+  legacyGrace: boolean,
+  // override（--allow-unverified-links）の事実と理由をスタンプにも残し、台帳を自己完結させる（監査）。
+  override: { allowed: boolean; reason?: string } = { allowed: false }
 ): Promise<LinkGateResult | { skipped: true; reason: string }> {
   const claimsRaw = await store.read(runId, CLAIMS_FILE).catch(() => null);
   const sourcesRaw = await store.read(runId, SOURCES_FILE).catch(() => null);
@@ -32,6 +34,8 @@ export async function evaluateLinkGate(
   const claims = ClaimsSchema.parse(JSON.parse(claimsRaw));
   const sources = SourcesSchema.parse(JSON.parse(sourcesRaw));
   const result = linkGate(claims, sources, { today, mode: "export", legacyGrace });
+  // override が実際に効いた（FAIL を握りつぶした）ときだけ bypass を記録する。
+  const bypassed = override.allowed && !result.pass;
   await store.save(
     runId,
     LINK_GATE_STAMP_FILE,
@@ -44,6 +48,7 @@ export async function evaluateLinkGate(
         checkedCited: result.checkedCited,
         fails: result.fails,
         warnings: result.warnings,
+        ...(bypassed ? { allowedUnverified: true, reason: override.reason ?? "" } : {}),
       },
       null,
       2
@@ -82,7 +87,10 @@ export async function exportFinalArticle(
   const today = new Date().toISOString().slice(0, 10);
   const meta0 = await store.readMeta(runId).catch(() => null);
   const legacyGrace = meta0?.createdAt ? meta0.createdAt.slice(0, 10) < LINK_GATE_SINCE : false;
-  const gate = await evaluateLinkGate(store, runId, today, legacyGrace);
+  const gate = await evaluateLinkGate(store, runId, today, legacyGrace, {
+    allowed: Boolean(options.allowUnverifiedLinks),
+    reason: options.allowUnverifiedLinksReason,
+  });
   if ("skipped" in gate) {
     process.stderr.write(`Warning: 公開前到達性ゲートをスキップしました（${gate.reason}）。\n`);
   } else {

@@ -14,8 +14,10 @@ export type Reachable = "ok" | "dead" | "unknown";
 export type ErrorKind = "nxdomain" | "timeout" | "connrefused" | "tls" | "other";
 
 // fetcher は redirect を follow した「最終応答」の status を返す。到達不能/タイムアウト等は error+errorKind。
+// deadlineMs（絶対 epoch ms・任意）は「この URL に費やせる総ウォールクロック期限」。実 fetcher は HEAD/GET の
+// 各タイムアウトを min(timeoutMs, deadline - now) に切り詰め、合計待機がこの期限を大きく超えないようにする。
 export type FetchOutcome = { status: number } | { error: string; errorKind: ErrorKind };
-export type Fetcher = (url: string, opts: { timeoutMs: number }) => Promise<FetchOutcome>;
+export type Fetcher = (url: string, opts: { timeoutMs: number; deadlineMs?: number }) => Promise<FetchOutcome>;
 
 export type CheckResult = { reachable: Reachable; checkedAt: string };
 
@@ -62,20 +64,26 @@ export const DEFAULT_RETRY: Omit<RetryOptions, "timeoutMs" | "sleep" | "now"> = 
   maxTotalMs: 15_000,
 };
 
-// 1 URL を到達確認し、リトライ対象なら指数バックオフで再試行する（合計上限で打ち切り）。
+// 1 URL を到達確認し、リトライ対象なら指数バックオフで再試行する（合計ウォールクロック期限で打ち切り）。
 // fetcher 自身が HEAD→GET フォールバック等を内包する想定。確定結果（status）は即返す。
+// maxTotalMs は「待機」だけでなく fetch 実行も含む総期限とし、各 fetch の timeoutMs を残り時間に切り詰める
+// ことで、遅延 URL でも合計が maxTotalMs を大きく超えないようにする（レビュー指摘・実ウォールクロック上限）。
 export async function checkOneWithRetry(url: string, fetcher: Fetcher, opts: RetryOptions): Promise<FetchOutcome> {
-  const start = opts.now();
-  let outcome = await fetcher(url, { timeoutMs: opts.timeoutMs });
+  const deadline = opts.now() + opts.maxTotalMs;
+  const effectiveTimeout = (): number => Math.max(0, Math.min(opts.timeoutMs, deadline - opts.now()));
+  let outcome = await fetcher(url, { timeoutMs: effectiveTimeout(), deadlineMs: deadline });
   let attempt = 0;
   while (isRetryable(outcome) && attempt < opts.maxRetries) {
     const backoff = opts.backoffMs[Math.min(attempt, opts.backoffMs.length - 1)] ?? 0;
-    // 合計待機上限を超えるなら、これ以上の再試行はせず最後の outcome で確定する。
-    if (opts.now() - start + backoff > opts.maxTotalMs) {
+    // backoff 後に少しでも fetch する余地が無い（期限到達）なら、これ以上は再試行せず確定する。
+    if (opts.now() + backoff >= deadline) {
       break;
     }
     await opts.sleep(backoff);
-    outcome = await fetcher(url, { timeoutMs: opts.timeoutMs });
+    if (opts.now() >= deadline) {
+      break;
+    }
+    outcome = await fetcher(url, { timeoutMs: effectiveTimeout(), deadlineMs: deadline });
     attempt += 1;
   }
   return outcome;

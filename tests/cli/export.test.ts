@@ -299,7 +299,10 @@ describe("exportFinalArticle", () => {
       });
       expect(await readFile(out, "utf8")).toContain("body");
       const stamp = JSON.parse(await store.read(runId, LINK_GATE_STAMP_FILE));
-      expect(stamp.result).toBe("fail"); // 客観結果は fail のまま（override は export イベントの --note に残す）
+      expect(stamp.result).toBe("fail"); // 客観結果は fail のまま
+      // bypass の事実・理由がスタンプに残る（監査が台帳だけで完結する）。
+      expect(stamp.allowedUnverified).toBe(true);
+      expect(stamp.reason).toBe("offline");
     });
 
     it("passes when cited sources are http-verified and fresh", async () => {

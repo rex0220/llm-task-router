@@ -102,6 +102,43 @@ describe("checkOneWithRetry", () => {
     expect(calls).toBe(2);
     expect(classifyReachable(r)).toBe("unknown");
   });
+
+  it("shares one deadline and shrinks per-call timeout as time is consumed (sleep)", async () => {
+    let t = 0;
+    const now = (): number => t;
+    const sleep = async (ms: number): Promise<void> => { t += ms; };
+    const seenTimeouts: number[] = [];
+    const seenDeadlines: (number | undefined)[] = [];
+    const fetcher: Fetcher = async (_url, opts) => {
+      seenTimeouts.push(opts.timeoutMs);
+      seenDeadlines.push(opts.deadlineMs);
+      return { error: "t", errorKind: "timeout" };
+    };
+    await checkOneWithRetry("https://x", fetcher, {
+      timeoutMs: 1000, maxRetries: 3, backoffMs: [200], maxTotalMs: 600, sleep, now,
+    });
+    // deadline=600。各 fetch の timeout は残り時間に切り詰められる（1000 ではなく 600→400→200）。
+    expect(seenTimeouts).toEqual([600, 400, 200]);
+    expect(seenDeadlines.every((d) => d === 600)).toBe(true);
+  });
+
+  it("counts fetch execution time (not just backoff) toward the deadline", async () => {
+    let t = 0;
+    const now = (): number => t;
+    const sleep = async (ms: number): Promise<void> => { t += ms; };
+    let calls = 0;
+    // 各 fetch が timeout ぶん「かかった」ことにして時計を進める（遅延 URL の模擬）。
+    const fetcher: Fetcher = async (_url, opts) => {
+      calls++;
+      t += opts.timeoutMs;
+      return { error: "t", errorKind: "timeout" };
+    };
+    await checkOneWithRetry("https://x", fetcher, {
+      timeoutMs: 1000, maxRetries: 5, backoffMs: [200], maxTotalMs: 600, sleep, now,
+    });
+    // 初回 fetch（timeout=600）で期限を使い切るので再試行しない＝合計が timeout×回数に膨らまない。
+    expect(calls).toBe(1);
+  });
 });
 
 describe("checkSources", () => {

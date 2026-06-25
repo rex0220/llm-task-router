@@ -69,6 +69,12 @@ export function linkGate(claims: Claim[], sources: Source[], opts: LinkGateOptio
   const warnings: LinkGateFinding[] = [];
   let checkedCited = 0;
 
+  // 旧 run の救済は「旧 run かつ cited 全体に checkedAt が一つも無い（一度も sources-check を回していない）」
+  // ときだけ有効にする（§6 #8）。一部でも checkedAt が付いた旧 run は通常どおり未検証を FAIL にする
+  // （部分的に確認した後に残りの未検証が素通りするのを防ぐ）。
+  const anyCheckedAt = [...citedIds].some((id) => Boolean(byId.get(id)?.checkedAt));
+  const effectiveGrace = Boolean(opts.legacyGrace) && !anyCheckedAt;
+
   // id 昇順で安定した出力にする（SNNN は文字列ソートで番号順）。
   for (const id of [...citedIds].sort((a, b) => a.localeCompare(b))) {
     const s = byId.get(id);
@@ -92,7 +98,7 @@ export function linkGate(claims: Claim[], sources: Source[], opts: LinkGateOptio
         message: `未検証（checkedAt 無し＝sources-check 未実行）: ${id} ${s.url}`,
       };
       // 旧 run の救済: 未検証だけは warning に降格（dead/unknown/stale は降格しない）。
-      (opts.legacyGrace ? warnings : fails).push(f);
+      (effectiveGrace ? warnings : fails).push(f);
       continue;
     }
 
@@ -106,7 +112,19 @@ export function linkGate(claims: Claim[], sources: Source[], opts: LinkGateOptio
       continue;
     }
 
-    // ここに来るのは checkedAt あり かつ reachable が ok（または未記録だが checkedAt あり）。鮮度を見る。
+    // checkedAt はあるが reachable が "ok" でない（未記録など。台帳の部分手編集・移行データ）＝信頼しない。
+    // 仕様は「http 検証済みかつ ok」のみ信頼なので、ok 以外は未検証として止める（gate が最後の受け皿）。
+    if (s.reachable !== "ok") {
+      fails.push({
+        id,
+        url: s.url,
+        category: "unverified",
+        message: `checkedAt はあるが reachable が "ok" でありません（再確認してください）: ${id} ${s.url}`,
+      });
+      continue;
+    }
+
+    // ここに来るのは checkedAt あり かつ reachable === "ok"。鮮度を見る。
     const age = daysBetween(opts.today, s.checkedAt);
     if (!Number.isNaN(age) && age > freshnessDays) {
       const f: LinkGateFinding = {

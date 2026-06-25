@@ -1669,19 +1669,27 @@ function classifyErrorKind(error: unknown, aborted: boolean): ErrorKind {
 // HEAD だけ壊れていて GET は 200、というサイトは珍しくないので、dead(404/410) 確定は GET の結果のみに
 // 委ねる（「dead は誤爆させない」方針。dead は公開前ゲートを強く動かすため保守的に）。
 // UA はブラウザ相当にして bot ブロック由来の偽 unknown を減らす（D）。リトライは checkSources が司る。
-const realFetcher: Fetcher = async (url, { timeoutMs }): Promise<FetchOutcome> => {
+const realFetcher: Fetcher = async (url, { timeoutMs, deadlineMs }): Promise<FetchOutcome> => {
   const headers = {
     "user-agent":
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
     accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
   };
+  // HEAD と GET でウォールクロック期限（deadlineMs）を共有し、各リクエストの timeout を残り時間に切り詰める。
+  // これで「HEAD timeout + GET timeout」で期限を倍超えするのを防ぐ（合計上限を実際に効かせる）。
+  const requestTimeout = (): number =>
+    deadlineMs === undefined ? timeoutMs : Math.max(0, Math.min(timeoutMs, deadlineMs - Date.now()));
   const attempt = async (method: "HEAD" | "GET"): Promise<FetchOutcome> => {
+    const t = requestTimeout();
+    if (t <= 0) {
+      return { error: "deadline exceeded", errorKind: "timeout" }; // 期限切れ＝これ以上待たない
+    }
     const ctrl = new AbortController();
     let aborted = false;
     const timer = setTimeout(() => {
       aborted = true;
       ctrl.abort();
-    }, timeoutMs);
+    }, t);
     try {
       const res = await fetch(url, { method, redirect: "follow", signal: ctrl.signal, headers });
       return { status: res.status };

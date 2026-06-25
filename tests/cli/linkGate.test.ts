@@ -87,16 +87,44 @@ describe("linkGate", () => {
     expect(asBulk.warnings.map((f) => f.category)).toEqual(["stale"]);
   });
 
-  it("legacyGrace downgrades unverified to a warning (but not dead/unknown)", () => {
+  it("legacyGrace downgrades unverified to a warning (but not dead) when NO cited has checkedAt", () => {
     const claims = [claim({ id: "C001-aaaaaaaa", status: "verified", lifecycle: "present", sourceIds: ["S001", "S002"] })];
     const sources = [
       source("S001"), // checkedAt 無し → 旧 run では warning
-      source("S002", { reachable: "dead", checkedAt: "2026-06-20" }), // dead は降格しない
+      source("S002", { reachable: "dead" }), // dead は降格しない（checkedAt 無しでも dead）
     ];
     const r = linkGate(claims, sources, { today: TODAY, legacyGrace: true });
     expect(r.pass).toBe(false); // dead が残るので FAIL
     expect(r.fails.map((f) => f.category)).toEqual(["dead"]);
     expect(r.warnings.map((f) => f.category)).toEqual(["unverified"]);
+  });
+
+  it("does NOT grant grace once the run has any checkedAt (partial legacy → remaining unverified still FAIL)", () => {
+    const claims = [claim({ id: "C001-aaaaaaaa", status: "verified", lifecycle: "present", sourceIds: ["S001", "S002"] })];
+    const sources = [
+      source("S001", { reachable: "ok", checkedAt: "2026-06-20" }), // 一部だけ確認済み
+      source("S002"), // 残りは未検証
+    ];
+    const r = linkGate(claims, sources, { today: TODAY, legacyGrace: true });
+    expect(r.pass).toBe(false);
+    expect(r.fails.map((f) => f.category)).toEqual(["unverified"]); // grace 無効＝FAIL（warning に逃がさない）
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("legacyGrace does NOT downgrade unknown (still FAIL)", () => {
+    const claims = [citedClaim(["S001"])];
+    const sources = [source("S001", { reachable: "unknown", checkedAt: "2026-06-20" })];
+    const r = linkGate(claims, sources, { today: TODAY, legacyGrace: true });
+    expect(r.pass).toBe(false);
+    expect(r.fails.map((f) => f.category)).toEqual(["unknown"]);
+  });
+
+  it("FAILs when checkedAt is present but reachable is not 'ok' (partial hand-edit/migration)", () => {
+    const claims = [citedClaim(["S001"])];
+    const sources = [source("S001", { checkedAt: "2026-06-20" })]; // reachable 未記録なのに checkedAt あり
+    const r = linkGate(claims, sources, { today: TODAY });
+    expect(r.pass).toBe(false);
+    expect(r.fails.map((f) => f.category)).toEqual(["unverified"]);
   });
 
   it("ignores sources not cited by present&verified claims", () => {
