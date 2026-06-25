@@ -196,3 +196,13 @@ nouns:
 | フィクスチャに `series.json`＋run ディレクトリ構成が必要 | P2 | T6 を tmp ディレクトリ木（`series/<slug>/series.json`＋`runs/<runId>/{meta.json,final.md}`＋planned 枠）に具体化 |
 | `attributes` キーを ASCII に固定する方針を明記 | 軽微 | T1 で `[a-z][a-z0-9_]*` のみ許可・非 ASCII（`所在地`）は第1段拒否（許すなら別ガード＝将来） |
 | `writeGlossaryReport` の整形 JSON を固定 | 軽微 | T4 で `JSON.stringify(report, null, 2)`（2スペース・series.json と同整形）に固定 |
+
+## 付録: Codex レビュー反映ログ（2026-06-25・実装 第2巡）
+
+実装差分のレビュー（テスト未実行）。3点を反映。
+
+| 指摘 | 重大度 | 対応 |
+|---|---|---|
+| `splitParagraphs` が見出し・リスト項目・表セルを別段落にしておらず（空行＋フェンスのみ）、空行なし箇条書き/表で別項目の canonical/context と variant が同一段落になり G2 系 false positive | P2 | `STRUCTURAL_START`（`#`/`-*+`/`数.`/`\|`）の行で段落を切る実装に変更。**構造行は各行を単独段落**にし継続行は次段落へ（細かく割れるが別項目混在を防ぐ）。テストに list/heading/table 分割と「別箇条書きの canonical/variant は非検出」を追加 |
+| `firstUseAlias` の不正値（typo の `fals` 等）が silently `per-article` に倒れる | P2 | `validateFirstUseAlias` を新設し、**欠落のみ既定 per-article・present かつ未知は throw**（`Corrupt glossary.yaml`）。テストに不正値 throw を追加 |
+| 複数 variants の term で「初回」が本文順でなく variants 配列順になる | P3 | `matchTerms` を「全 variant の出現を集め (段落, 位置) でソート→先頭だけ初出例外」に変更。テストに variants 配列順と本文順が食い違うケースを追加 |

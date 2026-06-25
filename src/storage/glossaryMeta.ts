@@ -20,8 +20,16 @@ export type FirstUseAlias = "per-article" | "series-wide" | false;
 
 const FIRST_USE_ALIASES: readonly (string | boolean)[] = ["per-article", "series-wide", false];
 
-export function parseFirstUseAlias(value: unknown): FirstUseAlias {
-  return FIRST_USE_ALIASES.includes(value as string | boolean) ? (value as FirstUseAlias) : "per-article";
+// firstUseAlias を検証する。欠落は既定 per-article。値が在れば既知の3値のみ許し、
+// 未知（typo の "fals" 等）は throw する（glossary は新規設定ファイルなので silent 既定化しない）。
+export function validateFirstUseAlias(value: unknown, path: string, source: string): FirstUseAlias {
+  if (value === undefined) {
+    return "per-article";
+  }
+  if (!FIRST_USE_ALIASES.includes(value as string | boolean)) {
+    throw new Error(`Corrupt ${source} (${path} must be one of per-article | series-wide | false).`);
+  }
+  return value as FirstUseAlias;
 }
 
 export type GlossaryTerm = {
@@ -100,7 +108,7 @@ function validateTerms(value: unknown, source: string): GlossaryTerm[] {
     const term = t as Record<string, unknown>;
     const preferred = requireNonEmptyString(term.preferred, `terms[${i}].preferred`, source);
     const variants = validateStringArray(term.variants, `terms[${i}].variants`, source);
-    const firstUseAlias = parseFirstUseAlias(term.firstUseAlias);
+    const firstUseAlias = validateFirstUseAlias(term.firstUseAlias, `terms[${i}].firstUseAlias`, source);
     const note = typeof term.note === "string" && term.note.trim() !== "" ? term.note.trim() : undefined;
     return note === undefined
       ? { preferred, variants, firstUseAlias }

@@ -52,6 +52,12 @@ describe("splitParagraphs", () => {
     const paras = splitParagraphs(md);
     expect(paras[paras.length - 1].code).toBe(true);
   });
+
+  it("splits adjacent list items / headings / table rows into separate paragraphs (no blank line)", () => {
+    const md = "## 見出し\n本文行。\n- 項目A\n- 項目B\n| 行1 |\n| 行2 |";
+    const texts = splitParagraphs(md).map((p) => p.text);
+    expect(texts).toEqual(["## 見出し", "本文行。", "- 項目A", "- 項目B", "| 行1 |", "| 行2 |"]);
+  });
 });
 
 describe("matchTerms", () => {
@@ -84,6 +90,15 @@ describe("matchTerms", () => {
     const paras: Paragraph[] = [{ text: "竪穴住居", code: true }];
     expect(matchTerms(paras, glossary().terms)).toHaveLength(0);
   });
+
+  it("applies the first-use exemption in text order, not variants-array order", () => {
+    // variants は [B, A] の順だが、本文では A が先に括弧併記で出る。初回例外は本文順の A に当たる。
+    const terms = [{ preferred: "正", variants: ["B語", "A語"], firstUseAlias: "per-article" as const }];
+    // 同一段落内: 「正（A語）… B語」。先頭の A語 は括弧内併記で許容、後続の B語 は検出。
+    const findings = matchTerms(textParas("正（A語）と説明し、のちに B語 も出る。"), terms);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].found).toBe("B語");
+  });
 });
 
 describe("matchNouns", () => {
@@ -101,6 +116,12 @@ describe("matchNouns", () => {
   it("matches via contextPatterns even without the canonical", () => {
     const findings = matchNouns(textParas("その所在地は青森県だ。"), glossary().nouns);
     expect(findings).toHaveLength(1);
+  });
+
+  it("does not merge separate list items into one paragraph (no false positive across bullets)", () => {
+    // canonical と variant が別々の箇条書き項目にある場合は検出しない（段落分割の効果）。
+    const md = "- 三内丸山遺跡の説明。\n- 青森県についての別項目。";
+    expect(checkArticle(md, glossary())).toHaveLength(0);
   });
 });
 

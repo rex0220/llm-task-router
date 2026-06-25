@@ -46,6 +46,15 @@ describe("validateGlossaryData", () => {
     ).toBe("series-wide");
   });
 
+  it("throws on a present-but-unknown firstUseAlias (typo guard)", () => {
+    expect(() =>
+      validateGlossaryData(validInput({ terms: [{ preferred: "x", variants: [], firstUseAlias: "fals" }] }))
+    ).toThrow(/per-article \| series-wide \| false/);
+    expect(() =>
+      validateGlossaryData(validInput({ terms: [{ preferred: "x", variants: [], firstUseAlias: true }] }))
+    ).toThrow(/per-article \| series-wide \| false/);
+  });
+
   it("ignores unknown numbers/format keys (forward compat)", () => {
     const data = validateGlossaryData(validInput({ numbers: [{ key: "縄文中期" }], format: { qa: "heading-question" } }));
     expect(data.terms).toHaveLength(1);

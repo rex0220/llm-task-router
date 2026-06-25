@@ -22,10 +22,13 @@ export type Finding = {
   snippet: string;
 };
 
-// 本文を段落に分割する。空行区切り＋コードフェンスをブロックとして分離し、フェンス内は code:true。
-// 見出し・リスト項目・表セルは「行」単位では別段落に近いが、最小実装では空行区切りの塊で扱う
-// （context OR は「同一段落内」で判定するため、塊が大きいと誤検出が増えるが false positive 最小の
-//  範囲で塊単位に倒す。厳密な見出し/リスト分割は将来）。
+// 構造行（見出し・箇条書き項目・順序付き項目・表の行）の先頭判定。
+// これらは空行が無くても「別段落」として切る（context OR を同一段落内で見るため、別項目の
+// canonical/context と variant が同じ塊に混ざって誤検出するのを防ぐ・実装計画 §3.1）。
+const STRUCTURAL_START = /^(#{1,6}\s|[-*+]\s|\d+[.)]\s|\|)/;
+
+// 本文を段落に分割する。空行・コードフェンス・構造行の開始で区切り、フェンス内は code:true。
+// 構造行の継続（インデントされた続き行）は直前の段落に連ねる。
 export function splitParagraphs(markdown: string): Paragraph[] {
   const paragraphs: Paragraph[] = [];
   const lines = markdown.split(/\r?\n/);
@@ -72,6 +75,11 @@ export function splitParagraphs(markdown: string): Paragraph[] {
     }
     if (line === "") {
       flushText();
+    } else if (STRUCTURAL_START.test(line)) {
+      // 見出し/リスト項目/表の行は、空行が無くても各行を単独の段落として切る
+      // （継続行は次の段落になる＝細かく割れるが、別項目の混在による誤検出を防ぐ）。
+      flushText();
+      paragraphs.push({ text: line, code: false });
     } else {
       buf.push(raw);
     }
@@ -107,8 +115,9 @@ function snippetAround(text: string, index: number, term: string): string {
 export function matchTerms(paragraphs: Paragraph[], terms: GlossaryTerm[]): Finding[] {
   const findings: Finding[] = [];
   for (const term of terms) {
-    // 記事内の variant 出現が初回かどうか（per-article 例外は初回1回だけ許容）。
-    let firstOccurrenceConsumed = false;
+    // まず全 variant の出現を集め、本文上の順（段落→段落内位置）に並べる。
+    // これで「初回」は variants 配列の並びではなく実際の出現順で決まる（P3）。
+    const occurrences: { pIdx: number; at: number; variant: string }[] = [];
     for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
       const para = paragraphs[pIdx];
       if (para.code) {
@@ -121,23 +130,31 @@ export function matchTerms(paragraphs: Paragraph[], terms: GlossaryTerm[]): Find
           if (at < 0) {
             break;
           }
+          occurrences.push({ pIdx, at, variant });
           from = at + variant.length;
-          const isFirst = !firstOccurrenceConsumed;
-          firstOccurrenceConsumed = true;
-          if (isFirst && term.firstUseAlias !== false && isAllowedAlias(para.text, at, variant, term.preferred)) {
-            // 正しい初出併記＝検出しない（per-article / series-wide とも第1段は初回1回許容）。
-            continue;
-          }
-          findings.push({
-            kind: "term",
-            preferred: term.preferred,
-            found: variant,
-            paragraphIndex: pIdx,
-            snippet: snippetAround(para.text, at, variant),
-          });
         }
       }
     }
+    occurrences.sort((a, b) => (a.pIdx !== b.pIdx ? a.pIdx - b.pIdx : a.at - b.at));
+
+    occurrences.forEach((occ, i) => {
+      const para = paragraphs[occ.pIdx];
+      // per-article 例外は記事内の初回1回だけ許容（series-wide も第1段は per-article 扱い）。
+      if (
+        i === 0 &&
+        term.firstUseAlias !== false &&
+        isAllowedAlias(para.text, occ.at, occ.variant, term.preferred)
+      ) {
+        return; // 正しい初出併記＝検出しない
+      }
+      findings.push({
+        kind: "term",
+        preferred: term.preferred,
+        found: occ.variant,
+        paragraphIndex: occ.pIdx,
+        snippet: snippetAround(para.text, occ.at, occ.variant),
+      });
+    });
   }
   return findings;
 }
