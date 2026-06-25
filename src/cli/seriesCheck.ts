@@ -2,6 +2,8 @@ import { RunStore } from "../storage/RunStore";
 import { SeriesStore } from "../storage/SeriesStore";
 import type { GlossaryData, GlossaryNoun, GlossaryTerm } from "../storage/glossaryMeta";
 import type { SeriesMember } from "../storage/seriesMeta";
+// 参考章マーカーは references.ts と共有（定数 drift を避ける）。
+import { SOURCES_BEGIN, SOURCES_END } from "./references";
 
 // シリーズ横断の用語・表記一貫性チェック（series:check・実装計画 T3/T4）。
 // - 各メンバーの final.md を glossary.yaml に照合し、揺れ（非推奨表記）を列挙する。
@@ -221,9 +223,78 @@ export function matchNouns(paragraphs: Paragraph[], nouns: GlossaryNoun[]): Find
   return findings;
 }
 
-// 本文 1 件分の照合（純関数・テスト容易）。
+// 機械生成の参考章（## 参考）を照合対象から外す（第1.5段・rereview-findings §3-A）。
+// 参考章のソース正式名（例「（青森県公式）」）は本文の表記ゆれではないので、本文照合から除く。
+// 参考章の台帳一致は verify-artifacts が別途担保する（series:check は本文に集中）。
+// fallback 用の参考見出し（references で機械生成の `## 参考` に一本化済みだが、旧 run の別名も拾う）。
+const REF_HEADING = /^##\s+(参考|参考リンク|出典)\s*$/;
+// 同階層以上（# / ##）の見出し＝参考章の終端。### 以下は参考章の内側とみなす。
+const SAME_OR_HIGHER_HEADING = /^#{1,2}\s/;
+const FENCE = /^(```+|~~~+)/;
+
+// 各行が「コードフェンスの外か」を返す（fence 区切り行自体は false＝トリガにしない）。
+// コード例の中の <!-- sources:begin --> や `## 参考` を参考章と誤認して後続本文を削らないため。
+function fenceOutsideFlags(lines: string[]): boolean[] {
+  const outside: boolean[] = new Array(lines.length).fill(true);
+  let inFence = false;
+  let marker = "";
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    const fence = FENCE.exec(t);
+    if (fence) {
+      outside[i] = false; // 区切り行は判定対象外
+      if (!inFence) {
+        inFence = true;
+        marker = fence[1][0];
+      } else if (t.startsWith(marker)) {
+        inFence = false;
+        marker = "";
+      }
+      continue;
+    }
+    outside[i] = !inFence;
+  }
+  return outside;
+}
+
+export function stripReferenceBlock(markdown: string): string {
+  const lines = markdown.split(/\r?\n/);
+  const outside = fenceOutsideFlags(lines);
+
+  // 第一優先: マーカー区間 <!-- sources:begin --> … <!-- sources:end --> を除去（fence 外のみ）。
+  const begin = lines.findIndex((l, i) => outside[i] && l.includes(SOURCES_BEGIN));
+  if (begin >= 0) {
+    let end = -1;
+    for (let i = begin + 1; i < lines.length; i++) {
+      if (outside[i] && lines[i].includes(SOURCES_END)) {
+        end = i;
+        break;
+      }
+    }
+    // end 無し（閉じ忘れ）は begin 以降を EOF まで落とす保険。
+    const cut = end >= 0 ? end + 1 : lines.length;
+    return [...lines.slice(0, begin), ...lines.slice(cut)].join("\n");
+  }
+
+  // fallback: マーカーが無い場合のみ、`## 参考` 見出し（fence 外）から
+  // 「次の同階層以上（# / ##・fence 外）の見出し、または EOF まで」を除去する。
+  const start = lines.findIndex((l, i) => outside[i] && REF_HEADING.test(l.trim()));
+  if (start < 0) {
+    return markdown;
+  }
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (outside[i] && SAME_OR_HIGHER_HEADING.test(lines[i].trim())) {
+      end = i;
+      break;
+    }
+  }
+  return [...lines.slice(0, start), ...lines.slice(end)].join("\n");
+}
+
+// 本文 1 件分の照合（純関数・テスト容易）。参考章を除いてから段落分割する。
 export function checkArticle(markdown: string, glossary: GlossaryData): Finding[] {
-  const paragraphs = splitParagraphs(markdown);
+  const paragraphs = splitParagraphs(stripReferenceBlock(markdown));
   return [...matchTerms(paragraphs, glossary.terms), ...matchNouns(paragraphs, glossary.nouns)];
 }
 
