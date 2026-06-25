@@ -140,11 +140,18 @@ export async function prepareReferencesBlock(
   const claims = await readLedger(store, runId, CLAIMS_FILE, ClaimsSchema);
   const sources = await readLedger(store, runId, SOURCES_FILE, SourcesSchema);
   const selected = selectReferenceSources(claims, sources);
-  // cited だが reachable:"dead" で参考章から防御的に除外したものを warn として返す（CLI が stderr 出力）。
+  // cited な source の到達性 warn を返す（CLI が stderr 出力）。
+  // - dead: 参考章から防御的に除外したもの。
+  // - unknown: 参考章には載せる（除外しない＝refine ループを壊さない）が、公開直前に解決すべき注意。
+  //   除外・停止の判断は公開前ゲート（linkGate / article:export）に集約する（C-2）。
   const citedIds = collectCitedSourceIds(claims);
   const warnings = sources
-    .filter((s) => citedIds.has(s.id) && s.reachable === "dead")
-    .map((s) => `参考章から除外（reachable=dead）: ${s.id} ${s.url}`);
+    .filter((s) => citedIds.has(s.id) && (s.reachable === "dead" || s.reachable === "unknown"))
+    .map((s) =>
+      s.reachable === "dead"
+        ? `参考章から除外（reachable=dead）: ${s.id} ${s.url}`
+        : `参考章に掲載（reachable=unknown・公開前に解決を）: ${s.id} ${s.url}`
+    );
   if (selected.length === 0) {
     throw new Error(
       "参考に載せる検証済み source がありません（present かつ verified の claim が参照する source なし／到達可能なもの無し）。factcheck / article:claims-normalize を確認してください。"

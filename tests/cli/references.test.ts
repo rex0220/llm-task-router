@@ -204,6 +204,38 @@ describe("prepareReferencesBlock (I/O)", () => {
     await expect(prepareReferencesBlock(store, "r")).rejects.toThrow(/検証済み source/);
   });
 
+  it("keeps cited reachable:unknown in the block but warns (C-2: 除外せず可視化)", async () => {
+    const store = await newStore();
+    await store.create("r", "T", ["create"]);
+    const claims = JSON.stringify([
+      { id: "C001-aaaaaaaa", claim: "a", location: { heading: "## h", anchorHash: "aaaaaaaa" }, type: "general", status: "verified", lifecycle: "present", sourceIds: ["S001"], severity: "minor", note: "" },
+    ]);
+    const sources = JSON.stringify([
+      { id: "S001", url: "https://unknown.example/x", title: "Unknown", retrievedAt: "2026-06-21", sourceType: "primary", summary: "", reachable: "unknown", cited: true },
+    ]);
+    await store.save("r", "claims.json", claims);
+    await store.save("r", "sources.json", sources);
+    const { block, count, warnings } = await prepareReferencesBlock(store, "r");
+    expect(count).toBe(1); // unknown は参考章に残す（block に出る）
+    expect(block).toContain("https://unknown.example/x");
+    expect(warnings.join("\n")).toMatch(/reachable=unknown.*S001/);
+  });
+
+  it("does NOT throw when every cited source is unknown (no zero-throw via unknown — gate に集約)", async () => {
+    const store = await newStore();
+    await store.create("r", "T", ["create"]);
+    const claims = JSON.stringify([
+      { id: "C001-aaaaaaaa", claim: "a", location: { heading: "## h", anchorHash: "aaaaaaaa" }, type: "general", status: "verified", lifecycle: "present", sourceIds: ["S001"], severity: "minor", note: "" },
+    ]);
+    const sources = JSON.stringify([
+      { id: "S001", url: "https://unknown.example/x", title: "Unknown", retrievedAt: "2026-06-21", sourceType: "primary", summary: "", reachable: "unknown", cited: true },
+    ]);
+    await store.save("r", "claims.json", claims);
+    await store.save("r", "sources.json", sources);
+    const { count } = await prepareReferencesBlock(store, "r");
+    expect(count).toBe(1); // throw せず参考章を生成（除外・停止は linkGate の責務）
+  });
+
   it("excludes reachable:dead from the block and returns a warning", async () => {
     const store = await newStore();
     await store.create("r", "T", ["create"]);

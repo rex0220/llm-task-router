@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { exportFinalArticle, MARKDOWN_LINT_STAMP_FILE } from "../../src/cli/export";
+import { exportFinalArticle, LINK_GATE_STAMP_FILE, MARKDOWN_LINT_STAMP_FILE } from "../../src/cli/export";
 import { RunStore } from "../../src/storage/RunStore";
 
 describe("exportFinalArticle", () => {
@@ -232,6 +232,109 @@ describe("exportFinalArticle", () => {
       const stamp = JSON.parse(await store.read(runId, MARKDOWN_LINT_STAMP_FILE));
       expect(stamp.result).toBe("pass");
       expect(stamp.finalHash).toMatch(/^sha256:/);
+    });
+  });
+
+  // 提案B: 公開前の到達性ゲート（cited な参考リンクの未検証/未解決/死リンクで export を止める）。
+  describe("link reachability export gate", () => {
+    const CITED_CLAIMS = JSON.stringify([
+      {
+        id: "C001-aaaaaaaa",
+        claim: "x",
+        location: { heading: "## h", anchorHash: "aaaaaaaa" },
+        type: "general",
+        status: "verified",
+        lifecycle: "present",
+        sourceIds: ["S001"],
+        severity: "minor",
+        note: "",
+      },
+    ]);
+    function sourceJson(over: Record<string, unknown>): string {
+      return JSON.stringify([
+        {
+          id: "S001",
+          url: "https://example.com/s1",
+          title: "S1",
+          retrievedAt: "2026-06-01",
+          sourceType: "primary",
+          summary: "",
+          cited: true,
+          ...over,
+        },
+      ]);
+    }
+    // createdAt をゲート導入後に固定して legacyGrace を無効化する（未検証を FAIL にする）。
+    async function newRun(createdAt = "2026-06-25T00:00:00.000Z"): Promise<{ store: RunStore; runId: string }> {
+      const store = new RunStore(await mkdtemp(join(tmpdir(), "exp-runs-")));
+      const runId = "run-linkgate";
+      await store.create(runId, "topic", ["final"]);
+      await store.save(runId, "final.md", "# T\n\nbody\n");
+      const m = await store.readMeta(runId);
+      m.createdAt = createdAt;
+      await store.writeMeta(m);
+      return { store, runId };
+    }
+
+    it("blocks export when a cited source is unverified (no checkedAt) and writes a fail stamp", async () => {
+      const { store, runId } = await newRun();
+      await store.save(runId, "claims.json", CITED_CLAIMS);
+      await store.save(runId, "sources.json", sourceJson({ reachable: "ok" })); // checkedAt 無し
+      const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+      await expect(exportFinalArticle(store, runId, out)).rejects.toThrow(/未検証\/未解決\/死リンク/);
+      await expect(readFile(out, "utf8")).rejects.toThrow(); // 書き出していない
+      const stamp = JSON.parse(await store.read(runId, LINK_GATE_STAMP_FILE));
+      expect(stamp.result).toBe("fail");
+      expect(stamp.fails[0].category).toBe("unverified");
+    });
+
+    it("exports with allowUnverifiedLinks override", async () => {
+      const { store, runId } = await newRun();
+      await store.save(runId, "claims.json", CITED_CLAIMS);
+      await store.save(runId, "sources.json", sourceJson({ reachable: "ok" }));
+      const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+      await exportFinalArticle(store, runId, out, {
+        allowUnverifiedLinks: true,
+        allowUnverifiedLinksReason: "offline",
+      });
+      expect(await readFile(out, "utf8")).toContain("body");
+      const stamp = JSON.parse(await store.read(runId, LINK_GATE_STAMP_FILE));
+      expect(stamp.result).toBe("fail"); // 客観結果は fail のまま
+      // bypass の事実・理由がスタンプに残る（監査が台帳だけで完結する）。
+      expect(stamp.allowedUnverified).toBe(true);
+      expect(stamp.reason).toBe("offline");
+    });
+
+    it("passes when cited sources are http-verified and fresh", async () => {
+      const { store, runId } = await newRun();
+      await store.save(runId, "claims.json", CITED_CLAIMS);
+      await store.save(runId, "sources.json", sourceJson({ reachable: "ok", checkedAt: "2026-06-20" }));
+      const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+      await exportFinalArticle(store, runId, out);
+      expect(await readFile(out, "utf8")).toContain("body");
+      const stamp = JSON.parse(await store.read(runId, LINK_GATE_STAMP_FILE));
+      expect(stamp.result).toBe("pass");
+    });
+
+    it("downgrades unverified to a warning for a legacy run (created before the gate)", async () => {
+      const { store, runId } = await newRun("2026-06-01T00:00:00.000Z"); // ゲート導入前
+      await store.save(runId, "claims.json", CITED_CLAIMS);
+      await store.save(runId, "sources.json", sourceJson({ reachable: "ok" })); // checkedAt 無し
+      const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+      await exportFinalArticle(store, runId, out); // FAIL せず通る
+      expect(await readFile(out, "utf8")).toContain("body");
+      const stamp = JSON.parse(await store.read(runId, LINK_GATE_STAMP_FILE));
+      expect(stamp.result).toBe("pass");
+      expect(stamp.warnings[0].category).toBe("unverified");
+      expect(stamp.legacyGrace).toBe(true);
+    });
+
+    it("skips the gate when claims/sources are absent (backward compat)", async () => {
+      const { store, runId } = await newRun();
+      const out = join(await mkdtemp(join(tmpdir(), "exp-out-")), "a.md");
+      await exportFinalArticle(store, runId, out);
+      expect(await readFile(out, "utf8")).toContain("body");
+      await expect(store.read(runId, LINK_GATE_STAMP_FILE)).rejects.toThrow(); // スタンプ無し
     });
   });
 });
