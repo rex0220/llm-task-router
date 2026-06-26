@@ -73,6 +73,7 @@ import {
   composeSeriesStyle,
   markMemberDone,
   markMemberUpdating,
+  shouldRevertSeriesAfterRevise,
   readSeriesForCreate,
   recordMember,
   resolveSeriesProfile,
@@ -555,10 +556,12 @@ program
     console.log(`runId: ${result.runId}`);
     console.log(`final: runs/${result.runId}/final.md (previous: runs/${result.runId}/final.bak.md)`);
     // done 済みのシリーズメンバーを改稿したら updating に戻す（§6.1・writing 中は退行させない）。README も更新。
+    // 空振り revise（LLM が同一テキストを返し final.md が変わらない）では巻き戻さない＝done を据え置く。
     const meta = await store.readMeta(result.runId).catch(() => null);
-    if (meta?.series?.seriesId) {
-      await markSeriesMember(meta.series.seriesId, result.runId, "updating");
-      await refreshSeriesReadme(meta.series.seriesId);
+    const seriesId = meta?.series?.seriesId;
+    if (seriesId && shouldRevertSeriesAfterRevise(seriesId, result.changed)) {
+      await markSeriesMember(seriesId, result.runId, "updating");
+      await refreshSeriesReadme(seriesId);
     }
   });
 

@@ -155,6 +155,38 @@ describe("Qiita workflow", () => {
     expect(meta.steps.final.status).toBe("done");
   });
 
+  it("reports changed=true when revise returns different text", async () => {
+    const provider = new WorkflowProvider();
+    const runId = `test-revise-changed-${Date.now()}`;
+    const router = new ModelRouter({ mock: provider }, workflowConfig(), new RunLogger(tmpLogPath()));
+    const store = new RunStore(tmpRunRoot());
+
+    await createQiitaArticle(router, store, "topic", { runId });
+
+    provider.nextRewrite = "# Final v2\n\n変更あり\n";
+    const result = await reviseQiitaFinal(router, store, runId, "本文を変える");
+
+    expect(result.changed).toBe(true);
+  });
+
+  it("reports changed=false on a no-op revise (LLM returns the same text)", async () => {
+    const provider = new WorkflowProvider();
+    const runId = `test-revise-noop-${Date.now()}`;
+    const router = new ModelRouter({ mock: provider }, workflowConfig(), new RunLogger(tmpLogPath()));
+    const store = new RunStore(tmpRunRoot());
+
+    await createQiitaArticle(router, store, "topic", { runId });
+    const current = await store.read(runId, "final.md");
+
+    // 空振り: revise が現状の final.md と同一テキストを返す。
+    provider.nextRewrite = current;
+    const result = await reviseQiitaFinal(router, store, runId, "実質変えない");
+
+    expect(result.changed).toBe(false);
+    // 念のため: final.md は不変。
+    expect(await store.read(runId, "final.md")).toBe(current);
+  });
+
   it("strips a whole-document code fence from revised final.md", async () => {
     const provider = new WorkflowProvider();
     const runId = `test-fence-${Date.now()}`;

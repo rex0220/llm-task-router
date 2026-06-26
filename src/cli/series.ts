@@ -446,6 +446,15 @@ export async function markMemberUpdating(slug: string, runId: string, seriesRoot
   await setMemberStatusByRunId(slug, runId, "updating", seriesRoot, (current) => current === "done");
 }
 
+// revise 後にシリーズメンバーを done から updating に戻すべきかの判定（CLI: article:revise）。
+// 戻すのは「シリーズに属する run（seriesId あり）」かつ「本文が実際に変わった（changed=true）」ときだけ。
+//   - 空振り revise（changed=false＝LLM が同一テキストを返し final.md 不変）では戻さず done を据え置く。
+//   - 非シリーズ run（seriesId なし）はそもそも対象外。
+// 誤って常に false を返すと、本当の改稿後も done のままになり README が古い状態で固定される。
+export function shouldRevertSeriesAfterRevise(seriesId: string | undefined, changed: boolean): boolean {
+  return Boolean(seriesId) && changed;
+}
+
 // status 集計（読取）。run を集め、reconcile した members と衝突、voiceHash 不整合を返す。
 export async function seriesStatus(
   slug: string,

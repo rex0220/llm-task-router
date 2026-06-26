@@ -20,6 +20,7 @@ import {
   seriesFreezeVoice,
   seriesInit,
   seriesStatus,
+  shouldRevertSeriesAfterRevise,
   upsertMember,
   writeSeriesReadme,
 } from "../../src/cli/series";
@@ -508,6 +509,44 @@ describe("member lifecycle: writing → done → updating", () => {
     // done 後の変更 → updating。
     await markMemberUpdating("kagaku", "2026-06-23-a", seriesRoot);
     expect((await store.read("kagaku"))?.members[0].status).toBe("updating");
+  });
+
+  // CLI（article:revise）の判定境界を守る。バグ本体は revise 後に無条件で updating へ戻していた点で、
+  // 空振り revise（changed=false）では done を据え置く。helper を実際に通して series.json の状態を検査する。
+  it("revise gate: a no-op revise (changed=false) keeps a done member done", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    await recordMember("kagaku", "2026-06-23-a", 1, seriesRoot);
+    await markMemberDone("kagaku", "2026-06-23-a", seriesRoot);
+    const store = new SeriesStore(seriesRoot);
+
+    // CLI と同じ判定: 空振り（changed=false）なら markMemberUpdating を呼ばない。
+    expect(shouldRevertSeriesAfterRevise("kagaku", false)).toBe(false);
+    if (shouldRevertSeriesAfterRevise("kagaku", false)) {
+      await markMemberUpdating("kagaku", "2026-06-23-a", seriesRoot);
+    }
+
+    expect((await store.read("kagaku"))?.members[0].status).toBe("done");
+  });
+
+  it("revise gate: a real revise (changed=true) moves a done member to updating", async () => {
+    const seriesRoot = tmp("ltr-s-");
+    await frozen(seriesRoot);
+    await recordMember("kagaku", "2026-06-23-a", 1, seriesRoot);
+    await markMemberDone("kagaku", "2026-06-23-a", seriesRoot);
+    const store = new SeriesStore(seriesRoot);
+
+    expect(shouldRevertSeriesAfterRevise("kagaku", true)).toBe(true);
+    if (shouldRevertSeriesAfterRevise("kagaku", true)) {
+      await markMemberUpdating("kagaku", "2026-06-23-a", seriesRoot);
+    }
+
+    expect((await store.read("kagaku"))?.members[0].status).toBe("updating");
+  });
+
+  it("revise gate: a non-series run is never reverted (no seriesId)", () => {
+    expect(shouldRevertSeriesAfterRevise(undefined, true)).toBe(false);
+    expect(shouldRevertSeriesAfterRevise("", true)).toBe(false);
   });
 
   it("--fix preserves updating (not recoverable from progress) and does not downgrade", async () => {
