@@ -163,6 +163,50 @@ describe("replaceMarkedBlock", () => {
     expect(r.content).toContain("## 参考");
     expect(r.warnings).toBeUndefined();
   });
+
+  // Case 1（マーカーあり）でマーカー直前の参考見出し行を設定見出しへ整列する（完成後反映）。
+  describe("Case 1 heading alignment (markers present)", () => {
+    it("aligns the heading line preceding the marker block to the configured heading", () => {
+      const body = `# T\n\n## 参考\n\n${SOURCES_BEGIN}\n- 古い\n${SOURCES_END}\n\n後文`;
+      const r = replaceMarkedBlock(body, SOURCES_BEGIN, SOURCES_END, block, HEADING);
+      expect(r.status).toBe("replaced");
+      expect(r.content).toContain(`## ${HEADING}`);
+      expect(r.content).not.toMatch(/^## 参考$/m); // 旧見出しは消える
+      expect(r.content).toContain("https://example.com/S001");
+      expect(r.content).toContain("後文"); // 後続は保持
+      expect(r.warnings?.join("\n")).toMatch(/整列/);
+    });
+
+    it("renames an old LLM-style heading (## 出典) directly above the marker", () => {
+      const body = `## 出典\n${SOURCES_BEGIN}\n- x\n${SOURCES_END}`;
+      const r = replaceMarkedBlock(body, SOURCES_BEGIN, SOURCES_END, block, HEADING);
+      expect(r.content).toContain(`## ${HEADING}`);
+      expect(r.content).not.toContain("## 出典");
+    });
+
+    it("does NOT rename non-reference prose/heading preceding the marker", () => {
+      const body = `## まとめ\n本文。\n${SOURCES_BEGIN}\n- x\n${SOURCES_END}`;
+      const r = replaceMarkedBlock(body, SOURCES_BEGIN, SOURCES_END, block, HEADING);
+      expect(r.content).toContain("## まとめ");
+      expect(r.content).toContain("本文。");
+      expect(r.content).not.toContain(`## ${HEADING}`); // 直前が参考見出しでないので作らない
+      expect(r.warnings).toBeUndefined();
+    });
+
+    it("is idempotent on the heading (already aligned → no rename warning)", () => {
+      const body = `## ${HEADING}\n${SOURCES_BEGIN}\n- x\n${SOURCES_END}`;
+      const r = replaceMarkedBlock(body, SOURCES_BEGIN, SOURCES_END, block, HEADING);
+      expect(r.content).toContain(`## ${HEADING}`);
+      expect(r.warnings).toBeUndefined();
+    });
+
+    it("leaves the default 参考 heading as-is when heading is default (no spurious rename)", () => {
+      const body = `# T\n\n## 参考\n\n${SOURCES_BEGIN}\n- x\n${SOURCES_END}`;
+      const r = replaceMarkedBlock(body, SOURCES_BEGIN, SOURCES_END, block); // 既定
+      expect(r.content).toContain("## 参考");
+      expect(r.warnings).toBeUndefined();
+    });
+  });
 });
 
 describe("headingMatcher", () => {

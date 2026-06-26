@@ -132,8 +132,31 @@ function countOccurrences(haystack: string, needle: string): number {
   return count;
 }
 
+// rename 元として拾う「既知の参考見出し」か（rename 先は常に validation 済み heading）。
+// 既定 `参考`／旧 LLM 系（参考リンク・出典 等）／現設定見出し のいずれか。
+function isKnownRefHeading(line: string, configuredRe: RegExp): boolean {
+  return REFERENCES_HEADING_RE.test(line) || LLM_REFERENCE_HEADING_RE.test(line) || configuredRe.test(line);
+}
+
+// prefix（begin マーカーより前の確定領域）末尾の参考見出し行を `## <heading>` へ揃える（冪等）。
+// 空行はスキップし、最初の非空行が既知参考見出しなら rename。一致済み／非参考見出し／散文は no-op。
+// fence 判定は不要: マーカーブロックは fence 外の機械出力で、末尾の直近行のみを見る。
+export function alignTrailingRefHeading(prefix: string, heading: string): { prefix: string; renamedFrom?: string } {
+  const lines = prefix.split("\n");
+  let i = lines.length - 1;
+  while (i >= 0 && lines[i].trim() === "") i--; // 直前の空行をスキップ
+  if (i < 0) return { prefix };
+  const line = lines[i];
+  const target = `## ${heading}`;
+  if (line === target) return { prefix }; // 既に一致＝no-op
+  if (!isKnownRefHeading(line, headingMatcher(heading))) return { prefix }; // 通常本文は触らない
+  const renamedFrom = line.replace(/^##\s+/, "").trim();
+  lines[i] = target;
+  return { prefix: lines.join("\n"), renamedFrom };
+}
+
 // 参考ブロックを本文へ反映する（heading＝参考章見出し・既定 `参考`）。
-// (1) マーカーがちょうど1組・正順 → その範囲を block で置換（見出し行は触らない＝既存カスタム見出しを保持）。
+// (1) マーカーがちょうど1組・正順 → その範囲を block で置換し、マーカー直前の参考見出し行を heading へ整列（冪等）。
 // (2) マーカー無しで参考章見出しがある → 章本文（見出し直下〜次見出し/EOF）を丸ごと block で置換（二重化防止）。
 //     2a: 設定見出しに一致する章 → 章本文だけ置換（見出し保持）。
 //     2b: 設定見出しが無く旧 `## 参考` がある → その章本文を置換し、見出しを `## <heading>` に rename（adoption）。
@@ -160,7 +183,17 @@ export function replaceMarkedBlock(
         "参考ブロックのマーカーが壊れています（begin/end が1組・正順ではありません）。手で修復してから再実行してください。"
       );
     }
-    return { content: `${body.slice(0, bIdx)}${block}${body.slice(eIdx + end.length)}`, status: "replaced" };
+    // マーカー直前の参考見出し行を設定見出しへ整列（完成記事でも見出しがしくみで反映される）。
+    const aligned = alignTrailingRefHeading(body.slice(0, bIdx), heading);
+    const warnings =
+      aligned.renamedFrom !== undefined
+        ? [`参考章見出しを「${aligned.renamedFrom}」→「${heading}」に整列しました`]
+        : undefined;
+    return {
+      content: `${aligned.prefix}${block}${body.slice(eIdx + end.length)}`,
+      status: "replaced",
+      ...(warnings ? { warnings } : {}),
+    };
   }
 
   // マーカー無し: 既存の参考章見出しがあれば章本文を置換。
