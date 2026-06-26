@@ -26,6 +26,18 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-tool-markup.mjs\"",
+            "statusMessage": "崩れたツール記法の混入を確認中"
+          }
+        ]
+      }
     ]
   }
 }
