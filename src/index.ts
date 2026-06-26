@@ -61,6 +61,8 @@ import {
   prepareReferencesBlock,
   replaceMarkedBlock,
   stripLlmReferenceSections,
+  validateReferencesHeading,
+  resolveReferencesHeading,
   SOURCES_BEGIN,
   SOURCES_END,
 } from "./cli/references";
@@ -152,6 +154,7 @@ program
   .option("--series <slug>", "Create this article as a member of the given series (injects the frozen voice into meta.style)")
   .option("--order <n>", "Series member order (1-based). Upserts that order slot; omit to append")
   .option("--allow-profile-mismatch", "Allow --profile to differ from the series profile (off by default)")
+  .option("--references-heading <text>", "References section heading (default: 参考). Fixed at creation (first-write-wins). The '## ' prefix is added automatically")
   .option("--config <path>", "Path to models.yaml", "config/models.yaml")
   .action(
     async (options: {
@@ -165,6 +168,7 @@ program
       series?: string;
       order?: string;
       allowProfileMismatch?: boolean;
+      referencesHeading?: string;
       config: string;
     }) => {
       const topic = await resolveText(options.topic, options.topicFile, "topic", "--topic", "--topic-file");
@@ -177,6 +181,24 @@ program
       // --series 指定時は series.profile を既定にし（明示 --profile が異なれば拒否）、voice を解決する。
       // 検証（未凍結 / voice 空 / freeze 後改変）は create の前に readSeriesForCreate で弾く。
       const seriesRead = options.series ? await readSeriesForCreate(options.series) : undefined;
+
+      // 参考章見出し（任意）。明示時は trim 後に検査し、不正なら exit 1（黙って既定に落とさない）。
+      // 優先順位: CLI 明示 > series.json.referencesHeading > 既定 "参考"（未設定なら meta に焼かない）。
+      let referencesHeading: string | undefined;
+      if (options.referencesHeading != null) {
+        const v = validateReferencesHeading(options.referencesHeading);
+        if (!v.ok) {
+          throw new Error(`Invalid --references-heading: ${v.reason}`);
+        }
+        referencesHeading = v.value;
+      } else if (seriesRead?.data.referencesHeading) {
+        // シリーズ既定を継承（series.json は validate 済みだが、衝突等は念のため再検査）。
+        const v = validateReferencesHeading(seriesRead.data.referencesHeading);
+        if (!v.ok) {
+          throw new Error(`Invalid series referencesHeading「${seriesRead.data.referencesHeading}」: ${v.reason}`);
+        }
+        referencesHeading = v.value;
+      }
       const effectiveProfile = seriesRead
         ? resolveSeriesProfile(
             seriesRead.data.profile,
@@ -218,7 +240,7 @@ program
             router,
             store,
             topic,
-            { runId, platform, style, profile: effectiveProfile, series },
+            { runId, platform, style, profile: effectiveProfile, series, referencesHeading },
             reporter.report
           ),
       });
@@ -252,11 +274,21 @@ program
   .description("Scaffold series/<slug>/ (series.json + an empty voice.md to hand-write) for a multi-article series")
   .requiredOption("--slug <slug>", "Series slug (series/<slug>/)")
   .option("--profile <name>", "Series profile (members default to this; create rejects a mismatch)", "qiita")
+  .option("--references-heading <text>", "Default references heading for members (inherited at create when unset). The '## ' prefix is added automatically")
   .option("--allow-outside-workspace", "Allow running outside an initialized article workspace (off by default)")
-  .action(async (options: { slug: string; profile: string; allowOutsideWorkspace?: boolean }) => {
+  .action(async (options: { slug: string; profile: string; referencesHeading?: string; allowOutsideWorkspace?: boolean }) => {
     await assertArticleWorkspace({ allowOutsideWorkspace: options.allowOutsideWorkspace });
-    const data = await seriesInit(options.slug, options.profile);
-    console.log(`series: ${resolve("series", data.seriesId)} (profile=${data.profile})`);
+    let referencesHeading: string | undefined;
+    if (options.referencesHeading != null) {
+      const v = validateReferencesHeading(options.referencesHeading);
+      if (!v.ok) {
+        throw new Error(`Invalid --references-heading: ${v.reason}`);
+      }
+      referencesHeading = v.value;
+    }
+    const data = await seriesInit(options.slug, options.profile, undefined, referencesHeading);
+    const headingNote = data.referencesHeading ? `, referencesHeading=「${data.referencesHeading}」` : "";
+    console.log(`series: ${resolve("series", data.seriesId)} (profile=${data.profile}${headingNote})`);
     console.log(`next: edit ${resolve("series", data.seriesId, "voice.md")}, then run series:freeze-voice --slug ${data.seriesId}`);
   });
 
@@ -1659,8 +1691,9 @@ program
   .command("article:references")
   .description("Generate the 参考 section links from sources.json (verified sources only; never lets the LLM write URLs)")
   .requiredOption("--run <runId>", "Run id")
+  .option("--heading <text>", "References heading to fix for this run (first-write-wins; ignored if already set). Default: 参考")
   .option("--stdout", "Print only the generated 参考 block (no file write)")
-  .action(async (options: { run: string; stdout?: boolean }) => {
+  .action(async (options: { run: string; heading?: string; stdout?: boolean }) => {
     const store = new RunStore();
     await assertRunExists(store, options.run);
 
@@ -1672,30 +1705,70 @@ program
     }
 
     if (options.stdout) {
+      // ブロックは見出しを含まない（見出しはブロック外）ため、--stdout は heading 非依存・meta も触らない。
       process.stdout.write(block.endsWith("\n") ? block : `${block}\n`);
       return;
+    }
+
+    // 参考章見出しを解決する。meta 設定済みなら --heading は無視（上書きしない・first-write-wins）。
+    // 入力検証だけ先に行い、初回確定の writeMeta は工程成功後（final 読込＋replaceMarkedBlock 後）に遅延する
+    // ＝失敗する run で heading だけ確定してしまうのを防ぐ。
+    const meta = await store.readMeta(options.run);
+    let heading = resolveReferencesHeading(meta);
+    let headingToPersist: string | undefined;
+    if (options.heading != null) {
+      const v = validateReferencesHeading(options.heading);
+      if (!v.ok) {
+        throw new Error(`Invalid --heading: ${v.reason}`);
+      }
+      if (meta.referencesHeading == null) {
+        headingToPersist = v.value; // 初回確定（保存は後段で）
+        heading = v.value;
+      } else {
+        heading = meta.referencesHeading; // 確定済み（first-write-wins）
+        if (v.value !== meta.referencesHeading) {
+          process.stderr.write(
+            `  ⚠ --heading は無視しました（確定済み: 「${meta.referencesHeading}」／first-write-wins）\n`
+          );
+        }
+      }
     }
 
     const final = await store.read(options.run, "final.md").catch(() => null);
     if (final === null) {
       throw new Error(`final.md がありません（runs/${options.run}/）。`);
     }
-    // LLM が書いた参考リスト節（参考リンク/出典 等・URL 入り）を先に除去する。機械生成の `## 参考`
-    // と二重化させない＝偽 URL 防止（台帳照合外の LLM 製 URL を本文に残さない）。
-    const stripped = stripLlmReferenceSections(final);
-    // 反映を先に計算（マーカー破損ならここで throw＝書き込まない）→ bak 退避 → 書き込み。
-    const { content, status } = replaceMarkedBlock(stripped.body, SOURCES_BEGIN, SOURCES_END, block);
+    // LLM が書いた参考リスト節（参考リンク/出典 等・URL 入り）を先に除去する。機械生成の参考章
+    // と二重化させない＝偽 URL 防止（台帳照合外の LLM 製 URL を本文に残さない）。設定見出しは除外。
+    const stripped = stripLlmReferenceSections(final, heading);
+    // 反映を先に計算（マーカー破損ならここで throw＝書き込まない）→ heading 確定 → bak 退避 → 書き込み。
+    const { content, status, warnings: replaceWarnings } = replaceMarkedBlock(
+      stripped.body,
+      SOURCES_BEGIN,
+      SOURCES_END,
+      block,
+      heading
+    );
     await store.save(options.run, "final.references.bak.md", final);
     await store.save(options.run, "final.md", content);
+    // final.md 更新が成功してから初回 heading を first-write-wins 確定する（保存失敗時は未確定のまま）。
+    if (headingToPersist != null) {
+      meta.referencesHeading = headingToPersist;
+      await store.writeMeta(meta);
+    }
     const strippedNote =
       stripped.removed.length > 0 ? ` / LLM 参考節を除去: ${stripped.removed.join(", ")}` : "";
     console.log(
-      `references: runs/${options.run}/final.md (${count} sources, ${status}) / backup: final.references.bak.md${strippedNote}`
+      `references: runs/${options.run}/final.md (${count} sources, ${status}, 見出し「${heading}」) / backup: final.references.bak.md${strippedNote}`
     );
     if (stripped.removed.length > 0) {
       process.stderr.write(
-        `  ⚠ LLM が書いた参考リスト節を除去しました（機械生成の ## 参考 に一本化）: ${stripped.removed.join(", ")}\n`
+        `  ⚠ LLM が書いた参考リスト節を除去しました（機械生成の ## ${heading} に一本化）: ${stripped.removed.join(", ")}\n`
       );
+    }
+    // replaceMarkedBlock の異常系 warning（旧 ## 参考 残存など）は呼び出し側で出力する。
+    for (const w of replaceWarnings ?? []) {
+      process.stderr.write(`  ⚠ ${w}\n`);
     }
   });
 

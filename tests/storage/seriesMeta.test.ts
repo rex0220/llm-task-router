@@ -68,6 +68,17 @@ describe("validateSeriesData", () => {
     expect(() => validateSeriesData(validData({ profile: "" }))).toThrow(/missing profile/);
   });
 
+  it("preserves a valid referencesHeading (trimmed) and omits it when unset", () => {
+    expect(validateSeriesData(validData()).referencesHeading).toBeUndefined();
+    const parsed = validateSeriesData(validData({ referencesHeading: "  参考・確認元  " }));
+    expect(parsed.referencesHeading).toBe("参考・確認元");
+  });
+
+  it("rejects a non-string / blank referencesHeading", () => {
+    expect(() => validateSeriesData({ ...validData(), referencesHeading: 5 })).toThrow(/referencesHeading/);
+    expect(() => validateSeriesData(validData({ referencesHeading: "   " }))).toThrow(/referencesHeading/);
+  });
+
   it("requires the frozen voice version to be at the history tail", () => {
     const bad = validData();
     bad.voice.version = 2; // history tail is version 1

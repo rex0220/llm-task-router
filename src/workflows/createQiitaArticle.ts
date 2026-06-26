@@ -36,7 +36,14 @@ export async function createQiitaArticle(
   router: ModelRouter,
   store: RunStore,
   topic: string,
-  options: { runId?: string; platform?: string; style?: string; profile?: string; series?: RunSeriesMeta } = {},
+  options: {
+    runId?: string;
+    platform?: string;
+    style?: string;
+    profile?: string;
+    series?: RunSeriesMeta;
+    referencesHeading?: string;
+  } = {},
   onEvent: WorkflowReporter = noop
 ): Promise<QiitaWorkflowResult> {
   const runId = options.runId ?? createRunId(topic);
@@ -49,7 +56,8 @@ export async function createQiitaArticle(
     options.platform ?? DEFAULT_PLATFORM,
     options.style,
     options.profile,
-    options.series
+    options.series,
+    options.referencesHeading
   );
   return runQiitaArticle(router, store, runId, undefined, onEvent);
 }

@@ -2,8 +2,8 @@ import { RunStore } from "../storage/RunStore";
 import { SeriesStore } from "../storage/SeriesStore";
 import type { GlossaryData, GlossaryNoun, GlossaryTerm } from "../storage/glossaryMeta";
 import type { SeriesMember } from "../storage/seriesMeta";
-// 参考章マーカーは references.ts と共有（定数 drift を避ける）。
-import { SOURCES_BEGIN, SOURCES_END } from "./references";
+// 参考章マーカー・見出し照合は references.ts と共有（定数/正規表現 drift を避ける）。
+import { SOURCES_BEGIN, SOURCES_END, headingMatcher } from "./references";
 
 // シリーズ横断の用語・表記一貫性チェック（series:check・実装計画 T3/T4）。
 // - 各メンバーの final.md を glossary.yaml に照合し、揺れ（非推奨表記）を列挙する。
@@ -257,9 +257,13 @@ function fenceOutsideFlags(lines: string[]): boolean[] {
   return outside;
 }
 
-export function stripReferenceBlock(markdown: string): string {
+// extraHeadings: run 単位のカスタム参考章見出し（meta.referencesHeading・series.json 既定）。
+// マーカー無しの旧 run 用 fallback で、既定（参考/参考リンク/出典）に加えて拾う。現行 run はマーカーで除外される。
+export function stripReferenceBlock(markdown: string, extraHeadings: string[] = []): string {
   const lines = markdown.split(/\r?\n/);
   const outside = fenceOutsideFlags(lines);
+  const extraMatchers = extraHeadings.map((h) => headingMatcher(h));
+  const isRefHeading = (t: string): boolean => REF_HEADING.test(t) || extraMatchers.some((re) => re.test(t));
 
   // 第一優先: マーカー区間 <!-- sources:begin --> … <!-- sources:end --> を除去（fence 外のみ）。
   const begin = lines.findIndex((l, i) => outside[i] && l.includes(SOURCES_BEGIN));
@@ -273,12 +277,18 @@ export function stripReferenceBlock(markdown: string): string {
     }
     // end 無し（閉じ忘れ）は begin 以降を EOF まで落とす保険。
     const cut = end >= 0 ? end + 1 : lines.length;
-    return [...lines.slice(0, begin), ...lines.slice(cut)].join("\n");
+    // マーカー直前の参考章見出し行（fence 外・空行は挟んでよい）も一緒に落とす。
+    // カスタム見出しに glossary variant が含まれると、見出し行を本文として誤照合しうるため。
+    let headStart = begin;
+    let p = begin - 1;
+    while (p >= 0 && outside[p] && lines[p].trim() === "") p--; // 直前の空行をスキップ
+    if (p >= 0 && outside[p] && isRefHeading(lines[p].trim())) headStart = p;
+    return [...lines.slice(0, headStart), ...lines.slice(cut)].join("\n");
   }
 
-  // fallback: マーカーが無い場合のみ、`## 参考` 見出し（fence 外）から
+  // fallback: マーカーが無い場合のみ、参考章見出し（fence 外）から
   // 「次の同階層以上（# / ##・fence 外）の見出し、または EOF まで」を除去する。
-  const start = lines.findIndex((l, i) => outside[i] && REF_HEADING.test(l.trim()));
+  const start = lines.findIndex((l, i) => outside[i] && isRefHeading(l.trim()));
   if (start < 0) {
     return markdown;
   }
@@ -293,8 +303,13 @@ export function stripReferenceBlock(markdown: string): string {
 }
 
 // 本文 1 件分の照合（純関数・テスト容易）。参考章を除いてから段落分割する。
-export function checkArticle(markdown: string, glossary: GlossaryData): Finding[] {
-  const paragraphs = splitParagraphs(stripReferenceBlock(markdown));
+// extraRefHeadings: マーカーレス旧 run 用の追加参考章見出し（カスタム見出し）。
+export function checkArticle(
+  markdown: string,
+  glossary: GlossaryData,
+  options: { extraRefHeadings?: string[] } = {}
+): Finding[] {
+  const paragraphs = splitParagraphs(stripReferenceBlock(markdown, options.extraRefHeadings));
   return [...matchTerms(paragraphs, glossary.terms), ...matchNouns(paragraphs, glossary.nouns)];
 }
 
@@ -374,7 +389,10 @@ export async function runSeriesCheck(slug: string, deps: SeriesCheckDeps = {}): 
       members.push(skipMember(member, reason));
       continue;
     }
-    const findings = checkArticle(markdown, glossary.data);
+    // マーカーレス旧 run の fallback 用にカスタム参考章見出しを集める（meta＋series 既定）。
+    // 現行 run はマーカーで除外されるため通常は不要だが、見出しだけ残った本文を保険で拾う。
+    const extraRefHeadings = await resolveExtraRefHeadings(runStore, member.runId, series.referencesHeading);
+    const findings = checkArticle(markdown, glossary.data, { extraRefHeadings });
     totalFindings += findings.length;
     members.push({ order: member.order, slug: member.slug, runId: member.runId, findings });
   }
@@ -395,4 +413,24 @@ export async function runSeriesCheck(slug: string, deps: SeriesCheckDeps = {}): 
 
 function skipMember(m: SeriesMember, reason: string): MemberReport {
   return { order: m.order, slug: m.slug, runId: m.runId, findings: [], skipped: reason };
+}
+
+// メンバー run のカスタム参考章見出しを1つ解決する（マーカーレス旧 run 用 fallback）。
+// 優先順位: run meta の明示見出し ＞ series 既定（両採用しない＝run が A を焼いていれば series 既定 B は使わない）。
+// run meta に明示が無い（キー無し or meta 不読）場合だけ series 既定にフォールバックする。
+// 既定 "参考" は REF_HEADING が常に拾うので extraHeadings からは除く。
+async function resolveExtraRefHeadings(
+  runStore: RunStore,
+  runId: string,
+  seriesDefault?: string
+): Promise<string[]> {
+  let runHeading: string | undefined;
+  try {
+    const meta = await runStore.readMeta(runId);
+    runHeading = meta.referencesHeading?.trim() || undefined; // 明示値のみ（未設定は undefined）
+  } catch {
+    // meta 不読でも続行（final.md は読めている）。run 情報が無いので series 既定に委ねる。
+  }
+  const chosen = runHeading ?? seriesDefault?.trim();
+  return chosen && chosen !== "参考" ? [chosen] : [];
 }

@@ -3,11 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  headingMatcher,
   prepareReferencesBlock,
   renderReferencesBlock,
   replaceMarkedBlock,
+  resolveReferencesHeading,
   selectReferenceSources,
   stripLlmReferenceSections,
+  validateReferencesHeading,
   SOURCES_BEGIN,
   SOURCES_END,
 } from "../../src/cli/references";
@@ -104,6 +107,95 @@ describe("replaceMarkedBlock", () => {
     expect(() => replaceMarkedBlock(`x ${SOURCES_END} y`, SOURCES_BEGIN, SOURCES_END, block)).toThrow();
     expect(() => replaceMarkedBlock(`${SOURCES_END}\n${SOURCES_BEGIN}`, SOURCES_BEGIN, SOURCES_END, block)).toThrow();
   });
+
+  const HEADING = "参考・題材として確認した公式情報";
+
+  it("creates a custom heading section when none exists (status=created)", () => {
+    const r = replaceMarkedBlock("# T\n本文だけ", SOURCES_BEGIN, SOURCES_END, block, HEADING);
+    expect(r.status).toBe("created");
+    expect(r.content).toContain(`## ${HEADING}`);
+    expect(r.content).not.toMatch(/^## 参考$/m); // 既定見出しは出ない
+    expect(r.warnings).toBeUndefined();
+  });
+
+  it("preserves a custom heading line when replacing the marker block (Case 1)", () => {
+    const body = `# T\n\n## ${HEADING}\n\n${SOURCES_BEGIN}\n- 古い\n${SOURCES_END}\n\n後文`;
+    const r = replaceMarkedBlock(body, SOURCES_BEGIN, SOURCES_END, block, HEADING);
+    expect(r.status).toBe("replaced");
+    expect(r.content).toContain(`## ${HEADING}`); // 見出しは保持
+    expect(r.content).not.toContain("- 古い");
+  });
+
+  it("replaces the markerless custom-heading section without duplicating (Case 2-a)", () => {
+    const body = `# T\n\n## ${HEADING}\n- 旧名のみ\n\n## 次\n本文`;
+    const r = replaceMarkedBlock(body, SOURCES_BEGIN, SOURCES_END, block, HEADING);
+    expect(r.status).toBe("section-replaced");
+    expect(r.content).not.toContain("- 旧名のみ");
+    expect(r.content).toContain(SOURCES_BEGIN);
+    expect(r.content.match(new RegExp(`## ${HEADING}`, "g"))?.length).toBe(1); // 二重化しない
+    expect(r.warnings).toBeUndefined();
+  });
+
+  it("adopts/renames a legacy ## 参考 to the custom heading (Case 2-b)", () => {
+    // 初回生成で LLM が本文に旧 `## 参考` を書いた状況。設定見出しに rename して二重化を防ぐ。
+    const body = "# T\n\n## 参考\n- 旧名のみ\n\n## 次\n本文";
+    const r = replaceMarkedBlock(body, SOURCES_BEGIN, SOURCES_END, block, HEADING);
+    expect(r.status).toBe("section-replaced");
+    expect(r.content).toContain(`## ${HEADING}`); // rename された
+    expect(r.content).not.toMatch(/^## 参考$/m); // 旧見出しは消える
+    expect(r.content).not.toContain("- 旧名のみ");
+    expect(r.warnings).toBeUndefined();
+  });
+
+  it("warns but does not throw when both custom heading and legacy ## 参考 exist (Case 2-c)", () => {
+    const body = `# T\n\n## ${HEADING}\n- A\n\n## 参考\n- B\n\n## 次\n本文`;
+    const r = replaceMarkedBlock(body, SOURCES_BEGIN, SOURCES_END, block, HEADING);
+    expect(r.status).toBe("section-replaced");
+    expect(r.content).toContain(SOURCES_BEGIN); // 設定見出し章を置換
+    expect(r.content).toMatch(/^## 参考$/m); // 旧 ## 参考 は残置
+    expect(r.warnings?.join("\n")).toMatch(/旧 ## 参考 が残存/);
+  });
+
+  it("keeps default 参考 behavior unchanged when heading is default", () => {
+    const body = "# T\n\n## 参考\n- 旧\n\n## 次\n本文";
+    const r = replaceMarkedBlock(body, SOURCES_BEGIN, SOURCES_END, block); // heading 省略＝既定
+    expect(r.status).toBe("section-replaced");
+    expect(r.content).toContain("## 参考");
+    expect(r.warnings).toBeUndefined();
+  });
+});
+
+describe("headingMatcher", () => {
+  it("matches a heading containing regex metacharacters without breaking", () => {
+    const h = "参考 (一次情報) [確認済]";
+    expect(headingMatcher(h).test(`## ${h}`)).toBe(true);
+    expect(headingMatcher(h).test("## 参考 x一次情報y z確認済w")).toBe(false);
+  });
+});
+
+describe("validateReferencesHeading", () => {
+  it("accepts a custom heading and trims surrounding whitespace", () => {
+    const r = validateReferencesHeading("  参考・題材として確認した公式情報  ");
+    expect(r).toEqual({ ok: true, value: "参考・題材として確認した公式情報" });
+  });
+
+  it("rejects empty / whitespace-only / newline / # / HTML comment / LLM-colliding headings", () => {
+    expect(validateReferencesHeading("").ok).toBe(false);
+    expect(validateReferencesHeading("   ").ok).toBe(false);
+    expect(validateReferencesHeading("参考\n資料").ok).toBe(false);
+    expect(validateReferencesHeading("## 参考").ok).toBe(false); // # を含む
+    expect(validateReferencesHeading("参考 <!-- x -->").ok).toBe(false);
+    expect(validateReferencesHeading("参考資料").ok).toBe(false); // LLM 見出しと衝突
+    expect(validateReferencesHeading("出典").ok).toBe(false);
+  });
+});
+
+describe("resolveReferencesHeading", () => {
+  it("falls back to 参考 when unset or blank", () => {
+    expect(resolveReferencesHeading({})).toBe("参考");
+    expect(resolveReferencesHeading({ referencesHeading: "   " })).toBe("参考");
+    expect(resolveReferencesHeading({ referencesHeading: "参考・確認元" })).toBe("参考・確認元");
+  });
 });
 
 describe("stripLlmReferenceSections", () => {
@@ -156,6 +248,15 @@ describe("stripLlmReferenceSections", () => {
     const r = stripLlmReferenceSections(body);
     expect(r.removed).toEqual([]);
     expect(r.body).toContain(SOURCES_BEGIN);
+  });
+
+  it("does not strip the configured custom heading even if it would collide (defense-in-depth)", () => {
+    // 「参考資料」は通常 LLM_REFERENCE_HEADING_RE に当たるが、configuredHeading 指定時は除外しない。
+    const body = ["## 参考資料", "- 例 https://example.com/a", "", "## 次", "本文"].join("\n");
+    const r = stripLlmReferenceSections(body, "参考資料");
+    expect(r.removed).toEqual([]);
+    expect(r.body).toContain("## 参考資料");
+    expect(r.body).toContain("https://example.com/a");
   });
 });
 

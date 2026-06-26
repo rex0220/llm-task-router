@@ -58,6 +58,8 @@ export type SeriesData = {
   profile: string;
   voice: SeriesVoice;
   members: SeriesMember[];
+  // シリーズ既定の参考章見出し（任意・`## ` は含めない）。member 作成時に meta 未設定なら継承する。
+  referencesHeading?: string;
 };
 
 // seriesId は series/<slug> の識別子かつ status 集計のキーになり得るため、
@@ -86,12 +88,21 @@ export function validateSeriesData(parsed: unknown, source = "series.json"): Ser
   }
   const voice = validateVoice(data.voice, source);
   const members = validateMembers(data.members, source);
+  // referencesHeading は任意。存在するなら string・trim 後非空を要求（壊れた値で member 作成を汚さない）。
+  let referencesHeading: string | undefined;
+  if (data.referencesHeading !== undefined) {
+    if (typeof data.referencesHeading !== "string" || data.referencesHeading.trim().length === 0) {
+      throw new Error(`Corrupt ${source} (referencesHeading must be a non-empty string).`);
+    }
+    referencesHeading = data.referencesHeading.trim();
+  }
   return {
     version: typeof data.version === "number" ? data.version : SERIES_FORMAT_VERSION,
     seriesId,
     profile: data.profile,
     voice,
     members,
+    ...(referencesHeading ? { referencesHeading } : {}),
   };
 }
 
