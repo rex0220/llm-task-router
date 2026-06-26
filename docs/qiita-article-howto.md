@@ -235,6 +235,25 @@ llm-task-router article:revise --run 2026-06-18-ai-ir \
 
 工程後に `article:status --run <id>` で記録と現在地を確認する。
 
+### 5.4 画像（設定画面・動作画面など）を取り込む
+
+スクショの**撮影・配置・アップロードは人手の作業**で、ツールの守備範囲外（factcheck/sources-check の対象にもならない）。本文側の機械検証を汚さずに画像を入れるための推奨手順。`final.md` は直編集しないので、挿入も `article:revise` 経由で行う。
+
+1. **執筆中に図スロットだけ予約する。** 本文の入れたい位置に図マーカーを置く（URL はまだ書かない＝偽 URL・未登録リンク warning を出さない）。
+   ```
+   <!-- FIG: プラグイン設定画面（詳細設定タブ） -->
+   ```
+2. **Qiita 下書きで画像をまとめてホストする。** 下書き（未公開でよい）に画像を挿入して保存すると、Qiita がホスト済みの画像 URL を返す。必要な画像を**一括で**上げて URL を揃える。
+3. **revise 1回でマーカーを実 URL に一括置換する。** 画像ごとに revise を繰り返さない（LLM パス・差分・factcheck-scope がその都度増える）。指示ファイルに「各 FIG マーカーを対応する `![alt](URL)` に置換。本文の文言は変更しない」と書いて一括で当てる。
+   ```bash
+   llm-task-router article:revise --run 2026-06-18-ai-ir \
+     --instruction-file runs/2026-06-18-ai-ir/insert-figures.md
+   ```
+4. **非事実差分として factcheck-scope を回す。** 画像挿入は事実を変えないので、`article:factcheck-scope` を回したうえで `article:factcheck-stamp --accepted-after non-factual-diff` で台帳に残す（手動 skip しない）。
+5. **verify-artifacts の画像リンク warning は想定内。** 画像 URL は sources.json に無いため「本文（参考ブロック外）に未登録リンク」warning が出るが、これは **error ではなく公開はブロックされない**（出典は参考章へ、画像は本文に、という分担が保たれていれば OK）。
+
+> ポイント: 画像を「ツールで埋める穴」と捉えず、**媒体側の人手レイヤー**として分離する。マーカー予約＋URL 一括差し替えにすることで、人手作業は最小、本文の機械検証は revise 1パスで素通りできる。
+
 ---
 
 ## 5.5 方向性ゲート（direction-check・factcheck の前）
