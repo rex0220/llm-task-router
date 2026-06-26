@@ -186,6 +186,19 @@ llm-task-router article:status --run 2026-06-18-ai-ir --json   # スクリプト
 
 ---
 
+## 4.6 工程が途中で止まったときの復旧（ツール記法漏れ・中断）
+
+オペレーターを Claude Code で回していると、まれに **ツール呼び出しの記法が崩れて本文に漏れる**ことがある（`<invoke name="Bash">` や `<parameter ...>` といったマークアップがそのまま画面に出て、コマンドが実行されないまま会話が止まる）。これは **llm-task-router 側の不具合ではなく、外側AIのツール呼び出しシリアライズの一時的な崩れ**で、自己復旧する。article 系の各工程は再実行に耐える設計（first-write-wins・`progress.events.jsonl` 正本・raw/`sources.json`/`final.md` のバックアップ退避）なので、落ち着いて再実行すればよい。
+
+ただし **「再実行に強い」＝「常に副作用ゼロ」ではない**。状況を2つに分けて対応する：
+
+- **記法漏れでコマンドが実行されていない場合（副作用なし）** → run は無傷なので、**同じ工程をもう一度そのまま実行**するだけでよい。`<invoke>` マークアップが本文に漏れていたらこのケース（コマンドは走っていない）。
+- **コマンドが走り始めてから落ちた／強制中断した場合（副作用あり得る）** → 工程によっては成果物が部分的に書かれている（例: `sources-check` は `sources.raw.json` と `progress.events.jsonl` を、`references` は `final.md` と `final.references.bak.md` を更新する）。先に `llm-task-router article:status --run <id>` と該当成果物を確認し、状態を見てから再実行する（`create`/`refine` 系は `article:resume` で未完ステップから再開）。
+
+> 要点: 「未実行なら無害に再実行」「実行途中なら status と成果物を確認してから再実行」を分ける。`<invoke>`/`<parameter>` のマークアップが本文に出たら前者（コマンドは走っていない）。
+
+---
+
 ## 5. チェック・修正
 
 ### 5.1 自動ループで仕上げる（推奨の第一手）
@@ -404,6 +417,16 @@ llm-task-router article:references --run 2026-06-18-ai-ir   # --stdout で生成
   - **公開済み・シリーズの一括点検（link rot）**: `llm-task-router article:links-audit --series <slug>`（または `--all-published`）で、台帳から鮮度切れ・未検証・dead/unknown の cited を run 横断で一覧できる（記録ベース・通信なし）。要対応の run に `sources-check --run <id> --only-cited` を回して HTTP 再確認する。
   - 設計・再発防止の全体像は [課題-対策-実装計画-死リンク再発防止.md](課題-対策-実装計画-死リンク再発防止.md)。
 
+1.7. **仕上げを1コマンドで束ねる（任意・`article:finalize`）**。上の `claims-normalize → sources-check --only-cited → claims-normalize → references` は、正しい順序で **`article:finalize` 1コマンド**にまとめられる（ツール呼び出し回数を減らし、記法漏れで止まる機会を減らす）。
+
+```bash
+llm-task-router article:finalize --run 2026-06-18-ai-ir
+```
+
+  - **dead/unknown ゲート内蔵**: 到達性確認で **dead か unknown が1件でもあれば normalize/references へ進まず非ゼロ終了**し、対象 URL と次アクションを出す（「exit 0 で素通り」を塞ぐ）。解決してから再実行する。緊急避難は `--allow-unverified-links --note "<理由>"`。
+  - **プレビュー2種**: `--plan`（**無通信・無書き込み**＝手順と現状の cited 件数だけ表示）と `--dry-run`（**通信あり・書き込みなし**＝到達性を確認し dead/unknown を報告するが台帳・本文は不変。`sources-check --dry-run` と同義）。
+  - **外部通信を含む**ので `sources-check` 同様、実行可否は会話レベルで確認する（権限層では `article:*` で自動承認される）。個別コマンド（`claims-normalize` 単体・`references --stdout` 等）は従来どおり使える。設計は [課題-対策-実装計画-article-finalize.md](課題-対策-実装計画-article-finalize.md)。
+
 2. 編集長が `runs/<id>/publication-check.md` にゲート実施チェックリストを書き出したら、公開前ゲートを機械チェックする：
 
 ```bash
@@ -518,6 +541,9 @@ llm-task-router article:claims-normalize --run 2026-06-18-ai-ir --scope full
 
 # 5.85) 参考章に検証済みリンクを付与（sources.json 由来・LLM に URL を書かせない）
 llm-task-router article:references --run 2026-06-18-ai-ir
+
+#   ＊5.8〜5.85（normalize→到達性確認→normalize→references）は finalize 1コマンドにまとめられる：
+#     llm-task-router article:finalize --run 2026-06-18-ai-ir   # dead/unknown があれば非ゼロ終了で止まる
 
 # 5.9) 公開前ゲート（publication-check.md を書き出してから機械チェック。FAIL なら潰して再実行）
 llm-task-router article:verify-artifacts --run 2026-06-18-ai-ir

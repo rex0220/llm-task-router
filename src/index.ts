@@ -732,13 +732,7 @@ program
       throw new Error(`Invalid --scope: ${options.scope} (expected full | diff)`);
     }
     const store = new RunStore();
-    const summary = await normalizeClaims(store, options.run, scope);
-    await recordProgress(store, summary.runId, {
-      step: "claims-normalize",
-      status: "done",
-      output: `runs/${summary.runId}/claims.json`,
-      note: `${summary.present} present, blocking ${summary.blocking} (scope ${summary.scope})`,
-    });
+    const summary = await runClaimsNormalize(store, options.run, scope);
     console.log(`runId: ${summary.runId}`);
     console.log(
       `claims: runs/${summary.runId}/claims.json (${summary.present} present, ${summary.removed} removed; round ${summary.round}, scope ${summary.scope})`
@@ -1700,77 +1694,39 @@ program
     const store = new RunStore();
     await assertRunExists(store, options.run);
 
-    // claims/sources を読んで参考ブロックを生成（不在・verified 0件はここで明確にエラー＝exit 1）。
-    const { block, count, warnings } = await prepareReferencesBlock(store, options.run);
-    // reachable:"dead" で参考章から除外したものは stderr に出す（本処理は継続）。
-    for (const w of warnings) {
-      process.stderr.write(`  ⚠ ${w}\n`);
-    }
-
     if (options.stdout) {
       // ブロックは見出しを含まない（見出しはブロック外）ため、--stdout は heading 非依存・meta も触らない。
+      // 書き込みも progress も無い確認用なので、本体（applyReferences）は通さず block だけ生成する。
+      const { block, warnings } = await prepareReferencesBlock(store, options.run);
+      for (const w of warnings) {
+        process.stderr.write(`  ⚠ ${w}\n`);
+      }
       process.stdout.write(block.endsWith("\n") ? block : `${block}\n`);
       return;
     }
 
-    // 参考章見出しを解決する。meta 設定済みなら --heading は無視（上書きしない・first-write-wins）。
-    // 入力検証だけ先に行い、初回確定の writeMeta は工程成功後（final 読込＋replaceMarkedBlock 後）に遅延する
-    // ＝失敗する run で heading だけ確定してしまうのを防ぐ。
-    const meta = await store.readMeta(options.run);
-    let heading = resolveReferencesHeading(meta);
-    let headingToPersist: string | undefined;
-    if (options.heading != null) {
-      const v = validateReferencesHeading(options.heading);
-      if (!v.ok) {
-        throw new Error(`Invalid --heading: ${v.reason}`);
-      }
-      if (meta.referencesHeading == null) {
-        headingToPersist = v.value; // 初回確定（保存は後段で）
-        heading = v.value;
-      } else {
-        heading = meta.referencesHeading; // 確定済み（first-write-wins）
-        if (v.value !== meta.referencesHeading) {
-          process.stderr.write(
-            `  ⚠ --heading は無視しました（確定済み: 「${meta.referencesHeading}」／first-write-wins）\n`
-          );
-        }
-      }
+    const r = await applyReferences(store, options.run, options.heading);
+    // reachable:"dead" で参考章から除外したものは stderr に出す（本処理は継続）。
+    for (const w of r.prepareWarnings) {
+      process.stderr.write(`  ⚠ ${w}\n`);
     }
-
-    const final = await store.read(options.run, "final.md").catch(() => null);
-    if (final === null) {
-      throw new Error(`final.md がありません（runs/${options.run}/）。`);
-    }
-    // LLM が書いた参考リスト節（参考リンク/出典 等・URL 入り）を先に除去する。機械生成の参考章
-    // と二重化させない＝偽 URL 防止（台帳照合外の LLM 製 URL を本文に残さない）。設定見出しは除外。
-    const stripped = stripLlmReferenceSections(final, heading);
-    // 反映を先に計算（マーカー破損ならここで throw＝書き込まない）→ heading 確定 → bak 退避 → 書き込み。
-    const { content, status, warnings: replaceWarnings } = replaceMarkedBlock(
-      stripped.body,
-      SOURCES_BEGIN,
-      SOURCES_END,
-      block,
-      heading
-    );
-    await store.save(options.run, "final.references.bak.md", final);
-    await store.save(options.run, "final.md", content);
-    // final.md 更新が成功してから初回 heading を first-write-wins 確定する（保存失敗時は未確定のまま）。
-    if (headingToPersist != null) {
-      meta.referencesHeading = headingToPersist;
-      await store.writeMeta(meta);
+    if (r.headingIgnored) {
+      process.stderr.write(
+        `  ⚠ --heading は無視しました（確定済み: 「${r.heading}」／first-write-wins）\n`
+      );
     }
     const strippedNote =
-      stripped.removed.length > 0 ? ` / LLM 参考節を除去: ${stripped.removed.join(", ")}` : "";
+      r.strippedRemoved.length > 0 ? ` / LLM 参考節を除去: ${r.strippedRemoved.join(", ")}` : "";
     console.log(
-      `references: runs/${options.run}/final.md (${count} sources, ${status}, 見出し「${heading}」) / backup: final.references.bak.md${strippedNote}`
+      `references: runs/${options.run}/final.md (${r.count} sources, ${r.status}, 見出し「${r.heading}」) / backup: final.references.bak.md${strippedNote}`
     );
-    if (stripped.removed.length > 0) {
+    if (r.strippedRemoved.length > 0) {
       process.stderr.write(
-        `  ⚠ LLM が書いた参考リスト節を除去しました（機械生成の ## ${heading} に一本化）: ${stripped.removed.join(", ")}\n`
+        `  ⚠ LLM が書いた参考リスト節を除去しました（機械生成の ## ${r.heading} に一本化）: ${r.strippedRemoved.join(", ")}\n`
       );
     }
     // replaceMarkedBlock の異常系 warning（旧 ## 参考 残存など）は呼び出し側で出力する。
-    for (const w of replaceWarnings ?? []) {
+    for (const w of r.replaceWarnings) {
       process.stderr.write(`  ⚠ ${w}\n`);
     }
   });
@@ -1843,6 +1799,177 @@ const realFetcher: Fetcher = async (url, { timeoutMs, deadlineMs }): Promise<Fet
   return attempt("GET"); // 非2xx / error は GET で最終判定（404/410 もここでのみ確定）
 };
 
+// ---- 仕上げ工程（finalize）で共有する内部関数 ----
+// claims-normalize / sources-check / references の各 action 本体を CLI 引数パースから切り離して関数化する。
+// article:finalize が正しい順序で呼び、CLI 単体コマンドからも同じ関数を使う（挙動・progress 記録を一致させ、
+// 片方だけ直す事故を防ぐ）。設計は docs/課題-対策-実装計画-article-finalize.md。
+
+type SourcesCheckResult = {
+  summary: ReturnType<typeof summarize>;
+  flagged: { url: string; reachable: string }[];
+};
+
+// claims-normalize 本体（正規化＋progress 記録）。記録はここに含める＝CLI/finalize どちらから呼んでも台帳に残る。
+async function runClaimsNormalize(store: RunStore, runId: string, scope: "full" | "diff") {
+  const summary = await normalizeClaims(store, runId, scope);
+  await recordProgress(store, summary.runId, {
+    step: "claims-normalize",
+    status: "done",
+    output: `runs/${summary.runId}/claims.json`,
+    note: `${summary.present} present, blocking ${summary.blocking} (scope ${summary.scope})`,
+  });
+  return summary;
+}
+
+// sources-check 本体（到達性確認＋raw への stamp ＋progress 記録）。console 出力は呼び出し側に残す。
+// dryRun=true なら通信はするが raw 書き込み・progress 記録をしない（既存 --dry-run と同義）。
+async function runSourcesCheck(
+  store: RunStore,
+  runId: string,
+  opts: { timeoutMs: number; concurrency: number; onlyCited: boolean; dryRun: boolean }
+): Promise<SourcesCheckResult> {
+  const rawText = await store.read(runId, RAW_SOURCES_FILE).catch(() => null);
+  if (rawText === null) {
+    throw new Error(`${RAW_SOURCES_FILE} がありません（runs/${runId}/）。先に factcheck で出典を出してください。`);
+  }
+  const rawSources = RawSourcesSchema.parse(JSON.parse(rawText));
+
+  // --only-cited: claims.json から cited な normalized source を導出し、その URL に絞る。
+  let urls = rawSources.map((s) => s.url);
+  if (opts.onlyCited) {
+    const claimsText = await store.read(runId, CLAIMS_FILE).catch(() => null);
+    const sourcesText = await store.read(runId, SOURCES_FILE).catch(() => null);
+    if (claimsText === null || sourcesText === null) {
+      throw new Error("--only-cited には claims.json / sources.json が必要です（先に article:claims-normalize を実行）。");
+    }
+    const citedIds = collectCitedSourceIds(ClaimsSchema.parse(JSON.parse(claimsText)));
+    const citedHashes = new Set(
+      SourcesSchema.parse(JSON.parse(sourcesText))
+        .filter((s) => citedIds.has(s.id))
+        .map((s) => urlHash(s.url))
+    );
+    urls = rawSources.filter((s) => citedHashes.has(urlHash(s.url))).map((s) => s.url);
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  // D: 既定リトライ（timeout/接続拒否/NXDOMAIN を指数バックオフで再確認・合計上限つき）を効かせる。
+  const results = await checkSources(urls, realFetcher, {
+    concurrency: opts.concurrency,
+    timeoutMs: opts.timeoutMs,
+    today,
+    retry: DEFAULT_RETRY,
+  });
+  const summary = summarize(results);
+
+  // dead/unknown の URL を列挙（要対応）。
+  const flagged: { url: string; reachable: string }[] = [];
+  for (const s of rawSources) {
+    let h: string;
+    try {
+      h = urlHash(s.url);
+    } catch {
+      continue;
+    }
+    const r = results.get(h);
+    if (r && r.reachable !== "ok") {
+      flagged.push({ url: s.url, reachable: r.reachable });
+    }
+  }
+
+  if (!opts.dryRun) {
+    const updated = applyReachabilityToRaw(rawSources, results);
+    await store.save(runId, RAW_SOURCES_FILE, JSON.stringify(updated, null, 2));
+    // dry-run でなければ追加アクションとして1行記録（canonical 工程ではない）。
+    await recordProgress(store, runId, {
+      step: "sources-check",
+      status: "done",
+      output: `runs/${runId}/${RAW_SOURCES_FILE}`,
+      note: `ok=${summary.ok} dead=${summary.dead} unknown=${summary.unknown}`,
+    });
+  }
+  return { summary, flagged };
+}
+
+type ReferencesResult = {
+  count: number;
+  status: string;
+  heading: string;
+  headingIgnored: boolean;
+  prepareWarnings: string[];
+  strippedRemoved: string[];
+  replaceWarnings: string[];
+};
+
+// references 本体（final.md への参考章反映＋heading first-write-wins）。--stdout 分岐は CLI 側に残す
+// （stdout は書き込み無しの確認用で finalize は使わないため）。warning は文字列で返して呼び出し側が出力する。
+async function applyReferences(store: RunStore, runId: string, headingOpt?: string): Promise<ReferencesResult> {
+  // claims/sources を読んで参考ブロックを生成（不在・verified 0件はここで明確にエラー＝exit 1）。
+  const { block, count, warnings } = await prepareReferencesBlock(store, runId);
+
+  // 参考章見出しを解決する。meta 設定済みなら headingOpt は無視（上書きしない・first-write-wins）。
+  // 入力検証だけ先に行い、初回確定の writeMeta は工程成功後に遅延する（失敗 run で heading だけ確定するのを防ぐ）。
+  const meta = await store.readMeta(runId);
+  let heading = resolveReferencesHeading(meta);
+  let headingToPersist: string | undefined;
+  let headingIgnored = false;
+  if (headingOpt != null) {
+    const v = validateReferencesHeading(headingOpt);
+    if (!v.ok) {
+      throw new Error(`Invalid --heading: ${v.reason}`);
+    }
+    if (meta.referencesHeading == null) {
+      headingToPersist = v.value; // 初回確定（保存は後段で）
+      heading = v.value;
+    } else {
+      heading = meta.referencesHeading; // 確定済み（first-write-wins）
+      headingIgnored = v.value !== meta.referencesHeading;
+    }
+  }
+
+  const final = await store.read(runId, "final.md").catch(() => null);
+  if (final === null) {
+    throw new Error(`final.md がありません（runs/${runId}/）。`);
+  }
+  // LLM が書いた参考リスト節（参考リンク/出典 等・URL 入り）を先に除去する＝偽 URL 防止。設定見出しは除外。
+  const stripped = stripLlmReferenceSections(final, heading);
+  // 反映を先に計算（マーカー破損ならここで throw＝書き込まない）→ heading 確定 → bak 退避 → 書き込み。
+  const { content, status, warnings: replaceWarnings } = replaceMarkedBlock(
+    stripped.body,
+    SOURCES_BEGIN,
+    SOURCES_END,
+    block,
+    heading
+  );
+  await store.save(runId, "final.references.bak.md", final);
+  await store.save(runId, "final.md", content);
+  // final.md 更新が成功してから初回 heading を first-write-wins 確定する（保存失敗時は未確定のまま）。
+  if (headingToPersist != null) {
+    meta.referencesHeading = headingToPersist;
+    await store.writeMeta(meta);
+  }
+  return {
+    count,
+    status,
+    heading,
+    headingIgnored,
+    prepareWarnings: warnings,
+    strippedRemoved: stripped.removed,
+    replaceWarnings: replaceWarnings ?? [],
+  };
+}
+
+// --plan 用: 既存 claims.json / sources.json から cited な source 数を数える（read-only・無通信）。
+// まだ normalize していない（ファイルが無い）run では null を返す。
+async function countCitedSources(store: RunStore, runId: string): Promise<number | null> {
+  const claimsText = await store.read(runId, CLAIMS_FILE).catch(() => null);
+  const sourcesText = await store.read(runId, SOURCES_FILE).catch(() => null);
+  if (claimsText === null || sourcesText === null) {
+    return null;
+  }
+  const citedIds = collectCitedSourceIds(ClaimsSchema.parse(JSON.parse(claimsText)));
+  return SourcesSchema.parse(JSON.parse(sourcesText)).filter((s) => citedIds.has(s.id)).length;
+}
+
 program
   .command("article:sources-check")
   .description(
@@ -1874,64 +2001,12 @@ program
       const store = new RunStore();
       await assertRunExists(store, options.run);
 
-      const rawText = await store.read(options.run, RAW_SOURCES_FILE).catch(() => null);
-      if (rawText === null) {
-        throw new Error(
-          `${RAW_SOURCES_FILE} がありません（runs/${options.run}/）。先に factcheck で出典を出してください。`
-        );
-      }
-      const rawSources = RawSourcesSchema.parse(JSON.parse(rawText));
-
-      // --only-cited: claims.json から cited な normalized source を導出し、その URL に絞る。
-      let urls = rawSources.map((s) => s.url);
-      if (options.onlyCited) {
-        const claimsText = await store.read(options.run, CLAIMS_FILE).catch(() => null);
-        const sourcesText = await store.read(options.run, SOURCES_FILE).catch(() => null);
-        if (claimsText === null || sourcesText === null) {
-          throw new Error(
-            "--only-cited には claims.json / sources.json が必要です（先に article:claims-normalize を実行）。"
-          );
-        }
-        const citedIds = collectCitedSourceIds(ClaimsSchema.parse(JSON.parse(claimsText)));
-        const citedHashes = new Set(
-          SourcesSchema.parse(JSON.parse(sourcesText))
-            .filter((s) => citedIds.has(s.id))
-            .map((s) => urlHash(s.url))
-        );
-        urls = rawSources.filter((s) => citedHashes.has(urlHash(s.url))).map((s) => s.url);
-      }
-
-      const today = new Date().toISOString().slice(0, 10);
-      // D: 既定リトライ（timeout/接続拒否/NXDOMAIN を指数バックオフで再確認・合計上限つき）を効かせる。
-      const results = await checkSources(urls, realFetcher, { concurrency, timeoutMs, today, retry: DEFAULT_RETRY });
-      const summary = summarize(results);
-
-      // dead/unknown の URL を列挙（要対応）。
-      const flagged: { url: string; reachable: string }[] = [];
-      for (const s of rawSources) {
-        let h: string;
-        try {
-          h = urlHash(s.url);
-        } catch {
-          continue;
-        }
-        const r = results.get(h);
-        if (r && r.reachable !== "ok") {
-          flagged.push({ url: s.url, reachable: r.reachable });
-        }
-      }
-
-      if (!options.dryRun) {
-        const updated = applyReachabilityToRaw(rawSources, results);
-        await store.save(options.run, RAW_SOURCES_FILE, JSON.stringify(updated, null, 2));
-        // dry-run でなければ追加アクションとして1行記録（canonical 工程ではない）。
-        await recordProgress(store, options.run, {
-          step: "sources-check",
-          status: "done",
-          output: `runs/${options.run}/${RAW_SOURCES_FILE}`,
-          note: `ok=${summary.ok} dead=${summary.dead} unknown=${summary.unknown}`,
-        });
-      }
+      const { summary, flagged } = await runSourcesCheck(store, options.run, {
+        timeoutMs,
+        concurrency,
+        onlyCited: Boolean(options.onlyCited),
+        dryRun: Boolean(options.dryRun),
+      });
 
       if (options.json) {
         console.log(JSON.stringify({ summary, flagged, dryRun: Boolean(options.dryRun) }, null, 2));
@@ -1948,6 +2023,202 @@ program
           `next: dead は verified claim から到達可能な代替へ張り替え → article:claims-normalize で sources.json に反映`
         );
       }
+    }
+  );
+
+program
+  .command("article:finalize")
+  .description(
+    "Run the publication finishing chain in order: claims-normalize → sources-check --only-cited → (dead/unknown gate) → claims-normalize → references. Stops non-zero if any cited link is dead/unknown."
+  )
+  .requiredOption("--run <runId>", "Run id")
+  .option("--timeout <ms>", "Per-URL timeout (ms) for the reachability check", "10000")
+  .option("--concurrency <n>", "Max concurrent requests for the reachability check", "4")
+  .option("--plan", "No network, no writes: print the planned steps and current cited count")
+  .option(
+    "--dry-run",
+    "Run the reachability check but write nothing (skip normalize/references; same as sources-check --dry-run). Requires claims.json/sources.json to already exist."
+  )
+  .option(
+    "--allow-unverified-links",
+    "Proceed through normalize/references even if dead/unknown links remain (requires --note)"
+  )
+  .option("--note <text>", "Reason recorded for --allow-unverified-links (audit)")
+  .option("--references-heading <text>", "References heading to fix for this run (first-write-wins)")
+  .option("--json", "Print the combined result as JSON")
+  .action(
+    async (options: {
+      run: string;
+      timeout: string;
+      concurrency: string;
+      plan?: boolean;
+      dryRun?: boolean;
+      allowUnverifiedLinks?: boolean;
+      note?: string;
+      referencesHeading?: string;
+      json?: boolean;
+    }) => {
+      if (options.plan && options.dryRun) {
+        throw new Error("--plan と --dry-run は同時に指定できません（plan=無通信, dry-run=通信あり・書き込みなし）。");
+      }
+      if (options.allowUnverifiedLinks && (!options.note || options.note.trim().length === 0)) {
+        throw new Error("--allow-unverified-links には理由 --note が必須です（台帳監査）。");
+      }
+      const timeoutMs = Number(options.timeout);
+      const concurrency = Number(options.concurrency);
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+        throw new Error(`Invalid --timeout: ${options.timeout}（正の整数 ms）`);
+      }
+      if (!Number.isInteger(concurrency) || concurrency < 1) {
+        throw new Error(`Invalid --concurrency: ${options.concurrency}（1 以上の整数）`);
+      }
+      const store = new RunStore();
+      await assertRunExists(store, options.run);
+
+      const planSteps = [
+        "1. claims-normalize（raw → claims.json/sources.json）",
+        "2. sources-check --only-cited（cited URL の到達性を HTTP 確認・raw に stamp）",
+        "3. ゲート: dead>0 || unknown>0 なら停止（非ゼロ終了）",
+        "4. claims-normalize（到達性を sources.json に畳み直す）",
+        "5. references（sources.json から参考章を final.md へ反映）",
+      ];
+
+      // --plan: 無通信・無書き込み。計画と現状の cited 件数だけ出す（最も安いプレビュー）。
+      if (options.plan) {
+        const cited = await countCitedSources(store, options.run);
+        if (options.json) {
+          console.log(
+            JSON.stringify({ mode: "plan", run: options.run, steps: planSteps, citedSources: cited }, null, 2)
+          );
+          return;
+        }
+        console.log(`finalize --plan: runs/${options.run}（無通信・無書き込み）`);
+        for (const s of planSteps) {
+          console.log(`  ${s}`);
+        }
+        console.log(
+          cited === null
+            ? "cited sources: 未集計（claims.json/sources.json が未生成。本実行のステップ1で生成）"
+            : `cited sources: ${cited}`
+        );
+        return;
+      }
+
+      // --dry-run: 通信はするが書き込まない。既存 claims.json/sources.json を前提に sources-check のみ実行。
+      if (options.dryRun) {
+        const { summary, flagged } = await runSourcesCheck(store, options.run, {
+          timeoutMs,
+          concurrency,
+          onlyCited: true,
+          dryRun: true,
+        });
+        const wouldBlock = summary.dead > 0 || summary.unknown > 0;
+        if (options.json) {
+          console.log(JSON.stringify({ mode: "dry-run", summary, flagged, wouldBlock }, null, 2));
+          return;
+        }
+        console.log(
+          `finalize --dry-run: ok=${summary.ok} dead=${summary.dead} unknown=${summary.unknown}（通信あり・未書き込み）`
+        );
+        for (const f of flagged) {
+          console.log(`  - ${f.reachable}: ${f.url}`);
+        }
+        console.log(
+          wouldBlock
+            ? "gate: 本実行ならここで停止します（dead/unknown を解決してから finalize を回す）"
+            : "gate: 本実行なら通過し、claims-normalize → references まで進みます"
+        );
+        return;
+      }
+
+      // ---- 本実行（5 ステップ） ----
+      process.stderr.write("[1/5] claims-normalize ...\n");
+      await runClaimsNormalize(store, options.run, "full");
+
+      process.stderr.write("[2/5] sources-check --only-cited ...\n");
+      const { summary, flagged } = await runSourcesCheck(store, options.run, {
+        timeoutMs,
+        concurrency,
+        onlyCited: true,
+        dryRun: false,
+      });
+
+      // 3. dead/unknown ゲート: 未解決があれば normalize/references へ進まず非ゼロ終了（素通り防止）。
+      const blocked = summary.dead > 0 || summary.unknown > 0;
+      if (blocked && !options.allowUnverifiedLinks) {
+        process.stderr.write(
+          `[3/5] gate: FAIL（dead=${summary.dead} unknown=${summary.unknown}）— 未解決リンクがあるため停止します。\n`
+        );
+        for (const f of flagged) {
+          process.stderr.write(`  - ${f.reachable}: ${f.url}\n`);
+        }
+        process.stderr.write(
+          "  next: dead は verified claim から到達可能な代替へ張り替え（factchecker）→ finalize 再実行。unknown は公開前に解決。\n"
+        );
+        if (options.json) {
+          console.log(JSON.stringify({ mode: "run", stopped: "gate", summary, flagged }, null, 2));
+        }
+        process.exitCode = 1;
+        return;
+      }
+      if (blocked) {
+        process.stderr.write(
+          `[3/5] gate: 未解決（dead=${summary.dead} unknown=${summary.unknown}）だが --allow-unverified-links により続行。理由: ${options.note}\n`
+        );
+        // override 理由を台帳に残す（stderr だけだとプロセス出力消失で監査理由も消えるため）。
+        // 非 canonical の追加アクション1行（sources-check / factcheck-stamp と同じ粒度）。
+        await recordProgress(store, options.run, {
+          step: "finalize-override",
+          status: "done",
+          note: `allow-unverified-links: dead=${summary.dead} unknown=${summary.unknown}; 理由: ${options.note}`,
+        });
+      } else {
+        process.stderr.write("[3/5] gate: OK（dead=0 unknown=0）\n");
+      }
+
+      process.stderr.write("[4/5] claims-normalize（到達性を反映）...\n");
+      const norm = await runClaimsNormalize(store, options.run, "full");
+
+      process.stderr.write("[5/5] references ...\n");
+      const ref = await applyReferences(store, options.run, options.referencesHeading);
+      for (const w of ref.prepareWarnings) {
+        process.stderr.write(`  ⚠ ${w}\n`);
+      }
+      if (ref.headingIgnored) {
+        process.stderr.write(
+          `  ⚠ --references-heading は無視しました（確定済み: 「${ref.heading}」／first-write-wins）\n`
+        );
+      }
+      if (ref.strippedRemoved.length > 0) {
+        process.stderr.write(
+          `  ⚠ LLM が書いた参考リスト節を除去しました（機械生成の ## ${ref.heading} に一本化）: ${ref.strippedRemoved.join(", ")}\n`
+        );
+      }
+      for (const w of ref.replaceWarnings) {
+        process.stderr.write(`  ⚠ ${w}\n`);
+      }
+
+      if (options.json) {
+        console.log(
+          JSON.stringify(
+            {
+              mode: "run",
+              run: options.run,
+              normalize: { present: norm.present, blocking: norm.blocking, sources: norm.sources },
+              sourcesCheck: summary,
+              references: { count: ref.count, status: ref.status, heading: ref.heading },
+              allowedUnverified: blocked && Boolean(options.allowUnverifiedLinks),
+            },
+            null,
+            2
+          )
+        );
+        return;
+      }
+      console.log(`runId: ${options.run}`);
+      console.log(
+        `finalize: OK — claims ${norm.present} present (blocking ${norm.blocking}), sources-check ok=${summary.ok} dead=${summary.dead} unknown=${summary.unknown}, references ${ref.count} sources (${ref.status}, 見出し「${ref.heading}」)`
+      );
     }
   );
 

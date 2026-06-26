@@ -1,6 +1,8 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execFile, execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
@@ -42,6 +44,17 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
       const e = error as { status?: number; stderr?: string };
       return { status: e.status ?? -1, stderr: String(e.stderr ?? "") };
     }
+  }
+
+  // 非同期実行（成否どちらでも結果を返す）。同一プロセス内に立てた HTTP サーバを使うテストは
+  // execFileSync（同期）だと親のイベントループが止まりサーバが応答できないため、これを使う。
+  function runAsync(args: string[], cwd: string): Promise<{ status: number; stdout: string; stderr: string }> {
+    return new Promise((resolve) => {
+      execFile(process.execPath, [bin, ...args], { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }, (err, stdout, stderr) => {
+        const code = (err as { code?: number } | null)?.code;
+        resolve({ status: typeof code === "number" ? code : err ? -1 : 0, stdout: String(stdout), stderr: String(stderr) });
+      });
+    });
   }
 
   it(
@@ -331,6 +344,352 @@ describe("CLI bin (dist/llm-task-router.js)", () => {
       expect(cited.reachable).toBe("unknown"); // cited だけ確認・stamp された
       expect(uncited.reachable).toBeUndefined(); // uncited は触らない
       expect(uncited.checkedAt).toBeUndefined();
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:finalize --help shows the chain options",
+    () => {
+      const out = run(["article:finalize", "--help"]);
+      expect(out).toContain("--plan");
+      expect(out).toContain("--dry-run");
+      expect(out).toContain("--allow-unverified-links");
+      expect(out).toContain("--references-heading");
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:finalize --plan is read-only (no network, no writes) and reports cited count",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "fin-plan-"));
+      const runId = "2026-06-26-fin-plan";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      await store.save(
+        runId,
+        "claims.json",
+        JSON.stringify([
+          { id: "C001-aaaaaaaa", claim: "x", location: { heading: "## h", anchorHash: "aaaaaaaa" }, type: "general", status: "verified", lifecycle: "present", sourceIds: ["S001"], severity: "minor", note: "" },
+        ])
+      );
+      await store.save(
+        runId,
+        "sources.json",
+        JSON.stringify([
+          { id: "S001", url: "https://example.com/doc", title: "Doc", retrievedAt: "2026-06-20", sourceType: "primary", summary: "", cited: true },
+        ])
+      );
+
+      const out = execFileSync(process.execPath, [bin, "article:finalize", "--run", runId, "--plan"], {
+        cwd,
+        encoding: "utf8",
+        timeout: E2E_TIMEOUT,
+      });
+      expect(out).toContain("cited sources: 1");
+      expect(out).toContain("1. claims-normalize");
+      expect(out).toContain("5. references");
+      // read-only: 進捗イベントを書かない。
+      expect(existsSync(join(cwd, "runs", runId, "progress.events.jsonl"))).toBe(false);
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:finalize --dry-run checks reachability but writes nothing (no raw mutation, no progress)",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "fin-dry-"));
+      const runId = "2026-06-26-fin-dry";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["create"], "Qiita", undefined, "qiita");
+      await store.save(
+        runId,
+        "claims.json",
+        JSON.stringify([
+          { id: "C001-aaaaaaaa", claim: "x", location: { heading: "## h", anchorHash: "aaaaaaaa" }, type: "general", status: "verified", lifecycle: "present", sourceIds: ["S001"], severity: "minor", note: "" },
+        ])
+      );
+      await store.save(
+        runId,
+        "sources.json",
+        JSON.stringify([
+          { id: "S001", url: "http://127.0.0.1:1/x", title: "X", retrievedAt: "2026-06-20", sourceType: "primary", summary: "", cited: true },
+        ])
+      );
+      await store.save(
+        runId,
+        "sources.raw.json",
+        JSON.stringify([
+          { key: "x", url: "http://127.0.0.1:1/x", title: "X", retrievedAt: "2026-06-20", sourceType: "primary", summary: "" },
+        ])
+      );
+
+      const out = execFileSync(
+        process.execPath,
+        [bin, "article:finalize", "--run", runId, "--dry-run", "--timeout", "2000"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+      expect(out).toMatch(/dry-run/);
+      expect(out).toMatch(/unknown=1/);
+      expect(out).toMatch(/本実行ならここで停止/);
+      // 通信はするが書き込まない: raw は無変化・progress イベントも出さない。
+      const raw = JSON.parse(readFileSync(join(cwd, "runs", runId, "sources.raw.json"), "utf8")) as {
+        reachable?: string;
+      }[];
+      expect(raw[0].reachable).toBeUndefined();
+      expect(existsSync(join(cwd, "runs", runId, "progress.events.jsonl"))).toBe(false);
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:finalize stops non-zero at the dead/unknown gate (does not reach references)",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "fin-gate-"));
+      const runId = "2026-06-26-fin-gate";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["final"], "Qiita", undefined, "qiita");
+      // raw 台帳: cited 主張が参照する unknown な source（127.0.0.1:1 ＝ 接続拒否→unknown）。
+      await store.save(
+        runId,
+        "claims.raw.json",
+        JSON.stringify([
+          { claim: "x", location: { heading: "## h" }, type: "general", status: "verified", sourceRefs: ["k1"], severity: "minor", note: "" },
+        ])
+      );
+      await store.save(
+        runId,
+        "sources.raw.json",
+        JSON.stringify([
+          { key: "k1", url: "http://127.0.0.1:1/x", title: "X", retrievedAt: "2026-06-20", sourceType: "primary", summary: "" },
+        ])
+      );
+
+      const { status, stderr } = (() => {
+        try {
+          execFileSync(
+            process.execPath,
+            [bin, "article:finalize", "--run", runId, "--timeout", "2000"],
+            { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+          );
+          throw new Error("expected non-zero exit");
+        } catch (error) {
+          const e = error as { status?: number; stderr?: string };
+          return { status: e.status ?? -1, stderr: String(e.stderr ?? "") };
+        }
+      })();
+
+      expect(status).toBe(1);
+      expect(stderr).toMatch(/gate: FAIL/);
+      // step 1 (normalize) は走るが、ゲートで止まるので references は final.md を作らない。
+      expect(existsSync(join(cwd, "runs", runId, "claims.json"))).toBe(true);
+      expect(existsSync(join(cwd, "runs", runId, "final.references.bak.md"))).toBe(false);
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:finalize rejects --plan with --dry-run, and --allow-unverified-links without --note",
+    () => {
+      const a = runFail(["article:finalize", "--run", "x", "--plan", "--dry-run"]);
+      expect(a.status).not.toBe(0);
+      expect(a.stderr).toMatch(/同時に指定できません/);
+
+      const b = runFail(["article:finalize", "--run", "x", "--allow-unverified-links"]);
+      expect(b.status).not.toBe(0);
+      expect(b.stderr).toMatch(/--note が必須/);
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:finalize completes through references when all cited links are reachable",
+    async () => {
+      // 到達性 ok をオフラインで作るためローカル HTTP サーバ（127.0.0.1:ランダムポート）を立てる。
+      const server = createServer((_req, res) => {
+        res.writeHead(200);
+        res.end("ok");
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+      try {
+        const port = (server.address() as AddressInfo).port;
+        const url = `http://127.0.0.1:${port}/doc`;
+        const cwd = await mkdtemp(join(tmpdir(), "fin-ok-"));
+        const runId = "2026-06-26-fin-ok";
+        const store = new RunStore(join(cwd, "runs"));
+        await store.create(runId, "T", ["final"], "Qiita", undefined, "qiita");
+        await store.save(runId, "final.md", "# T\n\n本文。\n");
+        await store.save(
+          runId,
+          "claims.raw.json",
+          JSON.stringify([
+            { claim: "x", location: { heading: "## h" }, type: "general", status: "verified", sourceRefs: ["k1"], severity: "minor", note: "" },
+          ])
+        );
+        await store.save(
+          runId,
+          "sources.raw.json",
+          JSON.stringify([{ key: "k1", url, title: "Doc", retrievedAt: "2026-06-20", sourceType: "primary", summary: "" }])
+        );
+
+        const res = await runAsync(["article:finalize", "--run", runId, "--timeout", "2000"], cwd);
+        expect(res.status).toBe(0);
+        expect(res.stdout).toMatch(/finalize: OK/);
+        // references まで完走＝参考ブロックが final.md に焼かれ、到達 URL が出る。
+        const final = readFileSync(join(cwd, "runs", runId, "final.md"), "utf8");
+        expect(final).toContain("sources:begin");
+        expect(final).toContain(url);
+        // 本実行は書き込みあり＝reachable=ok が raw に stamp される。
+        const raw = JSON.parse(readFileSync(join(cwd, "runs", runId, "sources.raw.json"), "utf8")) as {
+          reachable?: string;
+        }[];
+        expect(raw[0].reachable).toBe("ok");
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:finalize --allow-unverified-links passes the gate, reaches references, and records the reason",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "fin-override-"));
+      const runId = "2026-06-26-fin-override";
+      const store = new RunStore(join(cwd, "runs"));
+      await store.create(runId, "T", ["final"], "Qiita", undefined, "qiita");
+      await store.save(runId, "final.md", "# T\n\n本文。\n");
+      await store.save(
+        runId,
+        "claims.raw.json",
+        JSON.stringify([
+          { claim: "x", location: { heading: "## h" }, type: "general", status: "verified", sourceRefs: ["k1"], severity: "minor", note: "" },
+        ])
+      );
+      // 127.0.0.1:1 ＝接続拒否→unknown。override で gate を貫通する。
+      await store.save(
+        runId,
+        "sources.raw.json",
+        JSON.stringify([{ key: "k1", url: "http://127.0.0.1:1/x", title: "X", retrievedAt: "2026-06-20", sourceType: "primary", summary: "" }])
+      );
+
+      const out = execFileSync(
+        process.execPath,
+        [bin, "article:finalize", "--run", runId, "--allow-unverified-links", "--note", "offline 承認", "--timeout", "2000"],
+        { cwd, encoding: "utf8", timeout: E2E_TIMEOUT }
+      );
+      expect(out).toMatch(/finalize: OK/);
+      const final = readFileSync(join(cwd, "runs", runId, "final.md"), "utf8");
+      expect(final).toContain("sources:begin"); // unknown でも override で references まで到達
+      // P2: override 理由が progress 台帳に永続化される（stderr だけにしない）。
+      const events = readFileSync(join(cwd, "runs", runId, "progress.events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { step: string; note?: string });
+      const ov = events.find((e) => e.step === "finalize-override");
+      expect(ov?.note).toMatch(/offline 承認/);
+      expect(ov?.note).toMatch(/unknown=1/);
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:finalize --allow-unverified-links with a dead link succeeds but omits the dead source from references",
+    async () => {
+      // /ok→200, それ以外→404（=dead）。dead は references から機械除外されるが、ok が1件残るので完走する。
+      const server = createServer((req, res) => {
+        if (req.url?.startsWith("/ok")) {
+          res.writeHead(200);
+          res.end("ok");
+        } else {
+          res.writeHead(404);
+          res.end("nope");
+        }
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+      try {
+        const port = (server.address() as AddressInfo).port;
+        const okUrl = `http://127.0.0.1:${port}/ok`;
+        const deadUrl = `http://127.0.0.1:${port}/dead`;
+        const cwd = await mkdtemp(join(tmpdir(), "fin-dead-ok-"));
+        const runId = "2026-06-26-fin-dead-ok";
+        const store = new RunStore(join(cwd, "runs"));
+        await store.create(runId, "T", ["final"], "Qiita", undefined, "qiita");
+        await store.save(runId, "final.md", "# T\n\n本文。\n");
+        await store.save(
+          runId,
+          "claims.raw.json",
+          JSON.stringify([
+            { claim: "a", location: { heading: "## h" }, type: "general", status: "verified", sourceRefs: ["k1"], severity: "minor", note: "" },
+            { claim: "b", location: { heading: "## h2" }, type: "general", status: "verified", sourceRefs: ["k2"], severity: "minor", note: "" },
+          ])
+        );
+        await store.save(
+          runId,
+          "sources.raw.json",
+          JSON.stringify([
+            { key: "k1", url: okUrl, title: "OK", retrievedAt: "2026-06-20", sourceType: "primary", summary: "" },
+            { key: "k2", url: deadUrl, title: "Dead", retrievedAt: "2026-06-20", sourceType: "primary", summary: "" },
+          ])
+        );
+
+        const res = await runAsync(
+          ["article:finalize", "--run", runId, "--allow-unverified-links", "--note", "dead 承認", "--timeout", "2000"],
+          cwd
+        );
+        expect(res.status).toBe(0);
+        expect(res.stdout).toMatch(/finalize: OK/);
+        const final = readFileSync(join(cwd, "runs", runId, "final.md"), "utf8");
+        expect(final).toContain(okUrl); // 生きている方は参考章に出る
+        expect(final).not.toContain(deadUrl); // dead は機械除外される
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    },
+    E2E_TIMEOUT
+  );
+
+  it(
+    "article:finalize --allow-unverified-links fails at references when every cited link is dead (nothing to cite)",
+    async () => {
+      // すべて 404（=dead）。dead は references から除外され、載せる source が 0 件になり references が失敗する。
+      // override は gate を貫通させるが、死リンクだけで参考章を作ることはしない（意図どおりの境界）。
+      const server = createServer((_req, res) => {
+        res.writeHead(404);
+        res.end("nope");
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+      try {
+        const port = (server.address() as AddressInfo).port;
+        const deadUrl = `http://127.0.0.1:${port}/dead`;
+        const cwd = await mkdtemp(join(tmpdir(), "fin-dead-all-"));
+        const runId = "2026-06-26-fin-dead-all";
+        const store = new RunStore(join(cwd, "runs"));
+        await store.create(runId, "T", ["final"], "Qiita", undefined, "qiita");
+        await store.save(runId, "final.md", "# T\n\n本文。\n");
+        await store.save(
+          runId,
+          "claims.raw.json",
+          JSON.stringify([
+            { claim: "a", location: { heading: "## h" }, type: "general", status: "verified", sourceRefs: ["k1"], severity: "minor", note: "" },
+          ])
+        );
+        await store.save(
+          runId,
+          "sources.raw.json",
+          JSON.stringify([{ key: "k1", url: deadUrl, title: "Dead", retrievedAt: "2026-06-20", sourceType: "primary", summary: "" }])
+        );
+
+        const res = await runAsync(
+          ["article:finalize", "--run", runId, "--allow-unverified-links", "--note", "all dead", "--timeout", "2000"],
+          cwd
+        );
+        expect(res.status).not.toBe(0); // 載せる source 0件＝references で失敗
+        expect(res.stderr).toMatch(/検証済み source/); // 死リンクだけでは参考章を作れない（明確なエラー）
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
     },
     E2E_TIMEOUT
   );
