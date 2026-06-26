@@ -92,6 +92,9 @@ export type ReviseResult = QiitaWorkflowResult & {
   outputTokens?: number;
   truncated?: boolean;
   warnings?: string[];
+  // final.md が revise 前から実際に変わったか。空振り revise（LLM が同一テキストを返した）を
+  // 呼び出し側が識別し、シリーズメンバーの done→updating 巻き戻しを抑止するために使う。
+  changed: boolean;
 };
 
 export async function reviseQiitaFinal(
@@ -128,6 +131,7 @@ export async function reviseQiitaFinal(
   onEvent({ type: "step:start", index: 1, total: 1, name: "revise", task: "rewrite" });
   const response = await router.run({ task: "rewrite", input });
   const text = stripWrappingCodeFence(response.text);
+  const changed = text !== current; // 空振り revise（同一テキスト）を呼び出し側が識別するため
   await store.save(runId, "final.md", text);
   await store.markDone(runId, "final", "final.md");
   // final.md を書いたモデルを記録（markDone の後。編集レビューの独立性に使う）。
@@ -150,6 +154,7 @@ export async function reviseQiitaFinal(
   return {
     runId,
     finalText: text,
+    changed,
     provider: response.provider,
     model: response.model,
     elapsedMs: response.elapsedMs,
