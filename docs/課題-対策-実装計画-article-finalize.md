@@ -8,7 +8,7 @@
 article:claims-normalize → article:sources-check --only-cited → article:claims-normalize → article:references
 ```
 
-オペレーターを Claude Code で回すと、ツール呼び出し1回ごとにシリアライズ崩れ（`<invoke>` マークアップの本文漏れ）の機会が増え、まれに工程が止まってユーザーの「Go」を要する（[qiita-article-howto.md 4.6](qiita-article-howto.md) 参照）。**ツール呼び出しの回数を減らせば、崩れの「面」そのものが減る**。
+オペレーターを Claude Code で回すと、ツール呼び出し1回ごとにシリアライズ崩れ（`invoke` タグの本文漏れ）の機会が増え、まれに工程が止まってユーザーの「Go」を要する（[qiita-article-howto.md 4.6](qiita-article-howto.md) 参照）。**ツール呼び出しの回数を減らせば、崩れの「面」そのものが減る**。
 
 加えて、現状の手回しには次の落とし穴がある（codex レビューで確認済み）：
 
