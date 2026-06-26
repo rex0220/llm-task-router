@@ -42,6 +42,13 @@ describe("initConfig", () => {
     expect(
       result.created.some((f) => f.includes(join(".claude", "agents")) && f.includes("build-verifier"))
     ).toBe(true);
+    // フック2種（自動承認＝PreToolUse・ツール記法漏れ検知＝UserPromptSubmit）が展開される。
+    expect(
+      result.created.some((f) => f.includes(join(".claude", "hooks", "auto-approve-llm-task-router.mjs")))
+    ).toBe(true);
+    expect(
+      result.created.some((f) => f.includes(join(".claude", "hooks", "guard-tool-markup.mjs")))
+    ).toBe(true);
 
     // templates/ 接頭辞を含む形では作られない
     expect(result.created.some((f) => f.startsWith("templates"))).toBe(false);
@@ -50,6 +57,11 @@ describe("initConfig", () => {
     expect(
       await readFile(join(target, ".claude", "agents", "article-editor-in-chief.md"), "utf8")
     ).toContain("name: article-editor-in-chief");
+    // 展開された実体（パスだけでなく中身）を確認する。
+    expect(
+      await readFile(join(target, ".claude", "hooks", "guard-tool-markup.mjs"), "utf8")
+    ).toContain("containsLeakedToolMarkup");
+    expect(await readFile(join(target, ".claude", "settings.json"), "utf8")).toContain("UserPromptSubmit");
   });
 
   it("never creates a .env file", async () => {
