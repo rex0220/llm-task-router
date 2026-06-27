@@ -26,6 +26,11 @@ prices:
       input_usd_per_1m_tokens: 3
       output_usd_per_1m_tokens: 15
 
+# max_tokens について：primary/fallback の多くが推論モデル（gpt-5.x / claude）で、
+# API の出力上限は「推論トークン＋可視出力」の合算枠。可視出力ぶんだけでは決まらないため、
+# 低すぎると裏の推論に枠を食われて本文が途中で切れる（finish_reason=max_tokens）。
+# キャップは課金額に直結しない（実生成トークンのみ課金）ので、各工程 12000 に揃えて余裕を持たせる。
+# 例外: title_suggestions は短い候補列挙のみだが、同じ理由で推論ぶんを見込み 12000。
 defaults:
   timeout_ms: 120000
 
@@ -38,7 +43,7 @@ tasks:
       - provider: anthropic
         model: claude-opus-4-8
     temperature: 0.4
-    max_tokens: 4000
+    max_tokens: 12000
 
   outline:
     primary:
@@ -48,9 +53,9 @@ tasks:
       - provider: openai
         model: gpt-5.4
     temperature: 0.4
-    # 比較記事など節数が多いテーマでは構成JSONが4000では打ち切られ、
+    # 比較記事など節数が多いテーマでは構成JSONが打ち切られ、
     # 途中で切れたJSONがArticleOutline検証に失敗する。余裕を持たせる。
-    max_tokens: 8000
+    max_tokens: 12000
 
   draft_markdown:
     primary:
@@ -71,7 +76,7 @@ tasks:
       - provider: openai
         model: gpt-5.4
     temperature: 0.2
-    max_tokens: 6000
+    max_tokens: 12000
 
   rewrite:
     primary:
@@ -96,7 +101,7 @@ tasks:
       - provider: openai
         model: gpt-5.4
     temperature: 0.2
-    max_tokens: 6000
+    max_tokens: 12000
 
   # 編集レビュー（読者・編集視点の批評）。本文(rewrite)の書き手と独立させるため、
   # candidate set は両 provider をまたぐ（実行時に finalAuthorModel.provider を除外しても
@@ -110,18 +115,18 @@ tasks:
       - provider: openai
         model: gpt-5.4
     temperature: 0.2
-    max_tokens: 6000
+    max_tokens: 12000
 
   markdown_format:
     primary:
       provider: openai
       model: gpt-5.4-mini
     temperature: 0.2
-    max_tokens: 8000
+    max_tokens: 12000
 
   title_suggestions:
     primary:
       provider: openai
       model: gpt-5.4-mini
     temperature: 0.5
-    max_tokens: 1200
+    max_tokens: 12000
